@@ -195,17 +195,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                     }
                 }
             } else {
-                let record = {
-                    let mut stats = stats.lock().unwrap();
-                    let record = stats.take_session();
-                    if record.is_some() {
-                        stats.reset();
-                    }
-                    record
-                };
-                if let Some(record) = record {
-                    crate::persist_session(&record);
-                }
+                stats.lock().unwrap().reset();
                 if auto {
                     if let Some(w) = tauri::Manager::get_webview_window(&app, "main") {
                         let _ = w.hide();

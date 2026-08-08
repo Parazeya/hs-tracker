@@ -1,6 +1,6 @@
 [package]
 name = "hs-tracker"
-version = "0.9.1"
+version = "0.9.3"
 description = "HS Tracker — Hero Siege session tracker overlay"
 edition = "2021"
 

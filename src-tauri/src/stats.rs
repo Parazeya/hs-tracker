@@ -107,20 +107,8 @@ pub struct SeriesPoint {
     pub xp: i64,
 }
 
-#[derive(Serialize)]
-pub struct SessionRecord {
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub secs: u64,
-    pub gold: i64,
-    pub xp: i64,
-    pub items: HashMap<String, i64>,
-    pub mf: i64,
-}
-
 pub struct GameStats {
     pub(crate) start: Instant,
-    start_ms: u64,
     has_mail: bool,
     total_gold: i64,
     gold_earned: i64,
@@ -158,8 +146,6 @@ pub struct GameStats {
     character: Option<CharacterInfo>,
     drops: VecDeque<DropEntry>,
     series: Vec<SeriesPoint>,
-    activity: u64,
-    taken_activity: u64,
     /// bumped by every change, so the pusher can skip unchanged snapshots
     revision: u64,
 }
@@ -168,7 +154,6 @@ impl Default for GameStats {
     fn default() -> Self {
         Self {
             start: Instant::now(),
-            start_ms: now_ms(),
             has_mail: false,
             total_gold: 0,
             gold_earned: 0,
@@ -201,8 +186,6 @@ impl Default for GameStats {
             character: None,
             drops: VecDeque::new(),
             series: Vec::new(),
-            activity: 0,
-            taken_activity: 0,
             revision: 0,
         }
     }
@@ -340,7 +323,6 @@ impl GameStats {
                 if gained > 0 {
                     self.total_xp += gained;
                     self.xp_earned += gained;
-                    self.activity += 1;
                 }
             }
             GameEvent::Account {
@@ -487,12 +469,10 @@ impl GameStats {
                             if *mf {
                                 count.mf += n;
                             }
-                            self.activity += 1;
                         }
                     }
                     if let Some((_, res)) = RESOURCES.iter().find(|(t, _)| t == item_type) {
                         *self.resources.get_mut(res).unwrap() += n;
-                        self.activity += 1;
                     }
                     self.count_notable(name, n);
                 }
@@ -573,7 +553,6 @@ impl GameStats {
             self.gold_earned += c.delta;
             self.banked += c.delta;
             self.last_bank = Some(Instant::now());
-            self.activity += 1;
         }
         let Some(mode) = self.season_mode else { return };
         let current = c.for_mode(mode);
@@ -597,7 +576,6 @@ impl GameStats {
                 self.banked -= already;
                 if diff > already {
                     self.gold_earned += diff - already;
-                    self.activity += 1;
                 }
             }
         }
@@ -616,27 +594,6 @@ impl GameStats {
             gold: self.gold_earned,
             xp: self.xp_earned,
         });
-    }
-
-    /// Session summary for the history file; None when nothing happened since
-    /// the last take. The caller resets the stats afterwards.
-    pub fn take_session(&mut self) -> Option<SessionRecord> {
-        let secs = self.start.elapsed().as_secs();
-        // check the floor BEFORE consuming the marker, or a too-early call
-        // silently disqualifies the session that follows it
-        if self.activity == self.taken_activity || secs < 30 {
-            return None;
-        }
-        self.taken_activity = self.activity;
-        Some(SessionRecord {
-            start_ms: self.start_ms,
-            end_ms: now_ms(),
-            secs,
-            gold: self.gold_earned,
-            xp: self.xp_earned,
-            items: self.items.iter().map(|(k, v)| (k.to_string(), v.total)).collect(),
-            mf: self.items.values().map(|v| v.mf).sum(),
-        })
     }
 
     fn per_hour(&self, value: i64) -> i64 {
@@ -934,17 +891,6 @@ mod tests {
         assert_eq!(by("Angelic Key"), 2);
         assert_eq!(by("SS runes"), 1, "Jol is one of the four level-100 runes");
         assert_eq!(by("S runes"), 1, "Zed is graded S");
-    }
-
-    #[test]
-    fn audit_short_session_does_not_swallow_the_next_record() {
-        let mut s = GameStats::default();
-        s.set_prefer_ground(false);
-        s.apply(&item(json!(6), false));
-        // a check before the 30s floor must not consume the activity marker
-        assert!(s.take_session().is_none());
-        s.start = Instant::now() - std::time::Duration::from_secs(120);
-        assert!(s.take_session().is_some(), "activity was consumed by the early check");
     }
 
     #[test]
@@ -1365,13 +1311,10 @@ mod tests {
     }
 
     #[test]
-    fn character_survives_reset_and_session_needs_activity() {
+    fn a_reset_clears_the_session_but_keeps_the_character() {
         let mut s = GameStats::default();
-        assert!(s.take_session().is_none());
         s.apply(&account(CURRENT_SEASON, 1, 0));
         s.apply(&GameEvent::XpGain(15));
-        // too short a session is not recorded
-        assert!(s.take_session().is_none());
         s.reset();
         let snap = s.snapshot(String::new());
         assert_eq!(snap.xp.earned, 0);

@@ -7,7 +7,6 @@ src-tauri/gen/schemas/
 # runtime data, written next to the executable — the leading slash matters,
 # or src/assets/sounds (the bundled alerts) would be ignored too
 settings.json
-sessions.json
 shopping.json
 positions.json
 carried.json

@@ -56,7 +56,7 @@ to download the official installer from npcap.com and run it — its defaults ar
 fine. Npcap itself is not bundled: its free edition may not be redistributed
 inside another installer.
 
-Everything the app writes (settings, sessions, carried totals, custom sounds)
+Everything the app writes (settings, carried totals, shopping list, custom sounds)
 lives next to the executable. Windows 10 or 11 is required.
 
 ## Usage

@@ -13,10 +13,9 @@ First public release.
 - Global hotkeys for show/hide, lock and reset.
 
 ### Tracking
-- Gold, experience and kills with per-hour rates, session history in
-  `sessions.json`. The game reports these only when it saves the character or
-  banks gold, so they arrive in steps; the Statistics window says how long ago
-  that last happened.
+- Gold, experience and kills with per-hour rates. The game reports these only
+  when it saves the character or banks gold, so they arrive in steps; the
+  Statistics window says how long ago that last happened.
 - Totals carry over a restart in `carried.json`, so the overlay shows the last
   known balance instead of zeros until the game reports again.
 - Item counters for Satanic, Set, Heroic, Angelic and Unholy, with magic-find

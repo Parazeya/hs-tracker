@@ -206,10 +206,6 @@ fn settings_path() -> PathBuf {
     exe_dir().join("settings.json")
 }
 
-fn sessions_path() -> PathBuf {
-    exe_dir().join("sessions.json")
-}
-
 fn shopping_path() -> PathBuf {
     exe_dir().join("shopping.json")
 }
@@ -448,23 +444,6 @@ fn migrate_notable(settings: &mut Settings) {
     }
 }
 
-pub(crate) fn persist_session(record: &stats::SessionRecord) {
-    let mut list: Vec<serde_json::Value> = std::fs::read_to_string(sessions_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    if let Ok(value) = serde_json::to_value(record) {
-        list.push(value);
-    }
-    let excess = list.len().saturating_sub(1000);
-    if excess > 0 {
-        list.drain(..excess);
-    }
-    if let Ok(json) = serde_json::to_string(&list) {
-        let _ = std::fs::write(sessions_path(), json);
-    }
-}
-
 fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
     let shared = app.state::<Shared>();
     let mut stats = shared.stats.lock().unwrap();
@@ -606,24 +585,13 @@ fn get_extra(state: State<Shared>) -> stats::Extra {
     state.stats.lock().unwrap().extra()
 }
 
-fn close_session(app: &AppHandle, reset: bool) {
-    let shared = app.state::<Shared>();
-    let record = {
-        let mut stats = shared.stats.lock().unwrap();
-        let record = stats.take_session();
-        if reset {
-            stats.reset();
-        }
-        record
-    };
-    if let Some(record) = record {
-        persist_session(&record);
-    }
+fn close_session(app: &AppHandle) {
+    app.state::<Shared>().stats.lock().unwrap().reset();
 }
 
 #[tauri::command]
 fn reset_stats(app: AppHandle) {
-    close_session(&app, true);
+    close_session(&app);
 }
 
 #[tauri::command]
@@ -837,7 +805,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "statistics" => show_aux(app, "stats"),
             "shopping" => show_aux(app, "shop"),
             "settings" => show_aux(app, "settings"),
-            "reset" => close_session(app, true),
+            "reset" => close_session(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -868,7 +836,7 @@ pub fn run() {
                     } else if *shortcut == hk_lock {
                         toggle_lock(app);
                     } else if *shortcut == hk_reset {
-                        close_session(app, true);
+                        close_session(app);
                     }
                 })
                 .build(),
@@ -931,7 +899,6 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             save_window_positions(app);
             save_carried(app);
-            close_session(app, false);
         }
     });
 }
