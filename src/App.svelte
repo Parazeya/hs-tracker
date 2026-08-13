@@ -28,13 +28,25 @@
     for (const rarity of RARITIES) urls[rarity] = await soundUrl(rarity);
   }
 
-  function playSound(rarity) {
-    const c = cfg?.[rarity];
-    if (c && !c.enabled) return;
+  // a list brings its own sound and its own volume; everything else is one of
+  // the six built-in alerts. Lists live inside the active filter — the loose
+  // `lists` field is pre-0.9.4 and is emptied by the migration on load.
+  function channel(key) {
+    if (!key.startsWith('list-')) return cfg?.[key];
+    const active = (cfg?.filters ?? []).find((f) => f.id === cfg?.filter);
+    return (active?.lists ?? []).find((l) => `list-${l.id}` === key);
+  }
+
+  async function playSound(key, rarity) {
+    const c = channel(key);
+    if (c && c.enabled === false) return;
     const now = Date.now();
-    if (now - (lastPlayed[rarity] ?? 0) < 200) return;
-    lastPlayed[rarity] = now;
-    play(urls[rarity], c?.volume ?? 0.7);
+    if (now - (lastPlayed[key] ?? 0) < 200) return;
+    lastPlayed[key] = now;
+    urls[key] ??= await soundUrl(key);
+    // a list without a sound of its own borrows the one for its rarity
+    const url = urls[key] ?? urls[String(rarity ?? '').toLowerCase()];
+    play(url, c?.volume ?? 0.7);
   }
 
   // the backend pushes a snapshot when something changes; the clock is kept
@@ -55,7 +67,7 @@
     invoke('snapshot').then(received).catch(() => {});
     const unsubs = [
       listen('stats', (e) => received(e.payload)),
-      listen('item-drop', (e) => playSound(e.payload)),
+      listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
       listen('settings-changed', (e) => (cfg = e.payload)),
       listen('sounds-changed', async (e) => (urls[e.payload] = await soundUrl(e.payload))),
     ];
@@ -101,6 +113,8 @@
     }
     if (s === 'waiting-for-game') return { cls: 'warn', tip: 'Waiting for Hero Siege to start' };
     if (s === 'npcap-missing') return { cls: 'err', tip: 'Npcap is not installed — https://npcap.com' };
+    // elsewhere libpcap is always there; what is missing is the right to use it
+    if (s === 'no-capture') return { cls: 'err', tip: 'No capture device — the binary needs cap_net_raw' };
     return { cls: 'err', tip: 'No suitable network interface' };
   });
 
@@ -111,11 +125,25 @@
   let live = $derived((snap?.status ?? '').startsWith('capturing'));
   let ghost = $derived(locked && live);
 
+  // anything that throws work away asks once; the second click does it
+  let armed = $state(null);
+  let armTimer;
+  function danger(key, action) {
+    clearTimeout(armTimer);
+    if (armed === key) {
+      armed = null;
+      action();
+      return;
+    }
+    armed = key;
+    armTimer = setTimeout(() => (armed = null), 4000);
+  }
+
   const reset = () => invoke('reset_stats');
 
   let menu = $state(null);
 
-  let menuSize = $state({ w: 138, h: 140 });
+  let menuSize = $state({ w: 138, h: 96 });
 
   function onContext(e) {
     e.preventDefault();
@@ -148,7 +176,8 @@
   }
 </script>
 
-<svelte:window onclick={closeMenu} onblur={closeMenu} />
+<!-- the window is nothing but the panel, so the menu belongs to the whole of it -->
+<svelte:window onclick={closeMenu} onblur={closeMenu} oncontextmenu={onContext} />
 
 <div
   class="panel"
@@ -156,7 +185,6 @@
   style:border-image-source="url({panelBg})"
   style:opacity={cfg?.opacity ?? 1}
   data-tauri-drag-region={drag}
-  oncontextmenu={onContext}
 >
   <button
     class="lock"
@@ -187,7 +215,7 @@
           style:--btn="url({btnBg})"
           style:--btn-hover="url({btnHoverBg})"
           style:--btn-down="url({btnDownBg})"
-          onclick={reset}>Reset Stats</button
+          onclick={() => danger('reset', reset)}>{armed === 'reset' ? 'Sure?' : 'Reset Stats'}</button
         >
       {:else}
         <div class="chip md" style:border-image-source="url({chipBg})">
@@ -284,15 +312,11 @@
       bind:clientWidth={menuSize.w}
       bind:clientHeight={menuSize.h}
     >
-      <button onclick={() => menuAction('open_stats')}>Statistics</button>
-      <button onclick={() => menuAction('open_shop')}>Shopping List</button>
-      <button onclick={() => menuAction('open_settings')}>Settings</button>
+      <button onclick={() => menuAction('full_mode')}>Dashboard</button>
       <button onclick={() => menuAction('hide_window')}>Hide to tray</button>
       <button
-        onclick={() => {
-          closeMenu();
-          reset();
-        }}>Reset stats</button
+        onclick={() => danger('menu-reset', () => { closeMenu(); reset(); })}
+        >{armed === 'menu-reset' ? 'Reset — sure?' : 'Reset stats'}</button
       >
       <button class="danger" onclick={() => menuAction('quit')}>Quit</button>
     </div>
@@ -396,7 +420,11 @@
 
   .btn {
     box-sizing: border-box;
-    height: 27px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    height: 28px;
     width: 106px;
     font: inherit;
     font-size: 12px;

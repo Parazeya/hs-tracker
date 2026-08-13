@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HS Tracker",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "identifier": "com.hstracker.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,6 +12,22 @@
   "app": {
     "windows": [
       {
+        "label": "dashboard",
+        "title": "HS Tracker",
+        "width": 720,
+        "height": 620,
+        "resizable": true,
+        "visible": true,
+        "alwaysOnTop": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "skipTaskbar": false,
+        "center": true,
+        "minWidth": 620,
+        "minHeight": 460
+      },
+      {
         "label": "main",
         "title": "HS Tracker",
         "width": 444,
@@ -21,46 +37,8 @@
         "decorations": false,
         "transparent": true,
         "shadow": false,
-        "skipTaskbar": false
-      },
-      {
-        "label": "settings",
-        "title": "HS Tracker Settings",
-        "width": 468,
-        "height": 680,
-        "resizable": false,
-        "visible": false,
-        "alwaysOnTop": true,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "skipTaskbar": true
-      },
-      {
-        "label": "stats",
-        "title": "HS Tracker Statistics",
-        "width": 560,
-        "height": 600,
-        "resizable": false,
-        "visible": false,
-        "alwaysOnTop": true,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "skipTaskbar": true
-      },
-      {
-        "label": "shop",
-        "title": "HS Tracker Shopping List",
-        "width": 300,
-        "height": 420,
-        "resizable": false,
-        "visible": false,
-        "alwaysOnTop": true,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "skipTaskbar": true
+        "skipTaskbar": false,
+        "visible": false
       },
       {
         "label": "ticker",
@@ -98,6 +76,22 @@
       "icons/icon.png"
     ],
     "shortDescription": "Hero Siege session tracker overlay",
+    "category": "Game",
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libpcap0.8",
+          "libayatana-appindicator3-1",
+          "libcap2-bin"
+        ],
+        "postInstallScript": "installer/deb-postinst.sh"
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",

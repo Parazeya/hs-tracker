@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
+#[cfg(windows)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,7 +17,10 @@ use crate::stats::GameStats;
 
 #[derive(Clone, PartialEq)]
 pub enum Status {
-    NpcapMissing,
+    /// no way to capture at all: Npcap absent on Windows, libpcap refusing to
+    /// hand out a device elsewhere — which on Linux usually means the binary
+    /// lacks cap_net_raw rather than that the library is missing
+    NoCapture,
     NoInterface,
     WaitingForGame,
     Capturing { iface: String, hosts: usize, dropped: u32 },
@@ -25,7 +29,10 @@ pub enum Status {
 impl Status {
     pub fn text(&self) -> String {
         match self {
-            Status::NpcapMissing => "npcap-missing".into(),
+            #[cfg(windows)]
+            Status::NoCapture => "npcap-missing".into(),
+            #[cfg(not(windows))]
+            Status::NoCapture => "no-capture".into(),
             Status::NoInterface => "no-interface".into(),
             Status::WaitingForGame => "waiting-for-game".into(),
             Status::Capturing { iface, hosts, dropped } => format!("capturing|{iface}|{hosts}|{dropped}"),
@@ -61,24 +68,41 @@ impl Default for Shared {
     }
 }
 
+#[cfg(windows)]
 fn npcap_dir() -> PathBuf {
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
     PathBuf::from(root).join("System32").join("Npcap")
 }
 
-pub fn npcap_present() -> bool {
+/// Windows carries the capture driver as a separate install, so its absence is
+/// worth reporting before anything else is attempted.
+#[cfg(windows)]
+pub fn capture_available() -> bool {
     npcap_dir().join("wpcap.dll").exists()
         || npcap_dir().parent().is_some_and(|s| s.join("wpcap.dll").exists())
 }
 
+/// Elsewhere libpcap is a package dependency, and listing devices needs no
+/// privileges — so there is nothing to test here. What can be missing is the
+/// right to *open* a device, and only the attempt can tell us that; the capture
+/// threads report it.
+#[cfg(not(windows))]
+pub fn capture_available() -> bool {
+    true
+}
+
 /// wpcap.dll is delay-loaded; make sure the loader can find it.
-pub fn add_npcap_to_path() {
+#[cfg(windows)]
+pub fn prepare_capture() {
     let dir = npcap_dir();
     if dir.exists() {
         let path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{};{}", dir.display(), path));
     }
 }
+
+#[cfg(not(windows))]
+pub fn prepare_capture() {}
 
 fn game_pids(sys: &mut System) -> Vec<u32> {
     sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -158,6 +182,24 @@ fn set_status(status: &Arc<Mutex<Status>>, s: Status) {
     *status.lock().unwrap() = s;
 }
 
+/// "No suitable interface" is the wrong story when the adapter is there and the
+/// process simply may not open it. libpcap hands the reason back as prose, and
+/// its wording for a missing capability has changed over the years, so all the
+/// spellings it has used are matched.
+fn denied_open(e: &pcap::Error) -> bool {
+    match e {
+        pcap::Error::IoError(kind) => *kind == std::io::ErrorKind::PermissionDenied,
+        // EPERM and EACCES
+        pcap::Error::ErrnoError(errno) => matches!(errno.0, 1 | 13),
+        other => {
+            let text = other.to_string().to_lowercase();
+            ["permission", "not permitted", "cap_net_raw", "denied", "root"]
+                .iter()
+                .any(|m| text.contains(m))
+        }
+    }
+}
+
 fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri::AppHandle) {
     let mut sys = System::new();
     let mut captures: HashMap<String, Capture> = HashMap::new();
@@ -174,8 +216,8 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             stats.lock().unwrap().sample();
         }
 
-        if !npcap_present() {
-            set_status(&status, Status::NpcapMissing);
+        if !capture_available() {
+            set_status(&status, Status::NoCapture);
             std::thread::sleep(Duration::from_secs(3));
             continue;
         }
@@ -229,7 +271,12 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let silent = productive
                 && c.started.elapsed() >= Duration::from_secs(45)
                 && c.hits.load(Ordering::Relaxed) == 0;
-            if silent {
+            // A thread that ended by itself without a single message could not
+            // open the adapter — the usual state of a Linux binary without
+            // cap_net_raw. Re-opening it every second forever would be a busy
+            // loop that also keeps overwriting the reason on the status line.
+            let refused = c.handle.is_finished() && c.hits.load(Ordering::Relaxed) == 0;
+            if silent || refused {
                 barren.insert(name.clone(), std::time::Instant::now());
             }
             let keep = running
@@ -258,8 +305,11 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                 let (stop, stats, status, app) = (stop.clone(), stats.clone(), status.clone(), app.clone());
                 let (dev, dropped, scope, hits) = (dev.clone(), dropped.clone(), scope.clone(), hits.clone());
                 std::thread::spawn(move || {
-                    if capture_loop(dev, scope, stop, stats, dropped, hits, &app).is_err() {
-                        set_status(&status, Status::NoInterface);
+                    // "no interface" is the wrong story when the adapter is
+                    // there and the process simply may not open it — the usual
+                    // state of a fresh Linux install without cap_net_raw.
+                    if let Err(e) = capture_loop(dev, scope, stop, stats, dropped, hits, &app) {
+                        set_status(&status, if denied_open(&e) { Status::NoCapture } else { Status::NoInterface });
                     }
                 })
             };
@@ -271,11 +321,17 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             );
         }
 
-        if !captures.is_empty() {
-            let dropped = captures.values().map(|c| c.dropped.load(Ordering::Relaxed)).sum();
-            let mut ifaces: Vec<&str> = captures.values().map(|c| c.iface.as_str()).collect();
+        // only threads still on their feet count as capturing; one that died on
+        // open has already put the reason on the status line and must not be
+        // painted over with a green "capturing"
+        let alive: Vec<&Capture> = captures.values().filter(|c| !c.handle.is_finished()).collect();
+        if !alive.is_empty() {
+            let dropped = alive.iter().map(|c| c.dropped.load(Ordering::Relaxed)).sum();
+            let mut ifaces: Vec<&str> = alive.iter().map(|c| c.iface.as_str()).collect();
             ifaces.sort_unstable();
             set_status(&status, Status::Capturing { iface: ifaces.join(" + "), hosts: remote.len(), dropped });
+        } else if !captures.is_empty() {
+            // every capture died: whatever they stored stands
         } else if !running {
             set_status(&status, Status::WaitingForGame);
         } else if wanted.is_empty() && looked.elapsed() < Duration::from_secs(5) {
@@ -395,27 +451,29 @@ fn handle_flush(
     hits: &Arc<AtomicU32>,
     app: &tauri::AppHandle,
 ) {
-    {
-            let messages = fresh_messages(parser::extract_messages(flushed));
-            if !messages.is_empty() {
-                hits.fetch_add(1, Ordering::Relaxed);
-                crate::debug_log(&messages, src);
-                let events = parser::events_from_messages(&messages);
-                crate::dev_log(&events, src);
-                if !events.is_empty() {
-                    // the engine dedupes and resolves rarities, so it also
-                    // decides what the ticker and the sounds react to
-                    let fresh: Vec<_> = {
-                        let mut stats = stats.lock().unwrap();
-                        events.iter().filter_map(|e| stats.apply(e)).collect()
-                    };
-                    for drop in fresh {
-                        if let Some(key) = &drop.sound {
-                            let _ = app.emit("item-drop", key);
-                        }
-                        let _ = app.emit("drop-entry", &drop);
-                    }
-                }
-            }
+    let messages = fresh_messages(parser::extract_messages(flushed));
+    if messages.is_empty() {
+        return;
+    }
+    hits.fetch_add(1, Ordering::Relaxed);
+    crate::debug_log(&messages, src);
+    let events = parser::events_from_messages(&messages);
+    crate::dev_log(&events, src);
+    if events.is_empty() {
+        return;
+    }
+    // the engine dedupes and resolves rarities, so it also decides what the
+    // ticker and the sounds react to
+    let fresh: Vec<_> = {
+        let mut stats = stats.lock().unwrap();
+        events.iter().filter_map(|e| stats.apply(e)).collect()
+    };
+    for drop in fresh {
+        if let Some(key) = &drop.sound {
+            // the rarity travels along as a fallback: a list with no sound of
+            // its own still gets announced
+            let _ = app.emit("item-drop", (key, &drop.rarity));
+        }
+        let _ = app.emit("drop-entry", &drop);
     }
 }

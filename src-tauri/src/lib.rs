@@ -17,6 +17,15 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Alert kinds that own a configurable sound (not item rarities — see stats).
 const SOUND_KEYS: [&str; 6] = ["satanic", "set", "heroic", "angelic", "unholy", "mail"];
+
+/// A sound is either one of the six built-in alerts or a list's own file,
+/// named `list-<id>`. Anything else must not reach the filesystem.
+fn sound_key(key: &str) -> bool {
+    SOUND_KEYS.contains(&key)
+        || (key.len() <= 40
+            && key.starts_with("list-")
+            && key[5..].chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+}
 const SOUND_EXTS: [(&str, &str); 4] = [
     ("mp3", "audio/mpeg"),
     ("wav", "audio/wav"),
@@ -62,6 +71,35 @@ impl Default for SoundCfg {
     }
 }
 
+/// A named set of items with a sound of its own. It outranks the rarity
+/// alerts: an item on a list is announced by that list, whatever the rarity
+/// switches and the minimum grade say.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct SoundList {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub volume: f32,
+    pub items: Vec<String>,
+}
+
+impl Default for SoundList {
+    fn default() -> Self {
+        Self { id: String::new(), name: String::new(), enabled: true, volume: 0.7, items: Vec::new() }
+    }
+}
+
+/// A pack of lists, the way a loot filter is a pack of rules. One is active at
+/// a time, so a farming filter and a trading filter can live side by side.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct SoundFilter {
+    pub id: String,
+    pub name: String,
+    pub lists: Vec<SoundList>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct NotableGroup {
     pub label: String,
@@ -82,6 +120,13 @@ pub struct Settings {
     pub min_tier: i64,
     /// named drops that get their own counter: label -> item names
     pub notable: Vec<NotableGroup>,
+    /// sound filters, one of which may be switched on
+    pub filters: Vec<SoundFilter>,
+    pub filter: String,
+    pub use_filter: bool,
+    /// pre-0.9.4 lists, folded into a filter on load
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lists: Vec<SoundList>,
     pub locked: bool,
     pub opacity: f32,
     pub scale: f32,
@@ -90,6 +135,8 @@ pub struct Settings {
     pub ticker: bool,
     pub debug_log: bool,
     pub sound_on_ground: bool,
+    /// which face was up last: the overlay (true) or the dashboard
+    pub compact: bool,
     pub hidden: Vec<String>,
 }
 
@@ -108,6 +155,10 @@ impl Default for Settings {
                 .into_iter()
                 .map(|(label, names)| NotableGroup { label, names })
                 .collect(),
+            filters: Vec::new(),
+            filter: String::new(),
+            use_filter: true,
+            lists: Vec::new(),
             locked: false,
             opacity: 1.0,
             scale: 1.0,
@@ -116,6 +167,7 @@ impl Default for Settings {
             ticker: true,
             debug_log: false,
             sound_on_ground: true,
+            compact: false,
             hidden: Vec::new(),
         }
     }
@@ -138,7 +190,7 @@ pub(crate) fn debug_log(messages: &[serde_json::Value], src: std::net::IpAddr) {
         let opened = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(exe_dir().join("debug-capture.jsonl"));
+            .open(data_dir().join("debug-capture.jsonl"));
         let Ok(f) = opened else { return };
         *guard = Some(std::io::BufWriter::new(f));
     }
@@ -173,6 +225,7 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
                 format!("save  {name}: xp {experience}, kills {kills}")
             }
             parser::GameEvent::Mail(has) => format!("mail  {has}"),
+            parser::GameEvent::Room(room) => format!("room  {room}"),
             parser::GameEvent::ItemAdded { name, rarity, tier, ground, item_type, item_id, weapon_type, .. } => {
                 // an empty name means the item tables predate this item
                 let label = if name.is_empty() {
@@ -191,6 +244,7 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
 #[cfg(not(debug_assertions))]
 pub(crate) fn dev_log(_: &[parser::GameEvent], _: std::net::IpAddr) {}
 
+#[cfg(windows)]
 fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -198,24 +252,50 @@ fn exe_dir() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// Everything the app writes lives here. On Windows that is the folder the
+/// installer put the exe in, which keeps the app portable — copy the folder,
+/// keep the settings. Elsewhere the binary lands in /usr/bin or inside a
+/// read-only AppImage, so the XDG config directory is the only sane home.
+#[cfg(windows)]
+fn data_dir() -> PathBuf {
+    exe_dir()
+}
+
+#[cfg(not(windows))]
+fn data_dir() -> PathBuf {
+    // resolved and created once; every settings read would otherwise stat it
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let dir = base.join("hs-tracker");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    })
+    .clone()
+}
+
 fn sounds_dir() -> PathBuf {
-    exe_dir().join("sounds")
+    data_dir().join("sounds")
 }
 
 fn settings_path() -> PathBuf {
-    exe_dir().join("settings.json")
+    data_dir().join("settings.json")
 }
 
 fn shopping_path() -> PathBuf {
-    exe_dir().join("shopping.json")
+    data_dir().join("shopping.json")
 }
 
 fn positions_path() -> PathBuf {
-    exe_dir().join("positions.json")
+    data_dir().join("positions.json")
 }
 
 fn carried_path() -> PathBuf {
-    exe_dir().join("carried.json")
+    data_dir().join("carried.json")
 }
 
 /// Bank balance, experience and kills as of the last run. The game only sends
@@ -235,14 +315,16 @@ fn save_carried(app: &AppHandle) {
     }
 }
 
-const REMEMBERED_WINDOWS: [&str; 4] = ["main", "settings", "stats", "shop"];
+const REMEMBERED_WINDOWS: [&str; 2] = ["main", "dashboard"];
 
+/// Where each window was, and how big — the dashboard can be resized, so its
+/// size is worth remembering too.
 fn window_positions(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for label in REMEMBERED_WINDOWS {
         if let Some(w) = app.get_webview_window(label) {
-            if let Ok(pos) = w.outer_position() {
-                map.insert(label.into(), serde_json::json!([pos.x, pos.y]));
+            if let (Ok(pos), Ok(size)) = (w.outer_position(), w.outer_size()) {
+                map.insert(label.into(), serde_json::json!([pos.x, pos.y, size.width, size.height]));
             }
         }
     }
@@ -304,8 +386,16 @@ fn restore_window_positions(app: &AppHandle) {
         if !on_screen(x as i32, y as i32) {
             continue;
         }
-        if let Some(w) = app.get_webview_window(label) {
-            let _ = w.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
+        let Some(w) = app.get_webview_window(label) else { continue };
+        let _ = w.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
+        // older files hold just a position; a size only comes back if it fits
+        if let (Some(width), Some(height)) = (
+            pos.get(2).and_then(|v| v.as_u64()),
+            pos.get(3).and_then(|v| v.as_u64()),
+        ) {
+            if width >= 200 && height >= 200 {
+                let _ = w.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
+            }
         }
     }
 }
@@ -356,38 +446,49 @@ fn spawn_ticker_glue(app: AppHandle) {
 
 
 /// Counters are pushed, not polled: the webviews used to ask for a snapshot
-/// twice a second each — the statistics window even asked for the whole graph
+/// twice a second each — the statistics view even asked for the whole graph
 /// series and drop journal while hidden. Now one thread coalesces changes and
-/// emits only to windows that are actually on screen. The heartbeats keep the
-/// per-hour rates fresh while nothing is dropping.
+/// emits only to what is actually on screen. The heartbeats keep the per-hour
+/// rates fresh while nothing is dropping.
 const SNAP_MIN_GAP: Duration = Duration::from_millis(400);
 const SNAP_HEARTBEAT: Duration = Duration::from_millis(2000);
 const EXTRA_MIN_GAP: Duration = Duration::from_millis(1000);
 const EXTRA_HEARTBEAT: Duration = Duration::from_millis(5000);
 
+/// The dashboard shows one section at a time and says which, so the heavy
+/// payload can stay home while the user is on Settings or Sounds.
+static STATS_SECTION: AtomicBool = AtomicBool::new(true);
+
+#[tauri::command]
+fn viewing(section: String) {
+    STATS_SECTION.store(section == "stats", Ordering::Relaxed);
+}
+
 fn spawn_stats_pusher(app: AppHandle) {
     std::thread::spawn(move || {
+        // minimised counts as off screen: the dashboard can sit in the taskbar
+        // for a whole run, and nothing there needs the numbers
         let visible = |label: &str| {
             app.get_webview_window(label)
-                .and_then(|w| w.is_visible().ok())
+                .map(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
                 .unwrap_or(false)
         };
         let (mut snap_rev, mut extra_rev) = (u64::MAX, u64::MAX);
         let mut snap_at = Instant::now() - SNAP_HEARTBEAT;
         let mut extra_at = Instant::now() - EXTRA_HEARTBEAT;
-        let (mut had_main, mut had_stats) = (false, false);
+        let (mut had_main, mut had_dash) = (false, false);
         loop {
             std::thread::sleep(Duration::from_millis(200));
-            let (main, stats_win) = (visible("main"), visible("stats"));
+            let (main, dashboard) = (visible("main"), visible("dashboard"));
             // a window that just appeared gets the current numbers at once
             if main && !had_main {
                 snap_rev = u64::MAX;
             }
-            if stats_win && !had_stats {
+            if dashboard && !had_dash {
                 (snap_rev, extra_rev) = (u64::MAX, u64::MAX);
             }
-            (had_main, had_stats) = (main, stats_win);
-            if !main && !stats_win {
+            (had_main, had_dash) = (main, dashboard);
+            if !main && !dashboard {
                 continue;
             }
             let shared = app.state::<Shared>();
@@ -399,7 +500,7 @@ fn spawn_stats_pusher(app: AppHandle) {
             if due(snap_rev, snap_at, SNAP_MIN_GAP, SNAP_HEARTBEAT) {
                 let status = shared.status.lock().unwrap().text();
                 let snapshot = shared.stats.lock().unwrap().snapshot(status);
-                for (label, on_screen) in [("main", main), ("stats", stats_win)] {
+                for (label, on_screen) in [("main", main), ("dashboard", dashboard)] {
                     if on_screen {
                         let _ = app.emit_to(label, "stats", &snapshot);
                     }
@@ -407,10 +508,11 @@ fn spawn_stats_pusher(app: AppHandle) {
                 (snap_rev, snap_at) = (revision, Instant::now());
             }
             // the series and the drop journal are the heaviest payload in the
-            // app, so they only travel while the window showing them is open
-            if stats_win && due(extra_rev, extra_at, EXTRA_MIN_GAP, EXTRA_HEARTBEAT) {
+            // app, so they only travel while the statistics section is open
+            let reading_stats = dashboard && STATS_SECTION.load(Ordering::Relaxed);
+            if reading_stats && due(extra_rev, extra_at, EXTRA_MIN_GAP, EXTRA_HEARTBEAT) {
                 let extra = shared.stats.lock().unwrap().extra();
-                let _ = app.emit_to("stats", "stats-extra", &extra);
+                let _ = app.emit_to("dashboard", "stats-extra", &extra);
                 (extra_rev, extra_at) = (revision, Instant::now());
             }
         }
@@ -423,7 +525,20 @@ pub(crate) fn read_settings() -> Settings {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     migrate_notable(&mut settings);
+    migrate_lists(&mut settings);
     settings
+}
+
+/// Lists used to live loose in the settings; they are a filter's contents now.
+fn migrate_lists(settings: &mut Settings) {
+    if settings.lists.is_empty() {
+        return;
+    }
+    let lists = std::mem::take(&mut settings.lists);
+    settings.filters.push(SoundFilter { id: "mine".into(), name: "My filter".into(), lists });
+    if settings.filter.is_empty() {
+        settings.filter = "mine".into();
+    }
 }
 
 /// The rune groups were guesses until the item tables gained the game's own
@@ -457,6 +572,21 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         .cloned()
         .collect();
     stats.set_filter(alerts, settings.min_tier);
+    let active = settings
+        .use_filter
+        .then(|| settings.filters.iter().find(|f| f.id == settings.filter))
+        .flatten();
+    stats.set_sound_lists(
+        active
+            .map(|f| {
+                f.lists
+                    .iter()
+                    .filter(|l| l.enabled && !l.id.is_empty() && !l.items.is_empty())
+                    .map(|l| (format!("list-{}", l.id), l.items.clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    );
     stats.set_notable(
         settings
             .notable
@@ -474,7 +604,11 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     DEBUG_LOG.store(settings.debug_log, Ordering::Relaxed);
     SCALE_MILLI.store((scale * 1000.0) as u32, Ordering::Relaxed);
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_ignore_cursor_events(settings.locked);
+        // the lock poller owns this once the overlay is up; touching a window
+        // that has never been shown is what breaks on GTK
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.set_ignore_cursor_events(settings.locked);
+        }
         let _ = w.set_zoom(scale);
         let _ = w.set_size(LogicalSize::new(BASE_W * scale, overlay_height(settings) * scale));
     }
@@ -528,6 +662,7 @@ fn spawn_lock_poller(app: AppHandle) {
     });
 }
 
+#[cfg(windows)]
 fn apply_autostart(enabled: bool) {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
@@ -544,6 +679,39 @@ fn apply_autostart(enabled: bool) {
     } else {
         let _ = run.delete_value("HS Tracker");
     }
+}
+
+/// The freedesktop equivalent of the Run key: a .desktop file the session
+/// launches on login.
+#[cfg(not(windows))]
+fn apply_autostart(enabled: bool) {
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .map(|c| c.join("autostart"));
+    let Some(dir) = dir else { return };
+    let entry = dir.join("hs-tracker.desktop");
+    if !enabled {
+        let _ = std::fs::remove_file(entry);
+        return;
+    }
+    // Inside an AppImage the running binary lives on a mount that is gone by
+    // the next login; $APPIMAGE is the file the user actually keeps.
+    let target = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok());
+    let Some(target) = target else { return };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    // Exec is parsed as an argv, so a path with a space has to be quoted, and
+    // the spec's own escapes have to survive quoting
+    let quoted = format!("\"{}\"", target.display().to_string().replace('\\', "\\\\").replace('"', "\\\""));
+    let desktop = format!(
+        "[Desktop Entry]\nType=Application\nName=HS Tracker\nComment=Hero Siege session tracker\nExec={quoted}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+    );
+    let _ = std::fs::write(entry, desktop);
 }
 
 #[tauri::command]
@@ -615,33 +783,168 @@ fn hide_aux(app: &AppHandle, label: &str) {
 }
 
 #[tauri::command]
-fn open_settings(app: AppHandle) {
-    show_aux(&app, "settings");
+fn hide_dashboard(app: AppHandle) {
+    hide_aux(&app, "dashboard");
+}
+
+/// The two faces of the app: the dashboard to set things up and read the run,
+/// the overlay to keep an eye on it while playing. Which one was up is
+/// remembered, so the tray and the next launch bring back the same one.
+fn set_face(app: &AppHandle, compact: bool) {
+    let (show, hide) = if compact { ("main", "dashboard") } else { ("dashboard", "main") };
+    hide_aux(app, hide);
+    show_aux(app, show);
+    let mut settings = read_settings();
+    if settings.compact != compact {
+        settings.compact = compact;
+        let _ = save_settings(app.clone(), settings);
+    }
 }
 
 #[tauri::command]
-fn hide_settings(app: AppHandle) {
-    hide_aux(&app, "settings");
+fn compact_mode(app: AppHandle) {
+    set_face(&app, true);
 }
 
 #[tauri::command]
-fn open_stats(app: AppHandle) {
-    show_aux(&app, "stats");
+fn full_mode(app: AppHandle) {
+    set_face(&app, false);
+}
+
+/// A filter travels as one file: the lists, the items and the sound each list
+/// plays, inlined. Without the sounds an exported filter would arrive mute on
+/// the other machine, which is half the point of sharing one.
+#[derive(Serialize, Deserialize)]
+struct ExportedSound {
+    ext: String,
+    data: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ExportedList {
+    name: String,
+    #[serde(default = "yes")]
+    enabled: bool,
+    #[serde(default = "default_volume")]
+    volume: f32,
+    #[serde(default)]
+    items: Vec<String>,
+    #[serde(default)]
+    sound: Option<ExportedSound>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn default_volume() -> f32 {
+    0.7
+}
+
+#[derive(Serialize, Deserialize)]
+struct ExportedFilter {
+    app: String,
+    version: u32,
+    name: String,
+    lists: Vec<ExportedList>,
+}
+
+fn list_sound(id: &str) -> Option<ExportedSound> {
+    SOUND_EXTS.iter().find_map(|(ext, _)| {
+        let path = sounds_dir().join(format!("list-{id}.{ext}"));
+        std::fs::read(&path).ok().map(|bytes| ExportedSound {
+            ext: (*ext).to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    })
 }
 
 #[tauri::command]
-fn hide_stats(app: AppHandle) {
-    hide_aux(&app, "stats");
+fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let safe: String = filter.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '-' }).collect();
+    let suggested = format!("{safe}.hstracker.json");
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("HS Tracker filter", &["json"])
+        .set_file_name(&suggested)
+        .blocking_save_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    let exported = ExportedFilter {
+        app: "hs-tracker".into(),
+        version: 1,
+        name: filter.name,
+        lists: filter
+            .lists
+            .into_iter()
+            .map(|l| ExportedList {
+                sound: list_sound(&l.id),
+                name: l.name,
+                enabled: l.enabled,
+                volume: l.volume,
+                items: l.items,
+            })
+            .collect(),
+    };
+    let json = serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(Some(path.file_name().unwrap_or_default().to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
-fn open_shop(app: AppHandle) {
-    show_aux(&app, "shop");
+fn import_filter(app: AppHandle) -> Result<Option<SoundFilter>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("HS Tracker filter", &["json"])
+        .blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let exported: ExportedFilter = serde_json::from_str(&text).map_err(|_| "not an HS Tracker filter".to_string())?;
+    if exported.app != "hs-tracker" {
+        return Err("not an HS Tracker filter".into());
+    }
+    std::fs::create_dir_all(sounds_dir()).map_err(|e| e.to_string())?;
+    let mut lists = Vec::new();
+    for list in exported.lists {
+        // ids are minted here, so an imported filter never fights with one
+        // that is already installed
+        let id = format!("{:x}", now_id());
+        if let Some(sound) = list.sound {
+            if let (true, Ok(bytes)) = (
+                SOUND_EXTS.iter().any(|(e, _)| *e == sound.ext),
+                base64::engine::general_purpose::STANDARD.decode(sound.data),
+            ) {
+                if bytes.len() <= 10 << 20 {
+                    let _ = std::fs::write(sounds_dir().join(format!("list-{id}.{}", sound.ext)), bytes);
+                }
+            }
+        }
+        lists.push(SoundList {
+            id,
+            name: list.name,
+            enabled: list.enabled,
+            volume: list.volume.clamp(0.0, 1.0),
+            items: list.items,
+        });
+    }
+    Ok(Some(SoundFilter { id: format!("{:x}", now_id()), name: exported.name, lists }))
 }
 
-#[tauri::command]
-fn hide_shop(app: AppHandle) {
-    hide_aux(&app, "shop");
+/// Short unique ids without pulling in a crate for it.
+fn now_id() -> u64 {
+    use std::sync::atomic::AtomicU64;
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    nanos.wrapping_add(SEQ.fetch_add(1, Ordering::Relaxed)) & 0xffff_ffff
 }
 
 #[tauri::command]
@@ -664,10 +967,20 @@ fn set_shopping(items: Vec<String>) -> Result<(), String> {
     std::fs::write(shopping_path(), json).map_err(|e| e.to_string())
 }
 
+/// The clipboard handle is kept for the life of the process: on X11 the
+/// copying application owns the selection, and dropping the handle hands the
+/// text back to nobody unless a clipboard manager happens to be running.
 #[tauri::command]
 fn copy_text(text: String) -> Result<(), String> {
-    arboard::Clipboard::new()
-        .and_then(|mut c| c.set_text(text))
+    static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
+    let mut guard = CLIPBOARD.lock().map_err(|_| "the clipboard is busy".to_string())?;
+    if guard.is_none() {
+        *guard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+    }
+    guard
+        .as_mut()
+        .expect("just filled")
+        .set_text(text)
         .map_err(|e| e.to_string())
 }
 
@@ -679,7 +992,7 @@ fn quit(app: AppHandle) {
 /// Custom sound beside the exe: sounds\{satanic|heroic|angelic|mail}.{mp3,wav,ogg,flac}.
 #[tauri::command]
 fn load_sound(rarity: String) -> Option<String> {
-    if !SOUND_KEYS.contains(&rarity.as_str()) {
+    if !sound_key(&rarity) {
         return None;
     }
     for (ext, mime) in SOUND_EXTS {
@@ -696,7 +1009,7 @@ fn load_sound(rarity: String) -> Option<String> {
 /// file beats shipping a multi-megabyte data URL through the IPC bridge.
 #[tauri::command]
 fn sound_path(rarity: String) -> Option<String> {
-    if !SOUND_KEYS.contains(&rarity.as_str()) {
+    if !sound_key(&rarity) {
         return None;
     }
     SOUND_EXTS
@@ -708,7 +1021,7 @@ fn sound_path(rarity: String) -> Option<String> {
 
 #[tauri::command]
 fn sound_status(rarity: String) -> Option<String> {
-    if !SOUND_KEYS.contains(&rarity.as_str()) {
+    if !sound_key(&rarity) {
         return None;
     }
     SOUND_EXTS
@@ -722,7 +1035,7 @@ fn sound_status(rarity: String) -> Option<String> {
 #[tauri::command]
 fn pick_sound(app: AppHandle, rarity: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    if !SOUND_KEYS.contains(&rarity.as_str()) {
+    if !sound_key(&rarity) {
         return Err("bad rarity".into());
     }
     let picked = app
@@ -758,7 +1071,7 @@ fn pick_sound(app: AppHandle, rarity: String) -> Result<Option<String>, String> 
 
 #[tauri::command]
 fn clear_sound(app: AppHandle, rarity: String) -> Result<(), String> {
-    if !SOUND_KEYS.contains(&rarity.as_str()) {
+    if !sound_key(&rarity) {
         return Err("bad rarity".into());
     }
     for (e, _) in SOUND_EXTS {
@@ -768,14 +1081,17 @@ fn clear_sound(app: AppHandle, rarity: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Left-clicking the tray hides whatever is on screen, and brings back the
+/// face that was up last — usually the overlay while playing.
 fn toggle_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
-            let _ = w.hide();
-        } else {
-            let _ = w.show();
-            let _ = w.set_focus();
-        }
+    let visible = |label: &str| {
+        app.get_webview_window(label).and_then(|w| w.is_visible().ok()).unwrap_or(false)
+    };
+    if visible("main") || visible("dashboard") {
+        hide_aux(app, "main");
+        hide_aux(app, "dashboard");
+    } else {
+        show_aux(app, if read_settings().compact { "main" } else { "dashboard" });
     }
 }
 
@@ -786,25 +1102,21 @@ fn toggle_lock(app: &AppHandle) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let toggle = MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
+    let dashboard = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
+    let compact = MenuItem::with_id(app, "compact", "Compact overlay", true, None::<&str>)?;
     let lock = MenuItem::with_id(app, "lock", "Lock / Unlock overlay", true, None::<&str>)?;
-    let statistics = MenuItem::with_id(app, "statistics", "Statistics", true, None::<&str>)?;
-    let shopping = MenuItem::with_id(app, "shopping", "Shopping List", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", "Reset stats", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &lock, &statistics, &shopping, &settings, &reset, &quit])?;
+    let menu = Menu::with_items(app, &[&dashboard, &compact, &lock, &reset, &quit])?;
     TrayIconBuilder::with_id("main")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .tooltip("HS Tracker")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| match e.id.as_ref() {
-            "toggle" => toggle_window(app),
+            "dashboard" => full_mode(app.clone()),
+            "compact" => compact_mode(app.clone()),
             "lock" => toggle_lock(app),
-            "statistics" => show_aux(app, "stats"),
-            "shopping" => show_aux(app, "shop"),
-            "settings" => show_aux(app, "settings"),
             "reset" => close_session(app),
             "quit" => app.exit(0),
             _ => {}
@@ -819,7 +1131,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
-    sniffer::add_npcap_to_path();
+    sniffer::prepare_capture();
     let hk_toggle: Shortcut = HK_TOGGLE.parse().unwrap();
     let hk_lock: Shortcut = HK_LOCK.parse().unwrap();
     let hk_reset: Shortcut = HK_RESET.parse().unwrap();
@@ -847,12 +1159,12 @@ pub fn run() {
             get_extra,
             reset_stats,
             hide_window,
-            open_settings,
-            hide_settings,
-            open_stats,
-            hide_stats,
-            open_shop,
-            hide_shop,
+            hide_dashboard,
+            compact_mode,
+            full_mode,
+            viewing,
+            export_filter,
+            import_filter,
             ticker_busy,
             get_shopping,
             set_shopping,
@@ -878,8 +1190,18 @@ pub fn run() {
             apply_stats_settings(app.handle(), &settings);
             apply_settings_effects(app.handle(), &settings);
             restore_window_positions(app.handle());
+            if settings.compact {
+                hide_aux(app.handle(), "dashboard");
+                show_aux(app.handle(), "main");
+            }
+            // click-through is set once the window exists on screen: off
+            // Windows the call reaches into a native window that an unshown
+            // one does not have yet. The ticker gets it when it is shown, the
+            // overlay from the lock poller.
             if let Some(t) = app.get_webview_window("ticker") {
-                let _ = t.set_ignore_cursor_events(true);
+                if t.is_visible().unwrap_or(false) {
+                    let _ = t.set_ignore_cursor_events(true);
+                }
             }
             #[cfg(debug_assertions)]
             if let Some(w) = app.get_webview_window("main") {

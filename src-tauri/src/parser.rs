@@ -46,6 +46,8 @@ pub enum GameEvent {
         kills: i64,
     },
     Mail(bool),
+    /// the room the character stands in, straight from the client's heartbeat
+    Room(String),
     ItemAdded {
         rarity: Value,
         mf: bool,
@@ -172,7 +174,9 @@ impl Reassembler {
     }
 
     fn evict_stale(&mut self) {
-        if self.bufs.len() <= 64 {
+        // A flow that flushes cleanly leaves no buffer behind, so its ack and
+        // carry entries would otherwise outlive every sweep keyed on `bufs`.
+        if self.bufs.len() <= 64 && self.last_ack.len() <= 512 && self.carry.len() <= 512 {
             return;
         }
         let now = Instant::now();
@@ -475,6 +479,19 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
     }
     if has(d, XP_TOTAL_FIELDS) {
         events.push(GameEvent::XpGain(xp_gain(d)));
+    }
+    // game_state is a base64 blob the client sends constantly: room, level,
+    // magic find, session time
+    if let Some(Value::String(blob)) = field(d, &["game_state", "gameState"]) {
+        if let Some(room) = b64_json(&blob)
+            .as_ref()
+            .and_then(|v| field_ref(v, &["room"]))
+            .and_then(|v| v.as_str())
+        {
+            if !room.is_empty() {
+                events.push(GameEvent::Room(room.to_string()));
+            }
+        }
     }
     if message.contains("mail") || has(d, MAIL_FIELDS) {
         events.push(GameEvent::Mail(mail_is_present(d)));

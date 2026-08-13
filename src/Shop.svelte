@@ -1,14 +1,10 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
 
-  import panelBg from './assets/game/panel.png';
   import chipBg from './assets/game/chip_dark.png';
   import btnBg from './assets/game/button.png';
   import btnHoverBg from './assets/game/button_hover.png';
   import btnDownBg from './assets/game/button_down.png';
-  import closeImg from './assets/game/close.png';
-  import closeHoverImg from './assets/game/close_hover.png';
-  import headerBg from './assets/game/header.png';
 
   let items = $state([]);
   let draft = $state('');
@@ -43,19 +39,9 @@
     } catch {}
   }
 
-  const hide = () => invoke('hide_shop');
 </script>
 
-<div class="panel" style:border-image-source="url({panelBg})" data-tauri-drag-region>
-  <button class="close" onclick={hide} title="Close" aria-label="close">
-    <img src={closeImg} alt="" class="close-normal" />
-    <img src={closeHoverImg} alt="" class="close-hover" />
-  </button>
-
-  <div class="title" style:background-image="url({headerBg})" data-tauri-drag-region>
-    <span>Shopping List</span>
-  </div>
-
+<div class="panel">
   <div class="entry">
     <input
       class="field"
@@ -109,32 +95,14 @@
   .panel {
     position: relative;
     box-sizing: border-box;
-    width: 300px;
-    height: 420px;
-    border: 14px solid transparent;
-    border-image-slice: 14 fill;
-    border-image-width: 14px;
-    border-image-repeat: stretch;
-    image-rendering: pixelated;
-    padding: 6px;
+    width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
     color: #c3af75;
-  }
-
-  .title {
-    height: 29px;
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background-size: 100% 100%;
-    background-repeat: no-repeat;
-    image-rendering: pixelated;
-    font-size: 13px;
   }
 
   .entry {
@@ -162,7 +130,11 @@
 
   .btn {
     box-sizing: border-box;
-    height: 27px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    height: 28px;
     width: 60px;
     flex: none;
     font: inherit;
@@ -239,21 +211,4 @@
     color: #8a7a5a;
     line-height: 16px;
   }
-
-  .close {
-    position: absolute;
-    top: -8px;
-    right: -8px;
-    width: 21px;
-    height: 21px;
-    padding: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    z-index: 1;
-  }
-  .close img { position: absolute; inset: 0; width: 21px; height: 21px; }
-  .close .close-hover { display: none; }
-  .close:hover .close-normal { display: none; }
-  .close:hover .close-hover { display: block; }
 </style>

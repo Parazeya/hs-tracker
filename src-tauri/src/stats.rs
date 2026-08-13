@@ -6,6 +6,9 @@ use serde_json::Value;
 
 use crate::parser::GameEvent;
 
+/// Only the tests care which season is live; the engine reads "seasonal" off
+/// the character's own season number, so a new season needs no code change.
+#[cfg(test)]
 pub const CURRENT_SEASON: i64 = 9;
 
 pub const RARITIES: &[(&str, &str)] = &[
@@ -25,6 +28,10 @@ pub const JOURNAL_RARITIES: &[&str] = &["Satanic", "Set", "Heroic", "Angelic", "
 
 // stack resources by item type
 const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "materials"), (15, "socketables")];
+
+/// Keys that drop by the handful and open nothing worth counting: they would
+/// bury the Angelic and Satanic keys the counter exists for.
+const DULL_KEYS: [&str; 2] = ["basic key", "crystal key"];
 
 /// Drops worth their own counter, matched by resolved item name. The rune
 /// groups follow the game's own grades — S is Qi through Zed, SS is the four
@@ -119,6 +126,7 @@ pub struct GameStats {
     items: HashMap<&'static str, ItemCount>,
     resources: HashMap<&'static str, i64>,
     satanic: Option<SatanicZone>,
+    room: Option<String>,
     sz_changed: Option<Instant>,
     season_mode: Option<&'static str>,
     gold_mode: Option<&'static str>,
@@ -136,6 +144,8 @@ pub struct GameStats {
     alerts: Vec<String>,
     min_tier: i64,
     notable_defs: Vec<(String, Vec<String>)>,
+    /// (sound key, item names) — an item on one of these is announced by it
+    sound_lists: Vec<(String, Vec<String>)>,
     notable: HashMap<String, i64>,
     seen_fingerprints: std::collections::HashSet<String>,
     /// tier by item hash, so the pickup of an item knows what the drop said
@@ -164,6 +174,7 @@ impl Default for GameStats {
             items: RARITIES.iter().map(|(_, name)| (*name, ItemCount::default())).collect(),
             resources: RESOURCES.iter().map(|(_, name)| (*name, 0)).collect(),
             satanic: None,
+            room: None,
             sz_changed: None,
             season_mode: None,
             gold_mode: None,
@@ -178,6 +189,7 @@ impl Default for GameStats {
             alerts: JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
             min_tier: 0,
             notable_defs: default_notable(),
+            sound_lists: Vec::new(),
             notable: HashMap::new(),
             seen_fingerprints: std::collections::HashSet::new(),
             tier_seen: HashMap::new(),
@@ -213,6 +225,7 @@ impl GameStats {
             std::mem::take(&mut self.alerts),
             self.min_tier,
             std::mem::take(&mut self.notable_defs),
+            std::mem::take(&mut self.sound_lists),
         );
         *self = Self::default();
         (
@@ -232,6 +245,7 @@ impl GameStats {
             self.alerts,
             self.min_tier,
             self.notable_defs,
+            self.sound_lists,
         ) = carry;
         self.revision = revision + 1;
     }
@@ -276,6 +290,27 @@ impl GameStats {
         self.revision += 1;
         self.alerts = alerts;
         self.min_tier = min_tier;
+    }
+
+    /// Lists the user built by hand: their sound wins over the rarity alerts,
+    /// and an item on one is announced even when the filter would hide it.
+    pub fn set_sound_lists(&mut self, lists: Vec<(String, Vec<String>)>) {
+        self.revision += 1;
+        self.sound_lists = lists
+            .into_iter()
+            .map(|(key, names)| (key, names.into_iter().map(|n| n.trim().to_lowercase()).collect()))
+            .collect();
+    }
+
+    fn listed_sound(&self, name: &str) -> Option<String> {
+        if name.is_empty() {
+            return None;
+        }
+        let lower = name.to_lowercase();
+        self.sound_lists
+            .iter()
+            .find(|(_, names)| names.contains(&lower))
+            .map(|(key, _)| key.clone())
     }
 
     pub fn set_notable(&mut self, defs: Vec<(String, Vec<String>)>) {
@@ -376,9 +411,14 @@ impl GameStats {
                 // only fills in what the real account packet has not set yet
                 let full = *has_experience;
                 if full || self.season_mode.is_none() {
-                    self.season_mode = Some(if *season == CURRENT_SEASON {
+                    // Any season at all means the seasonal purse. Comparing
+                    // against a season number written into the source meant the
+                    // bank read from the wrong bucket the day a new season
+                    // started, and it read as the non-seasonal one — which is
+                    // exactly what a returning player has least of.
+                    self.season_mode = Some(if *season > 0 {
                         if *hardcore == 1 { "GSH" } else { "GSS" }
-                    } else if *blood_pact != 0 && *season == 0 {
+                    } else if *blood_pact != 0 {
                         "GBP"
                     } else if *hardcore == 1 {
                         "GNH"
@@ -402,6 +442,11 @@ impl GameStats {
                 }
             }
             GameEvent::Mail(has) => self.has_mail = *has,
+            GameEvent::Room(room) => {
+                if self.room.as_deref() != Some(room.as_str()) {
+                    self.room = Some(room.clone());
+                }
+            }
             GameEvent::ItemAdded {
                 rarity,
                 mf,
@@ -472,7 +517,10 @@ impl GameStats {
                         }
                     }
                     if let Some((_, res)) = RESOURCES.iter().find(|(t, _)| t == item_type) {
-                        *self.resources.get_mut(res).unwrap() += n;
+                        let dull = DULL_KEYS.contains(&name.to_lowercase().as_str());
+                        if !dull {
+                            *self.resources.get_mut(res).unwrap() += n;
+                        }
                     }
                     self.count_notable(name, n);
                 }
@@ -480,7 +528,10 @@ impl GameStats {
                 // when it lands in the bag, never both. The drop on the ground
                 // carries no tier — only the pickup does — so a minimum tier
                 // makes the alert wait for the pickup, which can prove it.
-                let wanted = if *announced {
+                // a list the user built outranks every switch below it
+                let listed = self.listed_sound(name);
+                let listed_hit = listed.is_some();
+                let wanted = if *announced || listed.is_some() {
                     true
                 } else if self.prefer_ground {
                     *ground
@@ -488,7 +539,9 @@ impl GameStats {
                     !*ground
                 };
                 if wanted
-                    && (*announced || (!is_resource && self.passes_filter(&rarity_key, tier)))
+                    && (*announced
+                        || listed_hit
+                        || (!is_resource && self.passes_filter(&rarity_key, tier)))
                 {
                     // The server announces a notable find in chat the moment
                     // it drops — the only signal that arrives before the item
@@ -503,8 +556,13 @@ impl GameStats {
                         self.announced_at.insert(lower, Instant::now());
                         self.announced_at.retain(|_, t| t.elapsed() < Duration::from_secs(120));
                     }
-                    let sound = (!echo && self.alerts.contains(&rarity_key))
-                        .then(|| rarity_key.to_lowercase());
+                    let sound = if echo {
+                        None
+                    } else {
+                        listed.or_else(|| {
+                            self.alerts.contains(&rarity_key).then(|| rarity_key.to_lowercase())
+                        })
+                    };
                     let entry = DropEntry {
                         ts_ms: now_ms(),
                         sound,
@@ -638,6 +696,8 @@ impl GameStats {
             },
             save_age_secs: self.last_save.map(|t| t.elapsed().as_secs()),
             bank_age_secs: self.last_bank.map(|t| t.elapsed().as_secs()),
+            carried_bank: self.stale_bank,
+            carried_totals: self.stale_save,
             resources: self.resources.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
             notable: self
                 .notable_defs
@@ -649,6 +709,7 @@ impl GameStats {
                 .collect(),
             items,
             satanic_zone: self.satanic.clone(),
+            room: self.room.clone(),
             character: self.character.clone(),
         }
     }
@@ -728,6 +789,10 @@ pub struct Snapshot {
     /// saves the character or banks gold
     pub save_age_secs: Option<u64>,
     pub bank_age_secs: Option<u64>,
+    /// the totals are still the ones the last run left behind: the game has
+    /// not confirmed them yet this session
+    pub carried_bank: bool,
+    pub carried_totals: bool,
     pub has_mail: bool,
     pub gold: Line,
     pub xp: Line,
@@ -736,6 +801,8 @@ pub struct Snapshot {
     pub notable: Vec<NotableCount>,
     pub items: HashMap<String, ItemStats>,
     pub satanic_zone: Option<SatanicZone>,
+    /// where the character is standing, e.g. "Act_08_02"
+    pub room: Option<String>,
     pub character: Option<CharacterInfo>,
 }
 
@@ -992,6 +1059,34 @@ mod tests {
         let snap = s.snapshot(String::new());
         let group = snap.notable.iter().find(|n| n.label == "S runes").expect("group exists");
         assert_eq!(group.total, 2, "both spellings land in the same group");
+    }
+
+    #[test]
+    fn a_list_outranks_the_rarity_alerts() {
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        // nothing would normally be announced: no rarity is armed at all
+        s.set_filter(vec![], 6);
+        s.set_sound_lists(vec![("list-chase".into(), vec!["AK-47".into()])]);
+        let drop = |name: &str, hash: &str| GameEvent::ItemAdded {
+            rarity: json!(2),
+            mf: false,
+            tier: 0,
+            item_type: 3,
+            item_id: 15,
+            weapon_type: 14,
+            seed: 1,
+            name: name.into(),
+            announced: false,
+            amount: 1,
+            fingerprint: String::new(),
+            hash: hash.into(),
+            ground: true,
+        };
+        let listed = s.apply(&drop("AK-47", "a")).expect("a listed item is always announced");
+        assert_eq!(listed.sound.as_deref(), Some("list-chase"));
+        // and an item that is on no list still obeys the switches
+        assert!(s.apply(&drop("Eternity", "b")).is_none(), "unlisted items follow the filter");
     }
 
     #[test]
@@ -1297,6 +1392,15 @@ mod tests {
     }
 
     #[test]
+    fn the_key_counter_ignores_the_ones_that_rain_down() {
+        let mut s = GameStats::default();
+        s.apply(&notable_item("Basic Key", 12, 3));
+        s.apply(&notable_item("Crystal Key", 12, 2));
+        s.apply(&notable_item("Angelic Key", 12, 1));
+        assert_eq!(s.snapshot(String::new()).resources["keys"], 1);
+    }
+
+    #[test]
     fn season_mode_selection() {
         let mode = |season, hardcore, blood_pact| {
             let mut s = GameStats::default();
@@ -1306,8 +1410,11 @@ mod tests {
         assert_eq!(mode(CURRENT_SEASON, 0, 0), "GSS");
         assert_eq!(mode(CURRENT_SEASON, 1, 0), "GSH");
         assert_eq!(mode(0, 0, 1), "GBP");
-        assert_eq!(mode(3, 1, 0), "GNH");
-        assert_eq!(mode(3, 0, 0), "GNS");
+        assert_eq!(mode(0, 1, 0), "GNH");
+        assert_eq!(mode(0, 0, 0), "GNS");
+        // a season the tracker has never heard of is still a season: the purse
+        // is the seasonal one, not the non-seasonal leftovers
+        assert_eq!(mode(CURRENT_SEASON + 3, 0, 0), "GSS");
     }
 
     #[test]
