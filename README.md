@@ -72,8 +72,12 @@ sounds included, as one file.
 
 ## Install
 
-Grab the installer from the [Releases](../../releases) page and run it. It
-installs for the current user, so Windows never asks for administrator rights.
+Grab the package for your system from the [Releases](../../releases) page.
+
+### Windows
+
+Run the installer. It installs for the current user, so Windows never asks for
+administrator rights.
 
 ![The installer](screenshots/installer.png)
 
@@ -86,6 +90,28 @@ inside another installer.
 Everything the app writes (settings, carried totals, shopping list, custom
 sounds) lives next to the executable, so the whole folder can be copied to
 another machine. Windows 10 or 11 is required.
+
+### Linux
+
+The `.deb` is the easy one on Debian, Ubuntu and their relatives: it pulls in
+libpcap and the tray library, and grants the binary the capture right on
+install, so it works straight away.
+
+```bash
+sudo apt install ./hs-tracker_0.9.5_amd64.deb
+```
+
+The AppImage runs anywhere but cannot grant itself that right, so give it once:
+
+```bash
+chmod +x HS\ Tracker_0.9.5_amd64.AppImage
+sudo setcap cap_net_raw,cap_net_admin=eip HS\ Tracker_0.9.5_amd64.AppImage
+```
+
+Settings and the rest live in `~/.config/hs-tracker`. Log in to an **X11**
+session: the overlay needs click-through windows, window positioning and global
+hotkeys, none of which Wayland gives an application — see the note under
+[Building → Linux](#linux-1).
 
 ## Usage
 
@@ -149,12 +175,10 @@ reports the problem instead of crashing when Npcap is absent.
 
 ### Linux
 
-The code builds and the test suite passes on Linux — the release workflow has a
-job that proves it every time the workflow runs — but **no Linux packages are
-published**, for a reason outside this project: Hero Siege's anti-cheat refuses online
-play on Linux, under Proton and in the native build alike. A tracker for a game
-that cannot connect would have nothing to show. The port is kept compiling so
-that the day the game comes back, the release is a switch rather than a rewrite.
+Releases carry a `.deb` and an AppImage beside the Windows installer, and the
+workflow builds and tests both every time it runs. The Linux build is younger
+than the Windows one — it is the same code, but far fewer hours of play behind
+it, so bug reports are welcome. Building it yourself:
 
 ```bash
 sudo apt install build-essential curl wget file patchelf \

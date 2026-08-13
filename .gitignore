@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# the release body CI cuts out of CHANGELOG.md
+RELEASE_NOTES.md
 src-tauri/target/
 src-tauri/gen/schemas/
 *.log
