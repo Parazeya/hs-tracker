@@ -21,7 +21,6 @@
   let drag = $derived(cfg?.locked ? null : '');
   const urls = {};
   const lastPlayed = {};
-  let prevMail = false;
 
   async function initSounds() {
     cfg = await invoke('get_settings').catch(() => null);
@@ -58,8 +57,6 @@
   function received(s) {
     snap = s;
     clock = { secs: s.session_secs, at: Date.now() };
-    if (s.has_mail && !prevMail) playSound('mail');
-    prevMail = s.has_mail;
   }
 
   $effect(() => {
@@ -67,6 +64,10 @@
     invoke('snapshot').then(received).catch(() => {});
     const unsubs = [
       listen('stats', (e) => received(e.payload)),
+      // this window is the one that plays sounds, hidden or not — the backend
+      // says when mail arrives rather than leaving it to be spotted in a
+      // snapshot that only travels to windows on screen
+      listen('mail', () => playSound('mail')),
       listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
       listen('settings-changed', (e) => (cfg = e.payload)),
       listen('sounds-changed', async (e) => (urls[e.payload] = await soundUrl(e.payload))),

@@ -273,6 +273,12 @@ impl GameStats {
         }
     }
 
+    /// Cheap enough to poll: the mail chime must fire even while every window
+    /// that shows the counters is hidden.
+    pub fn has_mail(&self) -> bool {
+        self.has_mail
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }

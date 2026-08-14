@@ -229,19 +229,19 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         let running = !pids.is_empty();
         if running != game_running {
             game_running = running;
-            let auto = crate::read_settings().auto_show;
+            // nothing to show or hide where the session hosts no overlay
+            let auto = crate::read_settings().auto_show && crate::overlay_supported();
+            // through the same pair as everywhere else, so the overlay comes
+            // back where the player left it rather than where the window
+            // manager fancies
             if running {
                 if auto {
-                    if let Some(w) = tauri::Manager::get_webview_window(&app, "main") {
-                        let _ = w.show();
-                    }
+                    crate::show_overlay(&app);
                 }
             } else {
                 stats.lock().unwrap().reset();
                 if auto {
-                    if let Some(w) = tauri::Manager::get_webview_window(&app, "main") {
-                        let _ = w.hide();
-                    }
+                    crate::hide_overlay(&app);
                 }
             }
         }

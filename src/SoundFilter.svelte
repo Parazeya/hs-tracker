@@ -643,16 +643,41 @@
     white-space: nowrap;
   }
 
+  /* WebView2 leaves a select alone; WebKitGTK draws it as a native widget with
+     a pale background and a blue focus ring, which is a hole in the panel. The
+     appearance is taken over completely, arrow included. */
   .picker {
     flex: 1 1 auto;
     min-width: 0;
+    box-sizing: border-box;
+    appearance: none;
+    -webkit-appearance: none;
     font: inherit;
     font-size: 11px;
     color: #f0e0b0;
-    background: rgba(0, 0, 0, 0.35);
+    background-color: rgba(0, 0, 0, 0.35);
+    background-image: linear-gradient(45deg, transparent 50%, #c3af75 50%),
+      linear-gradient(135deg, #c3af75 50%, transparent 50%);
+    background-position: calc(100% - 12px) 50%, calc(100% - 7px) 50%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
     border: 1px solid #3a2b2b;
-    padding: 3px 4px;
+    border-radius: 0;
+    padding: 3px 22px 3px 6px;
+    height: 24px;
     cursor: pointer;
+  }
+  .picker:hover { border-color: #7a4a4a; }
+  .picker:focus,
+  .picker:focus-visible {
+    outline: none;
+    border-color: #7a4a4a;
+  }
+  /* the popup list is the toolkit's own window; these are the only two
+     properties it honours */
+  .picker option {
+    background: #241a1c;
+    color: #e0cc90;
   }
 
   .tabs {
@@ -713,7 +738,31 @@
   }
 
   .file { flex: 1 1 auto; min-width: 0; color: #7b6a63; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .vol { flex: none; width: 74px; accent-color: #c3af75; }
+  /* drawn by us, like the sliders on the other panels: an engine left to its
+     own devices renders a different control on every platform */
+  .vol {
+    flex: none;
+    width: 74px;
+    height: 14px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: none;
+    cursor: pointer;
+  }
+  .vol::-webkit-slider-runnable-track {
+    height: 4px;
+    background: #241a1c;
+    border: 1px solid #3d2a2c;
+  }
+  .vol::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    margin-top: -5px;
+    background: #c3af75;
+    border: 1px solid #241a1c;
+  }
+  .vol:hover::-webkit-slider-thumb { background: #f0e0b0; }
 
   .field {
     flex: none;

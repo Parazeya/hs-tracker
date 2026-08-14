@@ -21,3 +21,6 @@ tools/__pycache__/
 
 # local notes, not part of the published project
 docs/
+
+# locally built Linux packages for testing
+linux-packages/

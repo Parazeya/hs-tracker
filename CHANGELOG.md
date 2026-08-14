@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.9.6 — 2026-08-14
+
+Linux, tested on a real desktop rather than a build log.
+
+### Linux
+
+- **The overlay works on Wayland after all.** A Wayland application may not
+  float above another program's fullscreen window, so the app starts there as
+  the dashboard alone — but Settings now offers **Enable the overlay — restart
+  through XWayland**, which relaunches the app on the X11 backend where the
+  whole thing works, hotkeys included. Hero Siege runs through XWayland too when
+  it runs through Proton, so the two meet in one X server. The choice is
+  remembered: every later start comes up the same way, and a second button
+  switches back to native Wayland.
+- Where the overlay cannot exist, the settings that only steer it — opacity,
+  scale, show-with-game, the drop ticker, the overlay sections — are hidden
+  instead of sitting there doing nothing, and the tray greys out the two
+  overlay entries.
+- The `.rpm` is built on Fedora now, in a container of its own. Built on Ubuntu
+  it asked for `libpcap.so.0.8`, a name Fedora does not use, and the app died on
+  startup with a missing library.
+- Sound alerts and the mail reminder keep working in dashboard-only mode.
+- Closing a window from the desktop's own title bar hides it to the tray instead
+  of destroying it — on Wayland the dashboard is the only face there is, and a
+  destroyed one could not be brought back.
+
+### Fixed
+
+- The overlay came back centred instead of where you left it. Hiding a window
+  unmaps it, and a window manager is free to place it afresh; the position is
+  now remembered across hide and show, and only ever restored onto a screen that
+  is still there. Windows never had the problem.
+- The overlay appearing with the game no longer takes the keyboard away from it.
+- Dropdowns were drawn as a pale native widget with a blue focus ring on Linux.
+  They are ours now, arrow and all.
+- Sliders looked different on every platform — the rail and the handle are drawn
+  by us instead of leaning on `accent-color`.
+
 ## 0.9.5 — 2026-08-13
 
 Everything since the first release, in one entry: the three floating windows
@@ -98,16 +136,21 @@ turned into a session overview, and the app now builds on Linux as well.
 ### Linux
 
 - **The app runs on Linux.** It builds there, its tests pass there, and the
-  release now carries a `.deb` and an AppImage beside the Windows installer.
-  This is the first Linux build — it has not seen as much play as the Windows
-  one, so oddities are worth reporting.
-- Capture needs `cap_net_raw`: the `.deb` grants it on install, an AppImage
-  needs one `setcap` line by hand.
+  release now carries a `.deb`, an `.rpm` and an AppImage beside the Windows
+  installer. This is the first Linux build — it has not seen as much play as
+  the Windows one, so oddities are worth reporting.
+- Capture needs `cap_net_raw`: the `.deb` and the `.rpm` grant it during
+  installation, an AppImage needs one `setcap` line by hand.
 - Settings, carried totals and custom sounds live in `$XDG_CONFIG_HOME/hs-tracker`
   there, and autostart is a `.desktop` entry. On Windows nothing moves — the
   folder beside the executable stays portable.
-- The overlay needs X11. Under Wayland the dashboard works, but click-through,
-  window positioning and global hotkeys are not available to an application.
+- **Wayland runs the dashboard alone.** The overlay wants click-through
+  windows, window positioning and global hotkeys, and a Wayland application
+  gets none of them — so on such a session the app does not create the overlay
+  or the drop ticker at all, skips the hotkeys, and hides the settings that
+  only steer them, instead of offering things that quietly do nothing.
+  Tracking, alerts and every panel are unchanged. An X11 session still gets the
+  overlay; so does forcing `GDK_BACKEND=x11`.
 
 ### Removed
 

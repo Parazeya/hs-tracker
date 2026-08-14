@@ -46,6 +46,14 @@
     invoke('viewing', { section }).catch(() => {});
   });
 
+  // a Wayland session cannot host the overlay, so the way into it is not shown
+  let overlay = $state(true);
+  $effect(() => {
+    invoke('session_info')
+      .then((s) => (overlay = s.overlay))
+      .catch(() => {});
+  });
+
   let Current = $derived((SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]).component);
 </script>
 
@@ -83,13 +91,15 @@
 
       <div class="spacer"></div>
 
-      <button
-        class="btn"
-        onclick={() => invoke('compact_mode')}
-        title="Shrink to the overlay that sits on top of the game"
-      >
-        Compact mode
-      </button>
+      {#if overlay}
+        <button
+          class="btn"
+          onclick={() => invoke('compact_mode')}
+          title="Shrink to the overlay that sits on top of the game"
+        >
+          Compact mode
+        </button>
+      {/if}
     </nav>
 
     <div class="pane" style:border-image-source="url({chipBg})">

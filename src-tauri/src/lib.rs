@@ -137,6 +137,10 @@ pub struct Settings {
     pub sound_on_ground: bool,
     /// which face was up last: the overlay (true) or the dashboard
     pub compact: bool,
+    /// Linux only: enter a Wayland session through XWayland, which is what
+    /// gives the overlay a display server that lets it float and be clicked
+    /// through. Chosen in Settings, applied at the next start.
+    pub x11_backend: bool,
     pub hidden: Vec<String>,
 }
 
@@ -168,12 +172,142 @@ impl Default for Settings {
             debug_log: false,
             sound_on_ground: true,
             compact: false,
+            x11_backend: false,
             hidden: Vec::new(),
         }
     }
 }
 
 static DEBUG_LOG: AtomicBool = AtomicBool::new(false);
+
+/// Whether this session can host the overlay at all.
+///
+/// The overlay is a click-through, always-on-top window that follows the mouse
+/// and answers global hotkeys. Wayland gives an application none of those on
+/// purpose: it may not place itself, may not float above another program's
+/// fullscreen window, and may not read the pointer outside itself. Rather than
+/// draw an overlay that lies where the compositor pleases and cannot be
+/// unlocked, the app runs as the dashboard alone there.
+///
+/// Windows and X11 are unaffected. Forcing the GTK backend to X11 (which runs
+/// the app through XWayland) also brings the overlay back, and is honoured here.
+#[cfg(windows)]
+pub(crate) fn overlay_supported() -> bool {
+    true
+}
+
+/// GDK_BACKEND is a priority list, not a single choice: "wayland,x11" still
+/// lands on Wayland. Only the first entry says what the toolkit will use.
+#[cfg(not(windows))]
+fn forced_x11() -> bool {
+    std::env::var("GDK_BACKEND")
+        .is_ok_and(|v| v.to_lowercase().split(',').next().is_some_and(|first| first.trim() == "x11"))
+}
+
+#[cfg(not(windows))]
+fn wayland_session() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v.eq_ignore_ascii_case("wayland"))
+}
+
+/// XWayland's socket, which is what the X11 backend actually needs.
+#[cfg(not(windows))]
+fn x11_reachable() -> bool {
+    std::env::var_os("DISPLAY").is_some()
+}
+
+#[cfg(not(windows))]
+pub(crate) fn overlay_supported() -> bool {
+    forced_x11() || !wayland_session()
+}
+
+/// What the windows need to know about the session they are drawn in.
+#[derive(Serialize)]
+pub struct SessionInfo {
+    /// the overlay can exist here
+    overlay: bool,
+    /// a Wayland session, whichever backend the toolkit ended up using
+    wayland: bool,
+    /// a Wayland session the app was told to enter through XWayland
+    through_x11: bool,
+    /// XWayland is there to switch to
+    can_switch: bool,
+}
+
+#[tauri::command]
+fn session_info() -> SessionInfo {
+    #[cfg(windows)]
+    {
+        SessionInfo { overlay: true, wayland: false, through_x11: false, can_switch: false }
+    }
+    #[cfg(not(windows))]
+    {
+        let wayland = wayland_session();
+        SessionInfo {
+            overlay: overlay_supported(),
+            wayland,
+            through_x11: forced_x11(),
+            can_switch: wayland && x11_reachable(),
+        }
+    }
+}
+
+/// Restart into the other display backend.
+///
+/// A Wayland session gives an application no overlay, but XWayland does — and
+/// the game itself runs through XWayland when it runs through Proton, so the
+/// two end up in the same X server where one can sit above the other. Rather
+/// than teach the user about `GDK_BACKEND`, the app relaunches itself.
+#[tauri::command]
+fn restart_backend(app: AppHandle, x11: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = (app, x11);
+        Err("Windows has one backend".into())
+    }
+    #[cfg(not(windows))]
+    {
+        if x11 && !x11_reachable() {
+            return Err("no X server to switch to — this session has no XWayland".into());
+        }
+        // Spawn first: the choice is only worth remembering once a replacement
+        // is actually on its way. Written before, a launch that fails leaves an
+        // app that relaunches into the same failure at every start, with no
+        // window left to undo it in.
+        relaunch(x11)?;
+        let mut settings = read_settings();
+        settings.x11_backend = x11;
+        save_settings(app.clone(), settings)?;
+        app.exit(0);
+        Ok(())
+    }
+}
+
+/// Start a fresh copy of ourselves on the chosen backend.
+#[cfg(not(windows))]
+fn relaunch(x11: bool) -> Result<(), String> {
+    // inside an AppImage the mounted binary is not what the user keeps
+    let exe = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())
+        .ok_or_else(|| "cannot find my own binary".to_string())?;
+    let mut cmd = std::process::Command::new(exe);
+    if x11 {
+        cmd.env("GDK_BACKEND", "x11");
+    } else {
+        cmd.env_remove("GDK_BACKEND");
+    }
+    // a marker so the replacement never tries to relaunch itself again
+    cmd.env("HS_TRACKER_RELAUNCHED", "1");
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    // spawn only reports that fork and exec worked; a toolkit that cannot open
+    // its display dies a moment later, and that must not be mistaken for success
+    std::thread::sleep(Duration::from_millis(700));
+    match child.try_wait() {
+        Ok(Some(status)) => Err(format!("the restarted app exited immediately ({status})")),
+        _ => Ok(()),
+    }
+}
 
 /// Append every parsed message to debug-capture.jsonl so a real session can be
 /// replayed against the parser when counters look wrong.
@@ -318,14 +452,24 @@ fn save_carried(app: &AppHandle) {
 const REMEMBERED_WINDOWS: [&str; 2] = ["main", "dashboard"];
 
 /// Where each window was, and how big — the dashboard can be resized, so its
-/// size is worth remembering too.
+/// size is worth remembering too. Only windows that are actually on screen have
+/// geometry worth writing down: a hidden one reports (0, 0) on GTK and a
+/// minimised one reports the parking lot Windows keeps them in.
 fn window_positions(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for label in REMEMBERED_WINDOWS {
-        if let Some(w) = app.get_webview_window(label) {
-            if let (Ok(pos), Ok(size)) = (w.outer_position(), w.outer_size()) {
-                map.insert(label.into(), serde_json::json!([pos.x, pos.y, size.width, size.height]));
+        let Some(w) = app.get_webview_window(label) else { continue };
+        if !on_screen(&w) {
+            // keep whatever the last run knew rather than overwrite it with junk
+            if let Some(pos) = parked(label) {
+                if let Ok(size) = w.outer_size() {
+                    map.insert(label.into(), serde_json::json!([pos.x, pos.y, size.width, size.height]));
+                }
             }
+            continue;
+        }
+        if let (Ok(pos), Ok(size)) = (w.outer_position(), w.outer_size()) {
+            map.insert(label.into(), serde_json::json!([pos.x, pos.y, size.width, size.height]));
         }
     }
     map
@@ -387,6 +531,9 @@ fn restore_window_positions(app: &AppHandle) {
             continue;
         }
         let Some(w) = app.get_webview_window(label) else { continue };
+        // seed the in-memory copy too: a window that starts hidden has no
+        // geometry of its own to save later, and this is where it comes from
+        park(label, tauri::PhysicalPosition::new(x as i32, y as i32));
         let _ = w.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
         // older files hold just a position; a size only comes back if it fits
         if let (Some(width), Some(height)) = (
@@ -419,6 +566,9 @@ fn spawn_ticker_glue(app: AppHandle) {
                 if shown {
                     let _ = ticker.hide();
                     shown = false;
+                    // hiding unmaps it, and a window manager may place it
+                    // afresh: the next show has to position it again
+                    placed = None;
                 }
                 continue;
             }
@@ -477,8 +627,18 @@ fn spawn_stats_pusher(app: AppHandle) {
         let mut snap_at = Instant::now() - SNAP_HEARTBEAT;
         let mut extra_at = Instant::now() - EXTRA_HEARTBEAT;
         let (mut had_main, mut had_dash) = (false, false);
+        let mut had_mail = false;
         loop {
             std::thread::sleep(Duration::from_millis(200));
+            // The mail chime is announced on its own, before anything about
+            // visibility is decided: the counters may be behind a hidden window
+            // all run, and the reminder is the point of them.
+            let mail = app.state::<Shared>().stats.lock().unwrap().has_mail();
+            if mail && !had_mail {
+                let _ = app.emit("mail", ());
+            }
+            had_mail = mail;
+
             let (main, dashboard) = (visible("main"), visible("dashboard"));
             // a window that just appeared gets the current numbers at once
             if main && !had_main {
@@ -764,22 +924,89 @@ fn reset_stats(app: AppHandle) {
 
 #[tauri::command]
 fn hide_window(app: AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
+    hide_aux(&app, "main");
+}
+
+/// Where each window stood when it was last hidden. Hiding a window unmaps it,
+/// and a window manager is free to place it afresh when it comes back — KWin
+/// centres it, which drags the overlay out from the corner the player put it
+/// in. Windows keeps the position by itself; restoring it there costs nothing.
+static PARKED: std::sync::Mutex<Vec<(String, tauri::PhysicalPosition<i32>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn park(label: &str, pos: tauri::PhysicalPosition<i32>) {
+    let Ok(mut parked) = PARKED.lock() else { return };
+    match parked.iter_mut().find(|(l, _)| l == label) {
+        Some(slot) => slot.1 = pos,
+        None => parked.push((label.to_string(), pos)),
     }
 }
 
+fn parked(label: &str) -> Option<tauri::PhysicalPosition<i32>> {
+    let parked = PARKED.lock().ok()?;
+    parked.iter().find(|(l, _)| l == label).map(|(_, p)| *p)
+}
+
 fn show_aux(app: &AppHandle, label: &str) {
-    if let Some(w) = app.get_webview_window(label) {
-        let _ = w.show();
+    reveal(app, label, true);
+}
+
+/// A window comes back where it was, and only takes the keyboard when the user
+/// asked for it: the overlay following the game must not pull focus out of the
+/// game it is following.
+fn reveal(app: &AppHandle, label: &str, focus: bool) {
+    let Some(w) = app.get_webview_window(label) else { return };
+    let _ = w.show();
+    // after the show: a position set on an unmapped window is advice the window
+    // manager may ignore. Only somewhere a screen still reaches.
+    if let Some(pos) = parked(label) {
+        if on_a_monitor(app, pos) {
+            let _ = w.set_position(pos);
+        }
+    }
+    if focus {
         let _ = w.set_focus();
     }
 }
 
+fn on_a_monitor(app: &AppHandle, pos: tauri::PhysicalPosition<i32>) -> bool {
+    let monitors = app.available_monitors().unwrap_or_default();
+    monitors.is_empty()
+        || monitors.iter().any(|m| {
+            let (p, s) = (m.position(), m.size());
+            pos.x >= p.x - 50
+                && pos.x < p.x + s.width as i32
+                && pos.y >= p.y - 50
+                && pos.y < p.y + s.height as i32
+        })
+}
+
 fn hide_aux(app: &AppHandle, label: &str) {
     if let Some(w) = app.get_webview_window(label) {
+        // a window that is not on screen has no position worth keeping: an
+        // unmapped one reports (0, 0), a minimised one reports the far corner
+        if on_screen(&w) {
+            if let Ok(pos) = w.outer_position() {
+                park(label, pos);
+            }
+        }
         let _ = w.hide();
     }
+}
+
+/// Visible and not minimised — the only state whose geometry means anything.
+fn on_screen(w: &tauri::WebviewWindow) -> bool {
+    w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false)
+}
+
+/// The sniffer follows the game with these two. Showing the overlay must leave
+/// the keyboard with the game.
+pub(crate) fn show_overlay(app: &AppHandle) {
+    reveal(app, "main", false);
+}
+
+pub(crate) fn hide_overlay(app: &AppHandle) {
+    hide_aux(app, "main");
 }
 
 #[tauri::command]
@@ -790,12 +1017,20 @@ fn hide_dashboard(app: AppHandle) {
 /// The two faces of the app: the dashboard to set things up and read the run,
 /// the overlay to keep an eye on it while playing. Which one was up is
 /// remembered, so the tray and the next launch bring back the same one.
+///
+/// Where the overlay cannot work there is only one face, and asking for the
+/// other one brings the dashboard back instead of hiding everything.
 fn set_face(app: &AppHandle, compact: bool) {
-    let (show, hide) = if compact { ("main", "dashboard") } else { ("dashboard", "main") };
+    let possible = overlay_supported();
+    let shown = compact && possible;
+    let (show, hide) = if shown { ("main", "dashboard") } else { ("dashboard", "main") };
     hide_aux(app, hide);
     show_aux(app, show);
+    // What the user asked for is what is remembered. A session that cannot host
+    // the overlay must not rewrite the preference of one that can — the same
+    // settings file travels with a portable install and outlives a login.
     let mut settings = read_settings();
-    if settings.compact != compact {
+    if (possible || !compact) && settings.compact != compact {
         settings.compact = compact;
         let _ = save_settings(app.clone(), settings);
     }
@@ -1091,7 +1326,8 @@ fn toggle_window(app: &AppHandle) {
         hide_aux(app, "main");
         hide_aux(app, "dashboard");
     } else {
-        show_aux(app, if read_settings().compact { "main" } else { "dashboard" });
+        let compact = read_settings().compact && overlay_supported();
+        show_aux(app, if compact { "main" } else { "dashboard" });
     }
 }
 
@@ -1102,9 +1338,11 @@ fn toggle_lock(app: &AppHandle) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    // the two overlay entries are greyed out where the session cannot host one
+    let overlay = overlay_supported();
     let dashboard = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
-    let compact = MenuItem::with_id(app, "compact", "Compact overlay", true, None::<&str>)?;
-    let lock = MenuItem::with_id(app, "lock", "Lock / Unlock overlay", true, None::<&str>)?;
+    let compact = MenuItem::with_id(app, "compact", "Compact overlay", overlay, None::<&str>)?;
+    let lock = MenuItem::with_id(app, "lock", "Lock / Unlock overlay", overlay, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", "Reset stats", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&dashboard, &compact, &lock, &reset, &quit])?;
@@ -1130,7 +1368,56 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Act on the backend chosen in Settings before a single window exists: the
+/// toolkit picks its display server once, at startup, and cannot be talked out
+/// of it afterwards.
+#[cfg(not(windows))]
+fn honour_backend_choice() {
+    if std::env::var_os("HS_TRACKER_RELAUNCHED").is_some() {
+        return; // this process is already the replacement
+    }
+    if !wayland_session() || forced_x11() || !read_settings().x11_backend {
+        return;
+    }
+    // A run that never got as far as its windows leaves this behind. Finding it
+    // means the last attempt to come up through XWayland died, so the choice is
+    // dropped rather than repeated forever — one bad start, not a dead app.
+    let breadcrumb = data_dir().join("x11-attempt");
+    if breadcrumb.exists() {
+        let _ = std::fs::remove_file(&breadcrumb);
+        let mut settings = read_settings();
+        settings.x11_backend = false;
+        if let Ok(json) = serde_json::to_string_pretty(&settings) {
+            let _ = std::fs::write(settings_path(), json);
+        }
+        eprintln!("the last start through XWayland failed; coming up on Wayland instead");
+        return;
+    }
+    if !x11_reachable() {
+        return; // no XWayland here at all
+    }
+    let _ = std::fs::write(&breadcrumb, "");
+    let started = std::process::Command::new(
+        std::env::var_os("APPIMAGE")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_exe().ok())
+            .unwrap_or_default(),
+    )
+    .env("GDK_BACKEND", "x11")
+    .env("HS_TRACKER_RELAUNCHED", "1")
+    .spawn()
+    .is_ok();
+    if started {
+        std::process::exit(0);
+    }
+    let _ = std::fs::remove_file(&breadcrumb);
+}
+
+#[cfg(windows)]
+fn honour_backend_choice() {}
+
 pub fn run() {
+    honour_backend_choice();
     sniffer::prepare_capture();
     let hk_toggle: Shortcut = HK_TOGGLE.parse().unwrap();
     let hk_lock: Shortcut = HK_LOCK.parse().unwrap();
@@ -1162,6 +1449,8 @@ pub fn run() {
             hide_dashboard,
             compact_mode,
             full_mode,
+            session_info,
+            restart_backend,
             viewing,
             export_filter,
             import_filter,
@@ -1179,18 +1468,26 @@ pub fn run() {
             clear_sound
         ])
         .setup(|app| {
+            let overlay = overlay_supported();
             build_tray(app.handle())?;
-            for hk in [HK_TOGGLE, HK_LOCK, HK_RESET] {
-                if let Err(e) = app.global_shortcut().register(hk) {
-                    eprintln!("hotkey {hk} not registered: {e}");
+            // hotkeys are the overlay's remote control, and the backend they
+            // need is X11's; registering them under Wayland reports success and
+            // then nothing ever fires
+            if overlay {
+                for hk in [HK_TOGGLE, HK_LOCK, HK_RESET] {
+                    if let Err(e) = app.global_shortcut().register(hk) {
+                        eprintln!("hotkey {hk} not registered: {e}");
+                    }
                 }
+            } else {
+                eprintln!("wayland session: running as the dashboard, without the overlay");
             }
             let settings = read_settings();
             app.state::<Shared>().stats.lock().unwrap().restore(&read_carried());
             apply_stats_settings(app.handle(), &settings);
             apply_settings_effects(app.handle(), &settings);
             restore_window_positions(app.handle());
-            if settings.compact {
+            if settings.compact && overlay {
                 hide_aux(app.handle(), "dashboard");
                 show_aux(app.handle(), "main");
             }
@@ -1207,12 +1504,29 @@ pub fn run() {
             if let Some(w) = app.get_webview_window("main") {
                 w.open_devtools();
             }
-            spawn_lock_poller(app.handle().clone());
-            spawn_ticker_glue(app.handle().clone());
+            // both of these only ever move or mask the overlay and the ticker
+            if overlay {
+                spawn_lock_poller(app.handle().clone());
+                spawn_ticker_glue(app.handle().clone());
+            }
             spawn_position_saver(app.handle().clone());
             spawn_stats_pusher(app.handle().clone());
             sniffer::spawn(app.state::<Shared>().inner(), app.handle().clone());
+            // the windows are up: whatever backend this is, it worked
+            #[cfg(not(windows))]
+            let _ = std::fs::remove_file(data_dir().join("x11-attempt"));
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // The close button on a frame the window manager draws would destroy
+            // the window, and a destroyed dashboard cannot be brought back from
+            // the tray — on a Wayland session it is the only face there is.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app = window.app_handle().clone();
+                let label = window.label().to_string();
+                hide_aux(&app, &label);
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -93,25 +93,41 @@ another machine. Windows 10 or 11 is required.
 
 ### Linux
 
-The `.deb` is the easy one on Debian, Ubuntu and their relatives: it pulls in
-libpcap and the tray library, and grants the binary the capture right on
-install, so it works straight away.
+A packaged install is the easy one: it pulls in libpcap and the tray library and
+grants the binary the capture right during installation, so the app works
+straight away.
 
 ```bash
-sudo apt install ./hs-tracker_0.9.5_amd64.deb
+sudo apt install ./HS\ Tracker_*_amd64.deb      # Debian, Ubuntu, Mint …
+sudo dnf install ./HS\ Tracker-*.x86_64.rpm     # Fedora
 ```
 
-The AppImage runs anywhere but cannot grant itself that right, so give it once:
+The AppImage runs anywhere, but capture rights cannot be attached to it: Linux
+recomputes them at every `execve`, and an AppImage execs its own runtime before
+it reaches the real binary. So either start it with `sudo`, or unpack it once
+and mark the binary inside:
 
 ```bash
-chmod +x HS\ Tracker_0.9.5_amd64.AppImage
-sudo setcap cap_net_raw,cap_net_admin=eip HS\ Tracker_0.9.5_amd64.AppImage
+chmod +x HS\ Tracker_*_amd64.AppImage
+./HS\ Tracker_*_amd64.AppImage --appimage-extract        # gives ./squashfs-root
+sudo setcap cap_net_raw,cap_net_admin=eip squashfs-root/usr/bin/hs-tracker
+./squashfs-root/AppRun
 ```
 
-Settings and the rest live in `~/.config/hs-tracker`. Log in to an **X11**
-session: the overlay needs click-through windows, window positioning and global
-hotkeys, none of which Wayland gives an application — see the note under
-[Building → Linux](#linux-1).
+Settings and the rest live in `~/.config/hs-tracker`.
+
+**Wayland or X11?** On X11 you get everything the Windows build has. On Wayland
+the app starts as the dashboard alone — no overlay, no drop ticker, no global
+hotkeys — because a Wayland application may not place a window above another
+program's fullscreen game, read the pointer outside itself or claim global
+shortcuts. Tracking, alerts and every panel work the same.
+
+The overlay is one button away even there. Settings offers **Enable the overlay
+— restart through XWayland**: the app relaunches itself on the X11 backend,
+where all of it works, and remembers the choice for every later start. The game
+does the same when it runs through Proton, so the two meet in one X server and
+one can sit above the other. A second button switches back to native Wayland,
+which is sharper and scales better but has no overlay.
 
 ## Usage
 
@@ -175,22 +191,28 @@ reports the problem instead of crashing when Npcap is absent.
 
 ### Linux
 
-Releases carry a `.deb` and an AppImage beside the Windows installer, and the
-workflow builds and tests both every time it runs. The Linux build is younger
-than the Windows one — it is the same code, but far fewer hours of play behind
-it, so bug reports are welcome. Building it yourself:
+Releases carry a `.deb`, an `.rpm` and an AppImage beside the Windows installer,
+and the workflow builds and tests all three every time it runs. The Linux build
+is younger than the Windows one — the same code, but far fewer hours of play
+behind it, so bug reports are welcome. Building it yourself:
 
 ```bash
-sudo apt install build-essential curl wget file patchelf \
+sudo apt install build-essential curl wget file patchelf zsync \
+                 desktop-file-utils libfuse2 \
                  libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-                 librsvg2-dev libpcap-dev
+                 librsvg2-dev libpcap-dev \
+                 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav
 npm ci && npm run build
-npx tauri build --bundles deb,appimage
+npx tauri build --bundles deb,rpm,appimage
 ```
 
-Capture needs `cap_net_raw`. The `.deb` grants it on install
-([installer/deb-postinst.sh](src-tauri/installer/deb-postinst.sh)); an AppImage
-cannot, so there it is one manual line:
+The last three lines of packages are for the AppImage only: its tooling needs
+FUSE 2 and patchelf, and it copies the GStreamer plugins the webview uses to
+play the alert sounds into the bundle. A `.deb` or `.rpm` needs none of that.
+
+Capture needs `cap_net_raw`. The packages grant it during installation
+([installer/grant-capture-rights.sh](src-tauri/installer/grant-capture-rights.sh));
+an AppImage cannot, so there it is one manual line:
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin=eip ./HS-Tracker.AppImage
@@ -201,12 +223,22 @@ live in `$XDG_CONFIG_HOME/hs-tracker` instead of beside the executable, since
 `/usr/bin` and a mounted AppImage are read-only. Autostart is a `.desktop` file
 in `~/.config/autostart` instead of a registry value.
 
-What the desktop has to provide: **X11**. The overlay leans on click-through
-windows, programmatic positioning, the cursor position and global hotkeys, none
-of which Wayland hands to an application. Under Wayland the dashboard still
-works, but the overlay becomes an ordinary window; if it is locked there, the
-tray menu is the way back out. The tray itself is an AppIndicator, which only
-opens its menu — the left-click toggle is Windows-only.
+The overlay is the one part with a display-server requirement: it leans on
+click-through windows, programmatic positioning, the cursor position and global
+hotkeys, none of which Wayland hands to an application. So the app checks the
+session at startup (`WAYLAND_DISPLAY` / `XDG_SESSION_TYPE`, with `GDK_BACKEND=x11`
+taken as X11 through XWayland) and, on Wayland, never shows the overlay or the
+ticker, skips the hotkeys and hides their settings. The windows themselves are
+still created — the hidden overlay is what plays the alert sounds.
+
+Settings can switch backends: the button writes `x11_backend` to `settings.json`
+and relaunches the process with `GDK_BACKEND=x11`. The choice is honoured before
+any window exists — a toolkit picks its display server once and cannot be talked
+out of it later — and the child carries `HS_TRACKER_RELAUNCHED` so it never
+relaunches itself in turn.
+
+The tray is an AppIndicator either way, and it only opens its menu — the
+left-click toggle is Windows-only.
 
 ### Regenerating assets
 

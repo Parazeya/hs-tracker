@@ -242,15 +242,33 @@
     padding: 0 2px 2px;
   }
 
-  /* a slider that runs the whole width of a wide window is harder to aim, not
-     easier — it stops growing well before that */
+  /* A slider that runs the whole width of a wide window is harder to aim, not
+     easier — it stops growing well before that. The rail and the handle are
+     drawn by us so the control looks the same on every engine. */
   input[type='range'] {
     flex: 1 1 auto;
     max-width: 260px;
-    accent-color: #c3af75;
     height: 14px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: none;
+    cursor: pointer;
   }
-  input[type='range']:disabled { opacity: 0.4; }
+  input[type='range']::-webkit-slider-runnable-track {
+    height: 4px;
+    background: #241a1c;
+    border: 1px solid #3d2a2c;
+  }
+  input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    margin-top: -5px;
+    background: #c3af75;
+    border: 1px solid #241a1c;
+  }
+  input[type='range']:hover:not(:disabled)::-webkit-slider-thumb { background: #f0e0b0; }
+  input[type='range']:disabled { opacity: 0.4; cursor: default; }
 
   .pct { width: 38px; text-align: right; flex: none; font-size: 12px; }
 
