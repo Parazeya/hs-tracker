@@ -84,6 +84,7 @@
     save();
   }
 
+
 </script>
 
 <div class="panel">
@@ -125,6 +126,14 @@
           <img src={settings.autostart ? checkOn : checkOff} alt="" />
         </button>
         <span class="opt">Start on login</span>
+      </div>
+      <div class="line" data-tauri-drag-region>
+        <button class="check" onclick={() => { settings.discord = !settings.discord; save(); }} aria-label="discord">
+          <img src={settings.discord ? checkOn : checkOff} alt="" />
+        </button>
+        <span class="opt" title="Zone, difficulty, the drops so far and how long the run has been going">
+          Show the run in Discord while the game is open
+        </span>
       </div>
       {#if overlay}
         <div class="line" data-tauri-drag-region>
@@ -211,6 +220,7 @@
         </div>
       </div>
     {/if}
+
   {/if}
   </div>
 </div>

@@ -1,5 +1,6 @@
 mod items;
 mod parser;
+mod presence;
 mod sniffer;
 mod stats;
 
@@ -135,6 +136,9 @@ pub struct Settings {
     pub ticker: bool,
     pub debug_log: bool,
     pub sound_on_ground: bool,
+    /// show the run in Discord while the game is open. Off unless asked for:
+    /// it puts what the player is doing in front of everyone on their list.
+    pub discord: bool,
     /// which face was up last: the overlay (true) or the dashboard
     pub compact: bool,
     /// Linux only: enter a Wayland session through XWayland, which is what
@@ -171,6 +175,7 @@ impl Default for Settings {
             ticker: true,
             debug_log: false,
             sound_on_ground: true,
+            discord: false,
             compact: false,
             x11_backend: false,
             hidden: Vec::new(),
@@ -763,6 +768,7 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     TICKER.store(settings.ticker, Ordering::Relaxed);
     DEBUG_LOG.store(settings.debug_log, Ordering::Relaxed);
     SCALE_MILLI.store((scale * 1000.0) as u32, Ordering::Relaxed);
+    presence::set_enabled(settings.discord);
     if let Some(w) = app.get_webview_window("main") {
         // the lock poller owns this once the overlay is up; touching a window
         // that has never been shown is what breaks on GTK
@@ -913,8 +919,49 @@ fn get_extra(state: State<Shared>) -> stats::Extra {
     state.stats.lock().unwrap().extra()
 }
 
-fn close_session(app: &AppHandle) {
+/// Runs are kept next to the settings, newest first, and the file is bounded:
+/// this is a record of what happened, not a database.
+const RUNS_KEPT: usize = 200;
+
+fn runs_path() -> PathBuf {
+    data_dir().join("runs.json")
+}
+
+pub(crate) fn read_runs() -> Vec<stats::Run> {
+    std::fs::read_to_string(runs_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// End the session and file it away. Everything that ends a run goes through
+/// here — the button, the hotkey, the tray, the game closing and the app
+/// quitting — so a run is never lost and never counted twice.
+pub(crate) fn end_run(app: &AppHandle) {
+    let finished = app.state::<Shared>().stats.lock().unwrap().finish();
     app.state::<Shared>().stats.lock().unwrap().reset();
+    let Some(run) = finished else { return };
+    let mut runs = read_runs();
+    runs.insert(0, run);
+    runs.truncate(RUNS_KEPT);
+    if let Ok(json) = serde_json::to_string(&runs) {
+        let _ = std::fs::write(runs_path(), json);
+    }
+    let _ = app.emit("runs-changed", ());
+}
+
+fn close_session(app: &AppHandle) {
+    end_run(app);
+}
+
+#[tauri::command]
+fn get_runs() -> Vec<stats::Run> {
+    read_runs()
+}
+
+#[tauri::command]
+fn clear_runs() -> Result<(), String> {
+    std::fs::write(runs_path(), "[]").map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1455,6 +1502,8 @@ pub fn run() {
             export_filter,
             import_filter,
             ticker_busy,
+            get_runs,
+            clear_runs,
             get_shopping,
             set_shopping,
             copy_text,
@@ -1511,6 +1560,7 @@ pub fn run() {
             }
             spawn_position_saver(app.handle().clone());
             spawn_stats_pusher(app.handle().clone());
+            presence::spawn(app.handle().clone());
             sniffer::spawn(app.state::<Shared>().inner(), app.handle().clone());
             // the windows are up: whatever backend this is, it worked
             #[cfg(not(windows))]
@@ -1535,6 +1585,8 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             save_window_positions(app);
             save_carried(app);
+            // quitting mid-run still files it
+            end_run(app);
         }
     });
 }

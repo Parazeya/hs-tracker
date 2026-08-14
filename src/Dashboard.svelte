@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import Stats from './Stats.svelte';
+  import Runs from './Runs.svelte';
   import Shop from './Shop.svelte';
   import SoundFilter from './SoundFilter.svelte';
   import Sounds from './Sounds.svelte';
@@ -29,6 +30,7 @@
 
   const SECTIONS = [
     { id: 'stats', label: 'Statistics', component: Stats },
+    { id: 'runs', label: 'Runs', component: Runs },
     { id: 'filter', label: 'Sound Filter', component: SoundFilter },
     { id: 'sounds', label: 'Sounds', component: Sounds },
     { id: 'shop', label: 'Shopping List', component: Shop },

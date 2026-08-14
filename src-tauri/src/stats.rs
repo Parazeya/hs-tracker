@@ -102,9 +102,43 @@ pub struct DropEntry {
     pub announced: bool,
     pub ground: bool,
     pub zone: Option<String>,
+    /// the room it fell in, e.g. "Act_07_02" — where a drop happened is half of
+    /// what makes it worth reporting
+    pub room: Option<String>,
     /// which alert to play, decided here so the announcement, the drop and the
     /// pickup of one item cannot chime three times
     pub sound: Option<String>,
+}
+
+/// How many of a run's finds are kept with it. A long farm can drop hundreds;
+/// the list is there to remember the run, not to replace the journal.
+const RUN_DROPS: usize = 40;
+
+/// A finished session, as it goes into the history.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Run {
+    pub started_ms: u64,
+    pub ended_ms: u64,
+    pub secs: u64,
+    pub character: Option<String>,
+    pub level: i64,
+    pub difficulty: i64,
+    pub gold: i64,
+    pub xp: i64,
+    pub kills: i64,
+    /// rarity -> how many dropped
+    pub items: HashMap<String, i64>,
+    pub notable: Vec<RunDrop>,
+    /// room -> seconds spent there, longest first
+    pub zones: Vec<(String, u64)>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RunDrop {
+    pub name: String,
+    pub rarity: String,
+    pub tier: i64,
+    pub ts_ms: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -116,6 +150,12 @@ pub struct SeriesPoint {
 
 pub struct GameStats {
     pub(crate) start: Instant,
+    /// wall clock for the same moment, so a finished run can say when it was
+    started_ms: u64,
+    /// how long the character has stood in each room this run, and since when
+    /// the current one has been counting
+    zone_time: HashMap<String, u64>,
+    room_since: Option<Instant>,
     has_mail: bool,
     total_gold: i64,
     gold_earned: i64,
@@ -124,6 +164,8 @@ pub struct GameStats {
     total_kills: i64,
     kills_earned: i64,
     items: HashMap<&'static str, ItemCount>,
+    /// how many items of each grade the session has produced (1 = D .. 6 = SS)
+    graded: HashMap<i64, i64>,
     resources: HashMap<&'static str, i64>,
     satanic: Option<SatanicZone>,
     room: Option<String>,
@@ -164,6 +206,9 @@ impl Default for GameStats {
     fn default() -> Self {
         Self {
             start: Instant::now(),
+            started_ms: now_ms(),
+            zone_time: HashMap::new(),
+            room_since: None,
             has_mail: false,
             total_gold: 0,
             gold_earned: 0,
@@ -172,6 +217,7 @@ impl Default for GameStats {
             total_kills: 0,
             kills_earned: 0,
             items: RARITIES.iter().map(|(_, name)| (*name, ItemCount::default())).collect(),
+            graded: HashMap::new(),
             resources: RESOURCES.iter().map(|(_, name)| (*name, 0)).collect(),
             satanic: None,
             room: None,
@@ -277,6 +323,74 @@ impl GameStats {
     /// that shows the counters is hidden.
     pub fn has_mail(&self) -> bool {
         self.has_mail
+    }
+
+    /// Add the time spent in the current room to its total and start counting
+    /// again from now.
+    fn bank_room_time(&mut self) {
+        let (Some(room), Some(since)) = (self.room.clone(), self.room_since) else {
+            self.room_since = Some(Instant::now());
+            return;
+        };
+        let secs = since.elapsed().as_secs();
+        if secs > 0 {
+            *self.zone_time.entry(room).or_insert(0) += secs;
+        }
+        self.room_since = Some(Instant::now());
+    }
+
+    /// What this run amounted to, or nothing when there is nothing to say. A
+    /// glance at the app, a restart, a game that closed a minute after opening —
+    /// none of those are runs, and a history full of them is noise.
+    pub fn finish(&mut self) -> Option<Run> {
+        self.bank_room_time();
+        let secs = self.start.elapsed().as_secs();
+        let nothing_happened = self.gold_earned == 0 && self.xp_earned == 0 && self.kills_earned == 0;
+        if secs < 60 || nothing_happened {
+            return None;
+        }
+        let mut zones: Vec<(String, u64)> = self.zone_time.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        zones.sort_by_key(|(_, secs)| std::cmp::Reverse(*secs));
+        zones.truncate(6);
+        // the finds, newest first, and only the ones that were worth announcing
+        let notable: Vec<RunDrop> = self
+            .drops
+            .iter()
+            .rev()
+            .filter(|d| !d.name.is_empty())
+            .take(RUN_DROPS)
+            .map(|d| RunDrop {
+                name: d.name.clone(),
+                rarity: d.rarity.clone(),
+                tier: d.tier,
+                ts_ms: d.ts_ms,
+            })
+            .collect();
+        Some(Run {
+            started_ms: self.started_ms,
+            ended_ms: now_ms(),
+            secs,
+            character: self.character.as_ref().map(|c| c.name.clone()),
+            level: self.character.as_ref().map_or(0, |c| c.level),
+            difficulty: self.character.as_ref().map_or(0, |c| c.difficulty),
+            gold: self.gold_earned,
+            xp: self.xp_earned,
+            kills: self.kills_earned,
+            items: self.items.iter().map(|(name, c)| (name.to_string(), c.total)).collect(),
+            notable,
+            zones,
+        })
+    }
+
+    /// How many items of one grade this session has produced.
+    pub fn graded(&self, tier: i64) -> i64 {
+        self.graded.get(&tier).copied().unwrap_or(0)
+    }
+
+    /// When this session began, as wall clock. Discord counts the elapsed time
+    /// itself and wants the moment, not the duration.
+    pub fn started_ms(&self) -> u64 {
+        self.started_ms
     }
 
     pub fn revision(&self) -> u64 {
@@ -450,7 +564,11 @@ impl GameStats {
             GameEvent::Mail(has) => self.has_mail = *has,
             GameEvent::Room(room) => {
                 if self.room.as_deref() != Some(room.as_str()) {
+                    // close the books on the room being left: a run is worth
+                    // little without knowing where it happened
+                    self.bank_room_time();
                     self.room = Some(room.clone());
+                    self.room_since = Some(Instant::now());
                 }
             }
             GameEvent::ItemAdded {
@@ -514,6 +632,11 @@ impl GameStats {
                 // drive the ticker and sounds, never the counters
                 if !announced && first {
                     let n = (*amount).max(1);
+                    // by grade, resources included: an Angelic Key is an SS drop
+                    // like any other, whatever shelf it lands on
+                    if tier > 0 {
+                        *self.graded.entry(tier).or_insert(0) += n;
+                    }
                     if !is_resource {
                         if let Some(count) = self.items.get_mut(rarity_key.as_str()) {
                             count.total += n;
@@ -583,6 +706,7 @@ impl GameStats {
                         name: name.clone(),
                         announced: *announced,
                         zone: self.satanic.as_ref().map(|s| s.zone.clone()),
+                        room: self.room.clone(),
                     };
                     if self.drops.len() >= JOURNAL_CAP {
                         self.drops.pop_front();
@@ -1096,6 +1220,23 @@ mod tests {
     }
 
     #[test]
+    fn the_session_tallies_drops_by_grade() {
+        let mut s = GameStats::default();
+        // a piece of gear that states SS, then an Angelic Key: a resource, and
+        // graded SS by the table rather than by the packet
+        s.apply(&tiered_satanic(6, "a"));
+        s.apply(&notable_item("Angelic Key", 12, 1));
+        assert_eq!(s.graded(6), 2, "a key is a drop like any other");
+        // grade B, and a name the table cannot grade at all
+        s.apply(&tiered_satanic(3, "b"));
+        s.apply(&notable_item("Mystery Blade", 3, 1));
+        assert_eq!(s.graded(3), 1);
+        assert_eq!(s.graded(6), 2, "an item the table cannot grade is not an SS");
+        s.reset();
+        assert_eq!(s.graded(6), 0, "the tally belongs to the session");
+    }
+
+    #[test]
     fn a_named_drop_is_graded_by_the_item_table() {
         // the packet that announces a named drop carries no tier, but the item
         // itself always has one — SS for the AK-47
@@ -1395,6 +1536,42 @@ mod tests {
         let snap = s.snapshot(String::new());
         assert_eq!(snap.xp.total, 100);
         assert_eq!(snap.xp.earned, 100);
+    }
+
+    /// A session that has been running for a while, without waiting for one.
+    fn aged(secs: u64) -> GameStats {
+        GameStats { start: Instant::now() - Duration::from_secs(secs), ..GameStats::default() }
+    }
+
+    #[test]
+    fn a_glance_at_the_app_is_not_a_run() {
+        let mut s = GameStats::default();
+        assert!(s.finish().is_none(), "nothing happened and no time passed");
+
+        // long enough, but the game never reported anything
+        let mut s = aged(900);
+        assert!(s.finish().is_none(), "an idle session is not a run either");
+    }
+
+    #[test]
+    fn a_finished_run_carries_the_session_and_where_it_happened() {
+        let mut s = aged(600);
+        s.apply(&account_packet("Test", 1_000, 10_000)); // the baseline
+        s.apply(&account_packet("Test", 1_400, 60_000)); // +400 kills, +50k xp
+
+        s.apply(&GameEvent::Room("Act_07_02".into()));
+        s.room_since = Some(Instant::now() - Duration::from_secs(300));
+        s.apply(&GameEvent::Room("Act_07_03".into()));
+        s.room_since = Some(Instant::now() - Duration::from_secs(60));
+
+        let run = s.finish().expect("a session with earnings is worth keeping");
+        assert_eq!(run.kills, 400);
+        assert_eq!(run.xp, 50_000);
+        assert!(run.secs >= 600, "{}", run.secs);
+        assert_eq!(run.character.as_deref(), Some("Test"));
+        // the room it spent longest in comes first
+        assert_eq!(run.zones.first().map(|(room, _)| room.as_str()), Some("Act_07_02"));
+        assert!(run.zones[0].1 >= 300, "{:?}", run.zones);
     }
 
     #[test]

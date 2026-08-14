@@ -1,6 +1,6 @@
 [package]
 name = "hs-tracker"
-version = "0.9.6"
+version = "0.9.7"
 description = "HS Tracker — Hero Siege session tracker overlay"
 edition = "2021"
 
@@ -28,6 +28,7 @@ pcap = "2"
 etherparse = "0.16"
 netstat2 = "0.11"
 sysinfo = "0.33"
+discord-rich-presence = "1.1.0"
 
 # autostart is a registry value on Windows and a .desktop file elsewhere
 [target.'cfg(windows)'.dependencies]

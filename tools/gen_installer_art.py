@@ -78,7 +78,12 @@ def draw_sidebar() -> Image.Image:
     return flatten(image)
 
 
-OUT.mkdir(parents=True, exist_ok=True)
-draw_header().save(OUT / "header.bmp")
-draw_sidebar().save(OUT / "sidebar.bmp")
-print(f"header {HEADER[0]}x{HEADER[1]} and sidebar {SIDEBAR[0]}x{SIDEBAR[1]} -> {OUT}")
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    draw_header().save(OUT / "header.bmp")
+    draw_sidebar().save(OUT / "sidebar.bmp")
+    print(f"header {HEADER[0]}x{HEADER[1]} and sidebar {SIDEBAR[0]}x{SIDEBAR[1]} -> {OUT}")
+
+
+if __name__ == "__main__":
+    main()

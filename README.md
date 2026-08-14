@@ -30,8 +30,12 @@ sends data anywhere — everything stays on your machine.
   rates, drops by rarity, notable finds (Angelic Key, Satanic Dice, S/SS runes
   …), what can drop in the area you are standing in, the Satanic Zone with a
   countdown to the next rotation, and a timeline of named drops.
+- **Runs** — every finished session kept: rates, drops, the finds, and which
+  rooms the time actually went into.
 - **Shopping list** — a scratchpad where clicking an entry copies it to the
   clipboard, ready to paste into the market search.
+- **Discord status** — optional: while the game is open, your Discord shows the
+  zone you are in, what the run has dropped and how long it has been going.
 - Global hotkeys, autostart, per-section visibility, opacity and scale.
 
 ## The dashboard
@@ -49,6 +53,31 @@ restart does not show zeros until the game next saves. "Drops in this area"
 lists what is tied to the zone you are in — most items drop anywhere, a few
 hundred do not, and that is the difference between farming here on purpose and
 farming here out of habit.
+
+### Runs
+
+A session ends when you reset it, when the game closes, or when the app quits —
+and what it amounted to is filed here: the rates, what dropped, the finds by
+name, and a bar per room showing where the time went. Sessions that earned
+nothing, or lasted under a minute, are not kept. The last 200 live in
+`runs.json`.
+
+### Discord status
+
+Off until you switch it on in Settings. With it on, and only while Hero Siege
+is running, Discord shows the run under your name:
+
+```
+Playing HS Tracker
+Act 8 · Zone 2 · Hell HC
+4 SS · 1 Unholy · 7.3k gold
+01:47:22 elapsed
+```
+
+The tracker talks to the Discord client on your own machine over its local
+pipe — the same one every game with a rich presence uses. Nothing goes to a
+server of ours, there is none, and the status disappears when the game closes
+or when you switch it off. Your character's name is never part of it.
 
 ### Sound Filter
 
@@ -250,6 +279,11 @@ left-click toggle is Windows-only.
   that table plus the game's own `translationsItem.csv`, so names read exactly
   as they do in game. Point `HERO_SIEGE_BIN` at the install if it is not on the
   default path.
+- `gen_icon.py` — draws the app icon on a 16×16 grid and writes every size the
+  app, the tray and Windows want, `.ico` included. `--preview` lays the sizes
+  out to look at, `--discord` writes the artwork the Discord application is
+  given. Run `gen_installer_art.py` after it: the installer's header and sidebar
+  are drawn from the icon.
 - `yytex.py`, `datawin.py`, `export_ui.py` — decode the game's own textures and
   re-export the UI sprites the overlay is skinned with, from an installed copy
   of Hero Siege.

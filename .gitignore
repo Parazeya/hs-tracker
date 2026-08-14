@@ -12,6 +12,7 @@ settings.json
 shopping.json
 positions.json
 carried.json
+runs.json
 debug-capture.jsonl
 /sounds/
 
@@ -24,3 +25,6 @@ docs/
 
 # locally built Linux packages for testing
 linux-packages/
+
+# a look at the icon, made by tools/gen_icon.py --preview
+src-tauri/icons/preview.png

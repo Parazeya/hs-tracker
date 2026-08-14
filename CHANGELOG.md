@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.9.7 — 2026-08-14
+
+What a session was worth, kept after it ends — and told to Discord while it
+is still going.
+
+### Added
+
+- **Runs.** A new dashboard section keeps what each session amounted to: when
+  it was, how long it ran, gold, xp, kills and their per-hour rates, drops by
+  rarity, the finds it produced, and where the time actually went — the rooms
+  the character stood in, longest first. A run is filed when the session ends:
+  the Reset button, the tray, `Ctrl+Shift+R`, the game closing, or the app
+  quitting. Sessions under a minute and ones where nothing was earned are not
+  runs and are dropped, so the list stays worth reading. The last 200 are kept
+  in `runs.json`, and the section can clear them.
+- **A Discord status.** Switch it on in Settings and, while Hero Siege is
+  running, Discord shows the run under your name: the zone and difficulty, the
+  SS-grade drops so far with Angelic and Unholy named separately, the gold
+  earned, and a timer counting the session. It goes up when the game does and
+  comes down when the game closes, so the profile never advertises a run that
+  ended hours ago. The tracker speaks to the Discord client on the same machine
+  through its local pipe — there is still no server of ours anywhere — and the
+  character's name is never sent. Off by default.
+
+### Changed
+
+- **A new icon**, drawn in the game's own pixels rather than borrowed from it:
+  HS on the panel plate, standing on a pile of the game's gold. It is designed
+  at 16×16 — the size a taskbar actually shows — and every larger size is the
+  same grid with bigger squares, so it never blurs. The installer's artwork is
+  drawn from it and follows along.
+
 ## 0.9.6 — 2026-08-14
 
 Linux, tested on a real desktop rather than a build log.

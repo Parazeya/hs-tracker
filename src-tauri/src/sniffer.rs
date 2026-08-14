@@ -40,6 +40,15 @@ impl Status {
     }
 }
 
+/// Whether Hero Siege is up. The watcher already looks for the process every
+/// second; anything else that needs to know reads it here rather than looking
+/// again.
+static GAME_UP: AtomicBool = AtomicBool::new(false);
+
+pub fn game_running() -> bool {
+    GAME_UP.load(Ordering::Relaxed)
+}
+
 struct Capture {
     stop: Arc<AtomicBool>,
     handle: JoinHandle<()>,
@@ -227,6 +236,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         // the overlay follows the game: show on launch, close the farm
         // session and hide when the game exits
         let running = !pids.is_empty();
+        GAME_UP.store(running, Ordering::Relaxed);
         if running != game_running {
             game_running = running;
             // nothing to show or hide where the session hosts no overlay
@@ -239,7 +249,8 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                     crate::show_overlay(&app);
                 }
             } else {
-                stats.lock().unwrap().reset();
+                // the game closing ends the run, and a closed run is filed
+                crate::end_run(&app);
                 if auto {
                     crate::hide_overlay(&app);
                 }
