@@ -6,9 +6,7 @@
   // the shape in their alpha (tools/export_ui.py turns their brightness into it),
   // so they are used as masks and painted, which is what lets one set of frames
   // serve every rarity.
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { appWindow, invoke, listen, native } from './bridge.js';
   import { itemName, tierLabel, typeLabel } from './items.js';
   import { art } from './skin.svelte.js';
 
@@ -76,8 +74,9 @@
     if (!next) {
       playing = false;
       drop = null;
-      // the window knows how long it takes, so the window says when to hide
-      if (!placing) invoke('flourish_done').catch(() => {});
+      // the window knows how long it takes, so the window says when to hide.
+      // Served to a browser there is no window to hide, and nothing to say.
+      if (!placing && native) invoke('flourish_done').catch(() => {});
       return;
     }
     drop = next;

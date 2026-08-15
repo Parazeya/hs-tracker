@@ -1,8 +1,7 @@
 <script>
-  import { invoke } from '@tauri-apps/api/core';
+  import { appWindow, invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
-  import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { listen } from './bridge.js';
   import Stats from './Stats.svelte';
   import Runs from './Runs.svelte';
   import Shop from './Shop.svelte';
@@ -10,6 +9,7 @@
   import Sounds from './Sounds.svelte';
   import Settings from './Settings.svelte';
   import About from './About.svelte';
+  import Codex from './Codex.svelte';
 
   const DIRECTIONS = {
     n: 'North',
@@ -27,6 +27,7 @@
     { id: 'runs', label: 'Runs', component: Runs },
     { id: 'filter', label: 'Sound Filter', component: SoundFilter },
     { id: 'sounds', label: 'Sounds', component: Sounds },
+    { id: 'codex', label: 'Items', component: Codex },
     { id: 'shop', label: 'Shopping List', component: Shop },
     { id: 'settings', label: 'Settings', component: Settings },
     { id: 'about', label: 'About', component: About },
@@ -123,7 +124,7 @@
 >
   <button
     class="min"
-    onclick={() => getCurrentWindow().minimize()}
+    onclick={() => appWindow().minimize()}
     title="Minimize to the taskbar"
     aria-label="minimize"
   >
@@ -175,7 +176,7 @@
     <div
       class="grip {edge}"
       role="presentation"
-      onmousedown={(e) => e.button === 0 && getCurrentWindow().startResizeDragging(DIRECTIONS[edge])}
+      onmousedown={(e) => e.button === 0 && appWindow().startResizeDragging(DIRECTIONS[edge])}
     ></div>
   {/each}
 </div>

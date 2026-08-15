@@ -40,7 +40,8 @@ export function zoneLabel(room) {
 export const TYPE_NAMES = {
   0: 'Helmet', 1: 'Chest', 2: 'Boots', 3: 'Weapon', 4: 'Gloves', 5: 'Amulet',
   6: 'Shield', 7: 'Ring', 8: 'Belt', 10: 'Charm', 11: 'Consumable', 12: 'Key',
-  13: 'Collectible', 14: 'Material', 15: 'Socketable', 18: 'Vial',
+  13: 'Collectible', 14: 'Material', 15: 'Socketable', 16: 'Relic', 18: 'Vial',
+  19: 'Essence Vault',
 };
 
 export const WEAPON_NAMES = {

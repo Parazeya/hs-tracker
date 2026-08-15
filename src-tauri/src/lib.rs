@@ -3,6 +3,7 @@ mod parser;
 mod presence;
 mod sniffer;
 mod stats;
+mod stream;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -68,6 +69,8 @@ static TICKER_BUSY: AtomicBool = AtomicBool::new(false);
 /// Whether the flourish is on at all. Which drops deserve one is the engine's
 /// question, and it is asked there — see `set_flourish_filter`.
 static FLOURISH: AtomicBool = AtomicBool::new(false);
+/// leave the announcement window up so a capture has something to hold on to
+static FLOURISH_ALWAYS: AtomicBool = AtomicBool::new(false);
 static SCALE_MILLI: AtomicU32 = AtomicU32::new(1000);
 /// The panel's own height in CSS pixels, as the overlay last measured it. Zero
 /// until the first frame has been drawn, when the guess below stands in.
@@ -161,6 +164,10 @@ pub struct Settings {
     pub auto_pause: bool,
     /// which skin the windows wear: "default", or a season's own colours
     pub theme: String,
+    /// serve the overlay as a page for OBS to add as a Browser Source, and the
+    /// port to serve it on. Off by default and never off the loopback address.
+    pub stream: bool,
+    pub stream_port: u16,
     /// A window that plays the game's own loot pillar when something worth it
     /// drops. Off by default: it is a window over the game, and that is the
     /// player's screen to give away, not ours to take.
@@ -173,6 +180,11 @@ pub struct Settings {
     /// which rarities are worth it, and the grade a drop must reach
     pub flourish_rarities: Vec<String>,
     pub flourish_tier: i64,
+    /// Keep the announcement window on screen between drops, drawing nothing.
+    /// OBS can only capture a window that exists, and this one otherwise
+    /// appears for a few seconds and is gone again. Off by default: a window
+    /// held open is a window the compositor keeps blending, empty or not.
+    pub flourish_always: bool,
     /// show the run in Discord while the game is open. Off unless asked for:
     /// it puts what the player is doing in front of everyone on their list.
     pub discord: bool,
@@ -214,12 +226,15 @@ impl Default for Settings {
             sound_on_ground: true,
             auto_pause: true,
             theme: "default".into(),
+            stream: false,
+            stream_port: 4600,
             flourish: false,
             flourish_scale: 1.0,
             flourish_shade: 0.55,
             flourish_secs: 6.0,
             flourish_rarities: ["Heroic", "Angelic", "Unholy"].iter().map(|r| r.to_string()).collect(),
             flourish_tier: 6,
+            flourish_always: false,
             discord: false,
             compact: false,
             x11_backend: false,
@@ -822,7 +837,9 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     DEBUG_LOG.store(settings.debug_log, Ordering::Relaxed);
     SCALE_MILLI.store((scale * 1000.0) as u32, Ordering::Relaxed);
     presence::set_enabled(settings.discord);
+    stream::configure(settings.stream, settings.stream_port.clamp(1024, 65535));
     FLOURISH.store(settings.flourish, Ordering::Relaxed);
+    FLOURISH_ALWAYS.store(settings.flourish_always, Ordering::Relaxed);
     ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
     IDLE_AFTER.store(if settings.auto_pause { IDLE_DEFAULT } else { 0 }, Ordering::Relaxed);
     if let Some(w) = app.get_webview_window("main") {
@@ -1067,6 +1084,12 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
     let size = LogicalSize::new(FLOURISH_W * scale, FLOURISH_H * scale);
     if let Some(w) = existing {
         let _ = w.set_size(size);
+        // the setting can be turned on with the window already built
+        if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
+            show_flourish(app, &w);
+        } else if !PLACING.load(Ordering::Relaxed) {
+            hide_aux(app, "flourish");
+        }
         return;
     }
     let built = tauri::WebviewWindowBuilder::new(app, "flourish", tauri::WebviewUrl::default())
@@ -1085,6 +1108,9 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
     match built {
         Ok(w) => {
             let _ = w.set_ignore_cursor_events(true);
+            if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
+                show_flourish(app, &w);
+            }
         }
         Err(e) => eprintln!("the flourish window could not be built: {e}"),
     }
@@ -1107,6 +1133,7 @@ pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
             seen.push((drop.name.clone(), Instant::now()));
         }
     }
+    stream::announce(drop);
     let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", drop);
     show_flourish(app, &w);
@@ -1127,7 +1154,7 @@ fn show_flourish(app: &AppHandle, w: &tauri::WebviewWindow) {
 /// it and it may go away again.
 #[tauri::command]
 fn flourish_done(app: AppHandle) {
-    if PLACING.load(Ordering::Relaxed) {
+    if PLACING.load(Ordering::Relaxed) || FLOURISH_ALWAYS.load(Ordering::Relaxed) {
         return;
     }
     hide_aux(&app, "flourish");
@@ -1158,9 +1185,26 @@ pub struct About {
     version: String,
     platform: &'static str,
     repo: &'static str,
+    /// what the overlay measures, so a Browser Source can be given the same
+    /// numbers instead of being guessed at
+    overlay_w: u32,
+    overlay_h: u32,
 }
 
 const REPO: &str = "https://github.com/Parazeya/hs-tracker";
+
+/// The addresses a streamer pastes into OBS, or nothing when it is switched off.
+#[tauri::command]
+fn stream_urls() -> Option<(String, String, String)> {
+    let port = stream::port();
+    (port != 0 && read_settings().stream).then(|| {
+        (
+            format!("http://127.0.0.1:{port}/?view=overlay"),
+            format!("http://127.0.0.1:{port}/?view=dashboard"),
+            format!("http://127.0.0.1:{port}/?view=flourish"),
+        )
+    })
+}
 
 #[tauri::command]
 fn about() -> About {
@@ -1170,6 +1214,11 @@ fn about() -> About {
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: std::env::consts::OS,
         repo: REPO,
+        overlay_w: BASE_W as u32,
+        overlay_h: {
+            let measured = PANEL_H.load(Ordering::Relaxed);
+            if measured > 0 { measured } else { 199 }
+        },
     }
 }
 
@@ -1799,6 +1848,7 @@ pub fn run() {
             reset_stats,
             set_paused,
             about,
+            stream_urls,
             open_url,
             fit_overlay,
             flourish_done,
@@ -1873,6 +1923,7 @@ pub fn run() {
             spawn_position_saver(app.handle().clone());
             spawn_stats_pusher(app.handle().clone());
             presence::spawn(app.handle().clone());
+            stream::spawn(app.handle().clone());
             sniffer::spawn(app.state::<Shared>().inner(), app.handle().clone());
             // the windows are up: whatever backend this is, it worked
             #[cfg(not(windows))]

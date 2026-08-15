@@ -22,6 +22,12 @@ The pieces of the Rust side, in the order data moves through them:
 | `items.rs` | Generated tables — item identity, rarity, grade, drop rates. |
 | `lib.rs` | Windows, tray, hotkeys, settings, commands. |
 | `presence.rs` | The Discord status. |
+| `stream.rs` | A loopback HTTP server that serves the front end and a snapshot stream, so OBS can add the overlay as a Browser Source. |
+
+The front end is drawn twice: in the app's windows, where Tauri is under it, and
+in a browser, where it is not. Everything goes through `src/bridge.js` — it
+answers from Tauri when there is Tauri and over HTTP when there is not, and a
+page in a browser can read but never command.
 
 Two things worth knowing before changing anything:
 

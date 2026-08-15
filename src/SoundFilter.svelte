@@ -1,7 +1,7 @@
 <script>
-  import { invoke } from '@tauri-apps/api/core';
+  import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
-  import { listen } from '@tauri-apps/api/event';
+  import { listen } from './bridge.js';
   import { ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { soundUrl, play } from './audio.js';
 

@@ -21,8 +21,10 @@
 | **Statistics** | Gold, xp and kills per hour, drops by rarity, magic find, bosses and chests, what rolls better in the zone you are standing in, and the Satanic Zone with a countdown to the next rotation. |
 | **Sound alerts** | Its own sound per rarity, and named lists of specific items with sounds of their own. Alerts fire the moment an item hits the ground. |
 | **Drop flourish** | Optional: something SS-grade drops and the game's own loot pillar plays over the screen, wherever you have put it. |
+| **Items** | Every named item, its drop chance, and the places it rolls better in. Search by name, rarity or kind. |
 | **Runs** | Every finished session kept — the rates, the finds, where the time went. **Copy card** turns one into a picture you can paste into a chat. |
 | **Pause** | By hand, or by itself after five quiet minutes, so a break does not end up in the per-hour figures. |
+| **OBS** | Optional: the overlay served as a page on your own machine, to add in OBS as a Browser Source — transparent, and the same one you see. |
 | **About** | The version you are running, who made it, and a button that asks GitHub whether a newer release is out. |
 | **Discord** | Optional: while the game is open, your friends see the zone, the drops and the timer. |
 
@@ -91,6 +93,45 @@ Counting starts once the game reports your character, a moment after you enter a
 zone. Gold, experience and kills only travel when the game saves, so between
 saves those three sit still while drops keep arriving — that is the game, not a
 stuck counter.
+
+## Streaming it
+
+The app draws four windows. Each is transparent and can be captured on its own:
+
+| Window | What it is | On screen |
+| --- | --- | --- |
+| `HS Tracker — Overlay` | the compact panel | while you are in compact mode |
+| `HS Tracker Ticker` | drop names, under the overlay | for a few seconds after a drop |
+| `HS Tracker Flourish` | the announcement for a big drop | while it plays |
+| `HS Tracker` | the dashboard | while you are in dashboard mode |
+
+### Capturing a window
+
+1. Add a **Window Capture** and pick the window from the list.
+2. Set **Capture Method** to **Windows 10 (1903 and up)** — that is the one that
+   keeps the transparency.
+3. Set **Window Match Priority** to **Window title must match**.
+
+That third step matters. On any other setting OBS falls back to *another window
+of the same type* when it cannot find the one you chose, and every window here is
+the same type — so you get the dashboard instead of the overlay.
+
+A window that is not on screen cannot be captured at all. The ticker and the
+announcement come and go by design: their sources sit empty and fill when a drop
+happens, which is what you want. The overlay is a different matter — it is hidden
+while the dashboard is up, so its source stays empty until you switch back to
+compact mode. For the announcement there is **Keep its window on screen so OBS
+can capture it** in Settings, which leaves it there drawing nothing.
+
+### Or a browser source
+
+If you would rather these were on the stream and not on your screen, switch on
+**Serve the overlay to OBS** in Settings. **About** then lists an address per
+view — overlay, dashboard, announcement — and the size to give the source.
+
+Add them as **Browser Sources**. The pages are the app's own, transparent, served
+on `127.0.0.1` and nowhere else, and they only ever show what the app already
+shows.
 
 ## If something does not work
 

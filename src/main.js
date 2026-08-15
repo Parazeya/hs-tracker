@@ -13,8 +13,7 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 // The skin is chosen once, before anything is drawn, so no window ever flashes
 // in the wrong colours. Every window follows the same setting, and a change in
 // Settings reaches the others through the event the backend already emits.
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { invoke, listen, native, view } from './bridge.js';
 
 const wearTheme = (name) => {
   const root = document.documentElement;
@@ -33,7 +32,10 @@ invoke('get_settings')
   .catch(() => {});
 listen('settings-changed', (e) => wearTheme(e.payload?.theme));
 
-const label = getCurrentWebviewWindow().label;
+// In one of the app's own windows the label says which face to draw. Served to
+// a browser — OBS's Browser Source — there is no window to ask, so the address
+// says instead: /?view=overlay or /?view=dashboard.
+const label = native ? getCurrentWebviewWindow().label : view;
 const roots = { dashboard: Dashboard, ticker: Ticker, flourish: Flourish };
 
 export default mount(roots[label] ?? App, {

@@ -1,7 +1,7 @@
 <script>
-  import { invoke } from '@tauri-apps/api/core';
+  import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
-  import { listen } from '@tauri-apps/api/event';
+  import { listen } from './bridge.js';
   import { buffInfo, defaultBuffIcon, zoneName, icon } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
 

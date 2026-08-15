@@ -2,9 +2,9 @@
   // rendered either as its own window or as a dashboard section
   let { embedded = false } = $props();
 
-  import { invoke } from '@tauri-apps/api/core';
+  import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
-  import { listen } from '@tauri-apps/api/event';
+  import { listen } from './bridge.js';
   import { buffInfo, debuffInfo, zoneName } from './buffs.js';
   import {
     ITEMS,

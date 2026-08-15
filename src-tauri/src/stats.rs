@@ -979,7 +979,9 @@ impl GameStats {
             self.banked += c.delta;
             self.last_bank = Some(Instant::now());
         }
-        let Some(mode) = self.season_mode else { return };
+        // the save names the purse; before it arrives, an unambiguous packet
+        // will do, and the save corrects it if it disagrees
+        let Some(mode) = self.season_mode.or_else(|| c.only_purse()) else { return };
         let current = c.for_mode(mode);
         if current == 0 {
             return;
@@ -1493,6 +1495,28 @@ mod tests {
     }
 
     #[test]
+    fn a_lone_purse_is_read_before_the_save_names_it() {
+        let mut s = GameStats::default();
+        let c = Currency { gss: 753_900, ..Default::default() };
+        // no account packet yet: one purse has money, so it can only be that one
+        s.apply(&GameEvent::Gold(c.clone()));
+        assert_eq!(s.snapshot(String::new()).gold.total, 753_900);
+
+        // two purses in play and there is nothing to go on — better a blank
+        // than the wrong number
+        let mut two = GameStats::default();
+        let both = Currency { gss: 100, gns: 200, ..Default::default() };
+        two.apply(&GameEvent::Gold(both));
+        assert_eq!(two.snapshot(String::new()).gold.total, 0);
+
+        // and the save still has the last word
+        s.apply(&account(CURRENT_SEASON, 0, 0));
+        s.apply(&GameEvent::Gold(c));
+        assert_eq!(s.snapshot(String::new()).gold.total, 753_900);
+        assert_eq!(s.gold_earned, 0, "reading a balance is not earning it");
+    }
+
+    #[test]
     fn the_flourish_asks_its_own_question() {
         let mut s = GameStats::default();
         // alerts want only the very top; the flourish is set wider
@@ -1790,12 +1814,15 @@ mod tests {
     fn gold_replays_the_currency_that_preceded_the_account() {
         let mut s = GameStats::default();
         let gold = |g| GameEvent::Gold(Currency { gss: g, ..Default::default() });
-        // currency arrives before the season mode is known
+        // Currency arrives before the season mode is known. One purse has money
+        // and the others do not, so it is read at once; the account packet then
+        // confirms the purse rather than revealing it.
         s.apply(&gold(100));
-        assert_eq!(s.snapshot(String::new()).gold.total, 0);
+        assert_eq!(s.snapshot(String::new()).gold.total, 100);
 
         s.apply(&account(CURRENT_SEASON, 0, 0));
         assert_eq!(s.snapshot(String::new()).gold.total, 100);
+        assert_eq!(s.gold_earned, 0, "a balance already shown is not earned again");
         s.apply(&gold(150));
         s.apply(&gold(120));
         let snap = s.snapshot(String::new());

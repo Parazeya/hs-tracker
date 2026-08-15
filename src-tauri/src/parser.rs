@@ -17,6 +17,30 @@ pub struct Currency {
 }
 
 impl Currency {
+    /// The one purse with anything in it, when exactly one has.
+    ///
+    /// Which purse a character banks into is stated by its save, and a save
+    /// arrives when the game feels like saving — until then the balance cannot
+    /// be read at all, and a player who has just started sees a bank of zero
+    /// while the session counts up beside it. A packet with money in a single
+    /// purse can only be that character's. Several, and there is nothing to go
+    /// on, so it keeps waiting: showing the wrong purse is worse than showing
+    /// none, and that is a mistake this app has made before.
+    pub fn only_purse(&self) -> Option<&'static str> {
+        let mut found = None;
+        for (name, value) in
+            [("GSS", self.gss), ("GSH", self.gsh), ("GNS", self.gns), ("GNH", self.gnh), ("GBP", self.gbp)]
+        {
+            if value > 0 {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(name);
+            }
+        }
+        found
+    }
+
     pub fn for_mode(&self, mode: &str) -> i64 {
         match mode {
             "GSS" => self.gss,

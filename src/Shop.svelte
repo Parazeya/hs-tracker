@@ -1,5 +1,5 @@
 <script>
-  import { invoke } from '@tauri-apps/api/core';
+  import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
 
   let items = $state([]);

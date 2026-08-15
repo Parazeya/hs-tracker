@@ -14,6 +14,13 @@
 - An **Ebontharn** skin in Settings: the season's palette, its sprites, and its
   sky behind the dashboard.
 - The dashboard now says why the numbers are not moving.
+- **OBS**: the overlay window is named apart from the dashboard, so a Window
+  Capture can tell them apart — and, for anyone who would rather it were on the
+  stream and not on screen, both are served as pages on `127.0.0.1` for a
+  Browser Source — the overlay, the dashboard and the drop announcement. Off by
+  default; the addresses and the size are in About.
+- An **Items** section: every named item with its chance anywhere, its better
+  chance where it is tied, and where that is. Search by name, rarity or kind.
 - An **About** section: the version, who made it, and a check for a newer
   release. It is the only request the app makes, and only on the button.
 

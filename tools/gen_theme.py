@@ -89,6 +89,15 @@ def main() -> None:
         " *",
         " * Written by tools/gen_theme.py — edit there, not here.",
         " */",
+        "",
+        "/* Every window is transparent underneath its own art, and so is the page",
+        "   when it is served to an OBS Browser Source. Set here rather than in a",
+        "   component, so there is never a frame of white before one mounts. */",
+        "html,",
+        "body {",
+        "  background: transparent;",
+        "}",
+        "",
         ":root {",
     ]
     for name, colour in tokens():

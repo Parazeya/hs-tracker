@@ -1,7 +1,7 @@
 <script>
-  import { invoke } from '@tauri-apps/api/core';
+  import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
-  import { listen } from '@tauri-apps/api/event';
+  import { listen } from './bridge.js';
 
   let settings = $state(null);
 
@@ -221,6 +221,14 @@
             />
             <span class="pct">{TIERS[(settings.flourish_tier ?? 6) - 1]}</span>
           </div>
+          <div class="line" data-tauri-drag-region>
+            <button class="check" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }} aria-label="flourish always">
+              <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
+            </button>
+            <span class="opt" title="It draws nothing between drops, but OBS can only capture a window that is there">
+              Keep its window on screen so OBS can capture it
+            </span>
+          </div>
           <div class="line">
             <button
               class="btn wide"
@@ -250,6 +258,26 @@
         </button>
         <span class="opt">Alert when the item drops (off = when picked up)</span>
       </div>
+      <div class="line" data-tauri-drag-region>
+        <button class="check" onclick={() => { settings.stream = !settings.stream; save(); }} aria-label="stream">
+          <img src={settings.stream ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="opt" title="Serves the overlay as a page on this machine so OBS can add it as a Browser Source. The addresses are in About.">
+          Serve the overlay to OBS
+        </span>
+      </div>
+      {#if settings.stream}
+        <div class="line" data-tauri-drag-region>
+          <span class="name">Port</span>
+          <input
+            class="port"
+            type="number" min="1024" max="65535"
+            value={settings.stream_port ?? 4600}
+            onchange={(e) => setNumber('stream_port', Math.trunc(Number(e.target.value)))}
+          />
+          <span class="pct">127.0.0.1 only</span>
+        </div>
+      {/if}
       <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.debug_log = !settings.debug_log; save(); }} aria-label="debug">
           <img src={settings.debug_log ? art('check_on') : art('check_off')} alt="" />
@@ -476,6 +504,19 @@
     flex-wrap: wrap;
     gap: 4px;
   }
+
+  .port {
+    width: 78px;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 11px;
+    color: var(--bone-13);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--ground-10);
+    padding: 3px 6px;
+    height: 24px;
+  }
+  .port:focus { outline: none; border-color: var(--edge-4); }
 
   .hotkeys {
     font-size: 10px;

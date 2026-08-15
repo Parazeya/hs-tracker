@@ -1,4 +1,5 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
+import { invoke, native } from './bridge.js';
 
 import satanicWav from './assets/sounds/satanic.wav';
 import setWav from './assets/sounds/set.wav';
@@ -22,6 +23,9 @@ export const DEFAULTS = {
 // through the asset protocol; only if that is unavailable do we fall back to
 // hauling the whole file over IPC as a data URL.
 export async function soundUrl(rarity) {
+  // a page in a browser has no files beside an executable, and a stream does
+  // not want the alerts twice
+  if (!native) return null;
   try {
     const path = await invoke('sound_path', { rarity });
     if (path) {
