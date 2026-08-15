@@ -14,6 +14,8 @@
 - An **Ebontharn** skin in Settings: the season's palette, its sprites, and its
   sky behind the dashboard.
 - The dashboard now says why the numbers are not moving.
+- An **About** section: the version, who made it, and a check for a newer
+  release. It is the only request the app makes, and only on the button.
 
 ### Fixed
 

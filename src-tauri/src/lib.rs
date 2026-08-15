@@ -1152,6 +1152,43 @@ fn place_flourish(app: AppHandle, placing: bool) {
     }
 }
 
+/// What the About section shows about the build it is running in.
+#[derive(Serialize)]
+pub struct About {
+    version: String,
+    platform: &'static str,
+    repo: &'static str,
+}
+
+const REPO: &str = "https://github.com/Parazeya/hs-tracker";
+
+#[tauri::command]
+fn about() -> About {
+    About {
+        // the crate's version is the one the installer and the tag carry, since
+        // scripts/set-version.mjs writes all three from package.json
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        platform: std::env::consts::OS,
+        repo: REPO,
+    }
+}
+
+/// Open a link in whatever browser the desktop uses.
+///
+/// Only ever this project's own pages: the address arrives from the web side,
+/// and handing an arbitrary string to a shell is how a link becomes a command.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with(REPO) {
+        return Err("that is not one of this project's pages".into());
+    }
+    #[cfg(windows)]
+    let spawned = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    #[cfg(not(windows))]
+    let spawned = std::process::Command::new("xdg-open").arg(&url).spawn();
+    spawned.map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn fit_overlay(app: AppHandle, height: f64) {
     let height = height.clamp(60.0, 1200.0);
@@ -1761,6 +1798,8 @@ pub fn run() {
             get_extra,
             reset_stats,
             set_paused,
+            about,
+            open_url,
             fit_overlay,
             flourish_done,
             place_flourish,

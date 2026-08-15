@@ -9,6 +9,7 @@
   import SoundFilter from './SoundFilter.svelte';
   import Sounds from './Sounds.svelte';
   import Settings from './Settings.svelte';
+  import About from './About.svelte';
 
   const DIRECTIONS = {
     n: 'North',
@@ -28,6 +29,7 @@
     { id: 'sounds', label: 'Sounds', component: Sounds },
     { id: 'shop', label: 'Shopping List', component: Shop },
     { id: 'settings', label: 'Settings', component: Settings },
+    { id: 'about', label: 'About', component: About },
   ];
 
   // the section survives a hide/show, which is what makes the sidebar feel

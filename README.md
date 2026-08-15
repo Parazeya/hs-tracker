@@ -23,10 +23,13 @@
 | **Drop flourish** | Optional: something SS-grade drops and the game's own loot pillar plays over the screen, wherever you have put it. |
 | **Runs** | Every finished session kept — the rates, the finds, where the time went. **Copy card** turns one into a picture you can paste into a chat. |
 | **Pause** | By hand, or by itself after five quiet minutes, so a break does not end up in the per-hour figures. |
+| **About** | The version you are running, who made it, and a button that asks GitHub whether a newer release is out. |
 | **Discord** | Optional: while the game is open, your friends see the zone, the drops and the timer. |
 
 It reads the game's network traffic. It never touches the game process, never
 injects anything, and sends nothing anywhere — everything stays on your machine.
+The one exception is the **About** section's update check, which asks GitHub for
+the newest release and only when you press the button.
 
 ## Showcase
 
