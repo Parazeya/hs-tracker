@@ -224,6 +224,13 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         if tick.is_multiple_of(30) {
             stats.lock().unwrap().sample();
         }
+        // a run nobody is playing should not be dividing its totals by the time
+        // it spent standing still
+        let idle_after = crate::IDLE_AFTER.load(Ordering::Relaxed);
+        stats
+            .lock()
+            .unwrap()
+            .watch_idle((idle_after > 0).then(|| Duration::from_secs(idle_after as u64)));
 
         if !capture_available() {
             set_status(&status, Status::NoCapture);
@@ -485,6 +492,13 @@ fn handle_flush(
             // its own still gets announced
             let _ = app.emit("item-drop", (key, &drop.rarity));
         }
-        let _ = app.emit("drop-entry", &drop);
+        // the ticker and the journal follow the alert rules; the flourish has
+        // its own, and a drop can satisfy either, both or only one
+        if drop.announce {
+            let _ = app.emit("drop-entry", &drop);
+        }
+        if drop.flourish {
+            crate::maybe_flourish(app, &drop);
+        }
     }
 }

@@ -1,12 +1,9 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
   import { listen } from '@tauri-apps/api/event';
   import { tierLabel, zoneLabel } from './items.js';
-
-  import chipBg from './assets/game/chip_dark.png';
-  import btnBg from './assets/game/button.png';
-  import btnHoverBg from './assets/game/button_hover.png';
-  import btnDownBg from './assets/game/button_down.png';
+  import { cardBytes, drawRunCard } from './runcard.js';
 
   let runs = $state([]);
   let picked = $state(0);
@@ -58,6 +55,28 @@
   const drops = (r) => RARITIES.reduce((sum, [name]) => sum + (r.items?.[name] ?? 0), 0);
 
   let armed = $state(false);
+
+  // The card is a picture on purpose: a run pasted into a chat as text loses
+  // its shape, and a screenshot of the panel drags the whole window along.
+  let carded = $state('');
+  let cardTimer = null;
+  async function copyCard() {
+    clearTimeout(cardTimer);
+    try {
+      // the card is drawn with the app's own font; canvas will fall back to a
+      // system one unless it is loaded before the first fillText
+      await document.fonts?.load?.('16px "CookieRun Bold"');
+      const coin = new Image();
+      coin.src = art('coin_strip');
+      await coin.decode().catch(() => {});
+      const canvas = drawRunCard($state.snapshot(run), { coin });
+      await invoke('copy_image', cardBytes(canvas));
+      carded = 'copied — paste it anywhere';
+    } catch (e) {
+      carded = String(e);
+    }
+    cardTimer = setTimeout(() => (carded = ''), 2500);
+  }
   let armTimer;
   function clearAll() {
     if (!armed) {
@@ -76,7 +95,7 @@
 <div class="panel">
   {#if runs.length}
     <div class="cols">
-      <div class="list" style:border-image-source="url({chipBg})">
+      <div class="list" style:border-image-source="url({art('chip_dark')})">
         <div class="head">
           <span class="accent">Runs</span>
           <span class="right">{runs.length}</span>
@@ -93,9 +112,9 @@
         <button
           class="btn"
           class:armed
-          style:--btn="url({btnBg})"
-          style:--btn-hover="url({btnHoverBg})"
-          style:--btn-down="url({btnDownBg})"
+          style:--btn="url({art('button')})"
+          style:--btn-hover="url({art('button_hover')})"
+          style:--btn-down="url({art('button_down')})"
           onclick={clearAll}
         >
           {armed ? 'Sure? — this cannot be undone' : 'Clear history'}
@@ -104,9 +123,16 @@
 
       {#if run}
         <div class="detail">
-          <div class="box" style:border-image-source="url({chipBg})">
+          <div class="box" style:border-image-source="url({art('chip_dark')})">
             <div class="head">
               <span class="accent">{day(run.started_ms)}</span>
+              <button
+                class="card-btn"
+                onclick={copyCard}
+                title="Draw this run as a picture and put it on the clipboard"
+              >
+                {carded || 'Copy card'}
+              </button>
               <span class="right">{dur(run.secs)}</span>
             </div>
             <div class="sub">
@@ -138,7 +164,7 @@
             </div>
           </div>
 
-          <div class="box" style:border-image-source="url({chipBg})">
+          <div class="box" style:border-image-source="url({art('chip_dark')})">
             <div class="head"><span class="accent">Loot</span></div>
             <div class="tally">
               {#each RARITIES as [name, cls]}
@@ -151,7 +177,7 @@
           </div>
 
           {#if run.zones?.length}
-            <div class="box" style:border-image-source="url({chipBg})">
+            <div class="box" style:border-image-source="url({art('chip_dark')})">
               <div class="head"><span class="accent">Where it happened</span></div>
               {#each run.zones as [room, secs]}
                 <div class="zone">
@@ -164,7 +190,7 @@
           {/if}
 
           {#if run.notable?.length}
-            <div class="box grow" style:border-image-source="url({chipBg})">
+            <div class="box grow" style:border-image-source="url({art('chip_dark')})">
               <div class="head">
                 <span class="accent">Finds</span>
                 <span class="right">{run.notable.length}</span>
@@ -218,7 +244,7 @@
     flex-direction: column;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
 
   .cols {
@@ -251,7 +277,7 @@
     overflow-y: auto;
   }
   .detail::-webkit-scrollbar { width: 6px; }
-  .detail::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .detail::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .box {
     box-sizing: border-box;
@@ -274,10 +300,10 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.4px;
-    color: #8d5f5f;
+    color: var(--edge-2b);
   }
-  .accent { color: #8d5f5f; }
-  .right { margin-left: auto; color: #7b6a63; }
+  .accent { color: var(--edge-2b); }
+  .right { margin-left: auto; color: var(--dim-2); }
 
   .scroll {
     flex: 1 1 auto;
@@ -288,7 +314,7 @@
     gap: 1px;
   }
   .scroll::-webkit-scrollbar { width: 6px; }
-  .scroll::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .row {
     display: grid;
@@ -297,7 +323,7 @@
     gap: 0 6px;
     font: inherit;
     font-size: 11px;
-    color: #c3af75;
+    color: var(--bone-6);
     text-align: left;
     background: rgba(0, 0, 0, 0.2);
     border: none;
@@ -306,10 +332,10 @@
     cursor: pointer;
   }
   .row:hover { background: rgba(0, 0, 0, 0.35); }
-  .row.on { border-left-color: #8d5f5f; background: rgba(150, 37, 56, 0.25); }
+  .row.on { border-left-color: var(--edge-2b); background: rgba(150, 37, 56, 0.25); }
   .when { grid-area: when; }
-  .len { grid-area: len; color: #7b6a63; }
-  .sum { grid-area: sum; font-size: 10px; color: #8a7a5a; }
+  .len { grid-area: len; color: var(--dim-2); }
+  .sum { grid-area: sum; font-size: 10px; color: var(--edge-8); }
 
   .rates { display: flex; gap: 6px; padding-top: 2px; }
   .rate { flex: 1; min-width: 0; }
@@ -317,14 +343,14 @@
     font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.4px;
-    color: #9a8a68;
+    color: var(--bone-4);
   }
   .value { font-size: 16px; line-height: 20px; }
-  .sub { font-size: 10px; color: #8a7a5a; }
+  .sub { font-size: 10px; color: var(--edge-8); }
 
   .tally { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 14px; }
   .tallyrow { display: flex; justify-content: space-between; gap: 8px; }
-  .tallyrow b { font-weight: normal; color: #e0cc90; }
+  .tallyrow b { font-weight: normal; color: var(--bone-9); }
 
   .zone { display: flex; align-items: center; gap: 6px; }
   .zone .name { flex: none; width: 116px; font-size: 11px; }
@@ -332,14 +358,14 @@
     flex: 1 1 auto;
     height: 6px;
     background: rgba(0, 0, 0, 0.35);
-    border: 1px solid #3a2b2b;
+    border: 1px solid var(--ground-10);
   }
-  .bar i { display: block; height: 100%; background: #8d5f5f; }
+  .bar i { display: block; height: 100%; background: var(--edge-2b); }
 
   .find { display: flex; align-items: baseline; gap: 8px; padding: 1px 0; }
   .find .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tier { flex: none; width: 24px; text-align: right; }
-  .dim { color: #8a7a5a; font-size: 11px; }
+  .dim { color: var(--edge-8); font-size: 11px; }
 
   .empty {
     margin: auto;
@@ -347,7 +373,7 @@
     text-align: center;
     font-size: 11px;
     line-height: 17px;
-    color: #8a7a5a;
+    color: var(--edge-8);
   }
 
   .btn {
@@ -360,8 +386,8 @@
     flex: none;
     font: inherit;
     font-size: 10px;
-    color: #f0e0b0;
-    text-shadow: 0 1px 0 #140a0a;
+    color: var(--bone-13);
+    text-shadow: 0 1px 0 var(--ground-1);
     border: 6px solid transparent;
     border-image-source: var(--btn);
     border-image-slice: 6 fill;
@@ -374,11 +400,24 @@
   .btn:active { border-image-source: var(--btn-down); }
   .btn.armed { color: #f0c0c0; }
 
+  .card-btn {
+    font: inherit;
+    font-size: 11px;
+    color: var(--edge-9);
+    background: none;
+    border: 1px solid var(--edge-1);
+    border-radius: 2px;
+    padding: 1px 6px;
+    margin-left: 8px;
+    cursor: pointer;
+  }
+  .card-btn:hover { color: var(--gold-2); border-color: var(--edge-3); }
+
   .c-sat { color: #ca1717; }
   .c-set { color: #40d040; }
   .c-her { color: #00ffae; }
   .c-ang { color: #f6f794; }
   .c-unh { color: #e04a7a; }
-  .c-gold { color: #e8c860; }
+  .c-gold { color: var(--gold-2); }
   .c-xp { color: #a06ae0; }
 </style>

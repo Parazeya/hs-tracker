@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.8 — 2026-08-15
+
+### Added
+
+- Bosses and chests counted for the session, and kept with every run.
+- Pause: by hand from the clock, the tray or `Ctrl+Shift+P`, and by itself after
+  five quiet minutes. The overlay ices over while it is held.
+- Magic find, level and hero level, live from the client's heartbeat.
+- A flourish over the screen for the drops worth one, drawn with the game's own
+  effects. Its own window: place it, size it, time it, shade it. Off by default.
+- **Copy card** in Runs — a session as a picture, on the clipboard.
+- An **Ebontharn** skin in Settings: the season's palette, its sprites, and its
+  sky behind the dashboard.
+- The dashboard now says why the numbers are not moving.
+
+### Fixed
+
+- Linux with an NVIDIA card: the app came up as a tray icon and no window.
+- The overlay did not grow when a row was added to it; it measures itself now.
+- The overlay could lose always-on-top across a hide and show.
+- The minimize button was drawn by hand and did not follow the skin.
+
+### Changed
+
+- The README is for players now; the rest moved to `DEVELOPING.md`.
+
 ## 0.9.7 — 2026-08-14
 
 What a session was worth, kept after it ends — and told to Discord while it

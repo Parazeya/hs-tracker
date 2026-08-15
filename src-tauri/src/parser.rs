@@ -44,10 +44,21 @@ pub enum GameEvent {
         herolevel: i64,
         difficulty: i64,
         kills: i64,
+        /// every `statistic…` counter the save carries, by flattened name —
+        /// bosses put down, chests opened, floors cleared, deaths
+        tallies: HashMap<String, i64>,
     },
     Mail(bool),
     /// the room the character stands in, straight from the client's heartbeat
     Room(String),
+    /// what the same heartbeat says about the character: magic find, the two
+    /// levels, and whether the room it is in is the satanic zone
+    Vitals {
+        mf: i64,
+        level: i64,
+        hlevel: i64,
+        satanic_here: bool,
+    },
     ItemAdded {
         rarity: Value,
         mf: bool,
@@ -292,6 +303,27 @@ fn int_field(obj: &Value, names: &[&str]) -> i64 {
     field_ref(obj, names).and_then(as_int).unwrap_or(0)
 }
 
+/// The counters the character save keeps beside experience and kills: bosses
+/// killed, chests opened, floors cleared, deaths. The game names them all
+/// `statistic…` and sends every one on every save. Which of them are worth
+/// showing is not the parser's business, so it hands over the lot — flattened
+/// to letters and digits, the way the rest of the field lookups are, so
+/// `statisticUberDamienKills` and `statistic_uber_damien_kills` are one key.
+fn tallies(obj: &Value) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    let Some(map) = obj.as_object() else { return out };
+    for (key, value) in map {
+        let flat: String =
+            key.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+        if flat.len() > "statistic".len() && flat.starts_with("statistic") {
+            if let Some(n) = as_int(value) {
+                out.insert(flat, n);
+            }
+        }
+    }
+    out
+}
+
 fn msg_text(obj: &Value) -> String {
     match field_ref(obj, &["message"]) {
         Some(Value::String(s)) => s.clone(),
@@ -480,16 +512,29 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
     if has(d, XP_TOTAL_FIELDS) {
         events.push(GameEvent::XpGain(xp_gain(d)));
     }
-    // game_state is a base64 blob the client sends constantly: room, level,
-    // magic find, session time
+    // The client's heartbeat, base64'd: where the character stands and how it
+    // stands there. It arrives every few seconds, which is what makes it worth
+    // reading — the character save, where most of these numbers also live,
+    // arrives when the game feels like saving.
     if let Some(Value::String(blob)) = field(d, &["game_state", "gameState"]) {
-        if let Some(room) = b64_json(&blob)
-            .as_ref()
-            .and_then(|v| field_ref(v, &["room"]))
-            .and_then(|v| v.as_str())
-        {
-            if !room.is_empty() {
-                events.push(GameEvent::Room(room.to_string()));
+        if let Some(state) = b64_json(&blob) {
+            if let Some(room) = field_ref(&state, &["room"]).and_then(|v| v.as_str()) {
+                if !room.is_empty() {
+                    events.push(GameEvent::Room(room.to_string()));
+                }
+            }
+            let mf = int_field(&state, &["mf"]);
+            let level = int_field(&state, &["level"]);
+            let hlevel = int_field(&state, &["hlevel", "heroLevel", "herolevel"]);
+            if mf > 0 || level > 0 || hlevel > 0 {
+                events.push(GameEvent::Vitals {
+                    mf,
+                    level,
+                    hlevel,
+                    // the game says outright whether this room is the satanic
+                    // one; comparing zone codes was always a guess at it
+                    satanic_here: int_field(&state, &["sz"]) == 1,
+                });
             }
         }
     }
@@ -551,6 +596,7 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
                     "total_monster_kills",
                 ],
             ),
+            tallies: tallies(d),
         });
     } else if !full_account && !identity_account && has(d, XP_GAIN_FIELDS) && !has(d, XP_TOTAL_FIELDS) {
         events.push(GameEvent::XpGain(xp_gain(d)));

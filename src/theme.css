@@ -1,0 +1,94 @@
+/* The palette, in one place.
+ *
+ * Every chrome colour the app draws with is a token here; the rarities, the
+ * frozen tint and the reds that mean danger stay literal in the components,
+ * because those mean the same thing whatever the skin is.
+ *
+ * Written by tools/gen_theme.py — edit there, not here.
+ */
+:root {
+  --bone-3: #8d7d63;
+  --bone-4: #9a8a68;
+  --bone-5: #a99873;
+  --bone-6: #c3af75;
+  --bone-7: #b8a894;
+  --bone-8: #c8b48a;
+  --bone-9: #e0cc90;
+  --bone-10: #e2cf98;
+  --bone-11: #e8d8a8;
+  --bone-12: #e8d9b0;
+  --bone-13: #f0e0b0;
+  --bone-14: #f0e8b0;
+  --bone-15: #f4e6bb;
+  --dim-1: #4a3a3a;
+  --dim-2: #7b6a63;
+  --edge-1: #4a3428;
+  --edge-2: #5a3a3a;
+  --edge-3: #6b4a34;
+  --edge-4: #7a4a4a;
+  --edge-5: #6b5b53;
+  --edge-6: #7a6a4e;
+  --edge-7: #8a5a5a;
+  --edge-8: #8a7a5a;
+  --edge-9: #8c7668;
+  --edge-1b: #8d5a5a;
+  --edge-2b: #8d5f5f;
+  --gold-1: #e2c563;
+  --gold-2: #e8c860;
+  --ground-1: #140a0a;
+  --ground-2: #1a0a0a;
+  --ground-3: #180d10;
+  --ground-4: #1b1013;
+  --ground-5: #1d1414;
+  --ground-6: #24151a;
+  --ground-7: #241a1c;
+  --ground-8: #2c1a1d;
+  --ground-9: #3b2126;
+  --ground-10: #3a2b2b;
+  --ground-11: #3d2a2c;
+}
+
+/* Ebontharn: the season's own colours. Only the hues move — every
+   lightness is the one above, so the contrast the layout was built around
+   is unchanged. */
+:root[data-theme='ebontharn'] {
+  --bone-3: #6e9a8d;
+  --bone-4: #77a497;
+  --bone-5: #85b4a6;
+  --bone-6: #8fc8b8;
+  --bone-7: #a8c5bd;
+  --bone-8: #a2d1c4;
+  --bone-9: #b9dcd2;
+  --bone-10: #c0e0d7;
+  --bone-11: #d0e8e1;
+  --bone-12: #d6ebe5;
+  --bone-13: #dceee9;
+  --bone-14: #dceee9;
+  --bone-15: #e7f3f0;
+  --dim-1: #485959;
+  --dim-2: #7b9393;
+  --edge-1: #3b2a48;
+  --edge-2: #4c385c;
+  --edge-3: #523768;
+  --edge-4: #654a7a;
+  --edge-5: #624876;
+  --edge-6: #674c7c;
+  --edge-7: #75578d;
+  --edge-8: #75578d;
+  --edge-9: #7e5d97;
+  --edge-1b: #77588f;
+  --edge-2b: #795a92;
+  --gold-1: #60e5b7;
+  --gold-2: #62e6b8;
+  --ground-1: #0e0a14;
+  --ground-2: #110a1a;
+  --ground-3: #120d18;
+  --ground-4: #15101b;
+  --ground-5: #18131e;
+  --ground-6: #1b1524;
+  --ground-7: #1e1826;
+  --ground-8: #211a2c;
+  --ground-9: #2c213b;
+  --ground-10: #31273e;
+  --ground-11: #31283f;
+}

@@ -1,15 +1,9 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
   import { listen } from '@tauri-apps/api/event';
   import { ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { soundUrl, play } from './audio.js';
-
-  import chipBg from './assets/game/chip_dark.png';
-  import btnBg from './assets/game/button.png';
-  import btnHoverBg from './assets/game/button_hover.png';
-  import btnDownBg from './assets/game/button_down.png';
-  import checkOn from './assets/game/check_on.png';
-  import checkOff from './assets/game/check_off.png';
 
   // only named items can be listed: an ordinary base has no identity of its own
   const NAMED = [
@@ -316,12 +310,12 @@
 
 <div class="panel">
   {#if settings}
-    <div class="section" style:border-image-source="url({chipBg})">
+    <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>Rarity alerts — what makes a sound at all</div>
       <div class="grid">
         {#each ALERT_RARITIES as rarity}
           <button class="secopt" onclick={() => toggleAlert(rarity)}>
-            <img src={(settings.alerts ?? []).includes(rarity) ? checkOn : checkOff} alt="" />
+            <img src={(settings.alerts ?? []).includes(rarity) ? art('check_on') : art('check_off')} alt="" />
             <span class={rarityCls[rarity]}>{rarity}</span>
           </button>
         {/each}
@@ -343,12 +337,12 @@
       </div>
     </div>
 
-    <div class="section" style:border-image-source="url({chipBg})">
+    <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>Custom filter — lists that outrank the above</div>
 
       <div class="line">
         <button class="check" onclick={() => { settings.use_filter = !settings.use_filter; save(); }} aria-label="use filter">
-          <img src={settings.use_filter ? checkOn : checkOff} alt="" />
+          <img src={settings.use_filter ? art('check_on') : art('check_off')} alt="" />
         </button>
         <span class="opt">Use the selected filter</span>
       </div>
@@ -365,10 +359,10 @@
             <option value="">no filters yet</option>
           {/each}
         </select>
-        <button class="btn" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={() => addFilter(`Filter ${filters.length + 1}`)}>New</button>
-        <button class="btn" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={generate} title="Split S and SS gear into three bands by how rare their drop is">Generate</button>
+        <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => addFilter(`Filter ${filters.length + 1}`)}>New</button>
+        <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={generate} title="Split S and SS gear into three bands by how rare their drop is">Generate</button>
         {#if filter}
-          <button class="btn" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={duplicateFilter} title="Copy this filter, sounds and all">Copy</button>
+          <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={duplicateFilter} title="Copy this filter, sounds and all">Copy</button>
         {/if}
         {#if filter}
           <button
@@ -381,9 +375,9 @@
       </div>
 
       <div class="line">
-        <button class="btn" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={importFilter} title="Load a filter someone shared with you, sounds included">Import…</button>
+        <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={importFilter} title="Load a filter someone shared with you, sounds included">Import…</button>
         {#if filter}
-          <button class="btn" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={exportFilter} title="Save this filter to a file, sounds included">Export…</button>
+          <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={exportFilter} title="Save this filter to a file, sounds included">Export…</button>
         {/if}
         {#if notice}
           <span class="notice">{notice}</span>
@@ -393,7 +387,7 @@
       {#if filter}
         <input
           class="field name"
-          style:border-image-source="url({chipBg})"
+          style:border-image-source="url({art('chip_dark')})"
           value={filter.name}
           oninput={(e) => { filter.name = e.currentTarget.value; save(); }}
         />
@@ -412,14 +406,14 @@
           <span class="count">{list.items.length}</span>
         </button>
       {/each}
-      <button class="btn add" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={addList}>+ list</button>
+      <button class="btn add" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={addList}>+ list</button>
     </div>
   {/if}
 
   {#if current}
-    <div class="head" style:border-image-source="url({chipBg})">
+    <div class="head" style:border-image-source="url({art('chip_dark')})">
       <button class="check" onclick={() => { current.enabled = !current.enabled; save(); }} aria-label="enabled">
-        <img src={current.enabled ? checkOn : checkOff} alt="" />
+        <img src={current.enabled ? art('check_on') : art('check_off')} alt="" />
       </button>
       <input
         class="name"
@@ -436,7 +430,7 @@
       >{armed === 'list' ? 'delete?' : '×'}</button>
     </div>
 
-    <div class="sound" style:border-image-source="url({chipBg})">
+    <div class="sound" style:border-image-source="url({art('chip_dark')})">
       <span class="file">{status[soundKey] ?? 'no sound yet — the rarity alert plays instead'}</span>
       <input
         class="vol"
@@ -447,13 +441,13 @@
         value={current.volume}
         oninput={(e) => { current.volume = +e.currentTarget.value; save(); }}
       />
-      <button class="btn" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={test}>Test</button>
-      <button class="btn" style:--btn="url({btnBg})" style:--btn-hover="url({btnHoverBg})" style:--btn-down="url({btnDownBg})" onclick={pickSound}>Browse…</button>
+      <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={test}>Test</button>
+      <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={pickSound}>Browse…</button>
     </div>
 
     <input
       class="field"
-      style:border-image-source="url({chipBg})"
+      style:border-image-source="url({art('chip_dark')})"
       placeholder="search to add, or to narrow the list below…"
       bind:value={query}
       onkeydown={(e) => e.key === 'Enter' && matches[0] && addItem(matches[0].name)}
@@ -464,7 +458,7 @@
     {/if}
 
     {#if matches.length}
-      <div class="results" style:border-image-source="url({chipBg})">
+      <div class="results" style:border-image-source="url({art('chip_dark')})">
         {#each matches as it}
           <button class="hit" onclick={() => addItem(it.name)}>
             <span class={rarityCls[it.rarity]}>{it.name}</span>
@@ -553,14 +547,14 @@
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
-    color: #c3af75;
+    color: var(--bone-6);
     /* the sections stack up; when they outgrow the window the whole pane
        scrolls, so the item list never has to be squeezed to nothing */
     overflow-y: auto;
     padding-right: 2px;
   }
   .panel::-webkit-scrollbar { width: 6px; }
-  .panel::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .panel::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .section,
   .head,
@@ -582,7 +576,7 @@
   }
 
   .sechead {
-    color: #8d5f5f;
+    color: var(--edge-2b);
     font-size: 10px;
     letter-spacing: 0.3px;
     text-transform: uppercase;
@@ -624,15 +618,15 @@
   .tier {
     font: inherit;
     font-size: 11px;
-    color: #8d7d63;
+    color: var(--bone-3);
     background: rgba(0, 0, 0, 0.25);
-    border: 1px solid #3a2b2b;
+    border: 1px solid var(--ground-10);
     padding: 2px 7px;
     cursor: pointer;
   }
-  .tier.on { color: #f0e0b0; border-color: #7a4a4a; background: rgba(150, 37, 56, 0.45); }
+  .tier.on { color: var(--bone-13); border-color: var(--edge-4); background: rgba(150, 37, 56, 0.45); }
 
-  .note { color: #7b6a63; font-size: 10px; line-height: 1.4; }
+  .note { color: var(--dim-2); font-size: 10px; line-height: 1.4; }
   .notice {
     flex: 1 1 auto;
     min-width: 0;
@@ -654,30 +648,30 @@
     -webkit-appearance: none;
     font: inherit;
     font-size: 11px;
-    color: #f0e0b0;
+    color: var(--bone-13);
     background-color: rgba(0, 0, 0, 0.35);
-    background-image: linear-gradient(45deg, transparent 50%, #c3af75 50%),
-      linear-gradient(135deg, #c3af75 50%, transparent 50%);
+    background-image: linear-gradient(45deg, transparent 50%, var(--bone-6) 50%),
+      linear-gradient(135deg, var(--bone-6) 50%, transparent 50%);
     background-position: calc(100% - 12px) 50%, calc(100% - 7px) 50%;
     background-size: 5px 5px, 5px 5px;
     background-repeat: no-repeat;
-    border: 1px solid #3a2b2b;
+    border: 1px solid var(--ground-10);
     border-radius: 0;
     padding: 3px 22px 3px 6px;
     height: 24px;
     cursor: pointer;
   }
-  .picker:hover { border-color: #7a4a4a; }
+  .picker:hover { border-color: var(--edge-4); }
   .picker:focus,
   .picker:focus-visible {
     outline: none;
-    border-color: #7a4a4a;
+    border-color: var(--edge-4);
   }
   /* the popup list is the toolkit's own window; these are the only two
      properties it honours */
   .picker option {
-    background: #241a1c;
-    color: #e0cc90;
+    background: var(--ground-7);
+    color: var(--bone-9);
   }
 
   .tabs {
@@ -689,16 +683,16 @@
   .tab {
     font: inherit;
     font-size: 11px;
-    color: #8d7d63;
+    color: var(--bone-3);
     background: rgba(0, 0, 0, 0.25);
-    border: 1px solid #3a2b2b;
+    border: 1px solid var(--ground-10);
     padding: 3px 7px;
     cursor: pointer;
   }
-  .tab.on { color: #f0e0b0; border-color: #7a4a4a; background: rgba(150, 37, 56, 0.35); }
-  .tab .count { color: #6b5b53; margin-left: 4px; }
+  .tab.on { color: var(--bone-13); border-color: var(--edge-4); background: rgba(150, 37, 56, 0.35); }
+  .tab .count { color: var(--edge-5); margin-left: 4px; }
   .clash {
-    color: #e2c563;
+    color: var(--gold-1);
     font-size: 11px;
     margin-left: 4px;
     cursor: help;
@@ -708,13 +702,13 @@
     flex: none;
     font: inherit;
     font-size: 10px;
-    color: #8d7d63;
+    color: var(--bone-3);
     background: rgba(0, 0, 0, 0.25);
-    border: 1px solid #3a2b2b;
+    border: 1px solid var(--ground-10);
     padding: 2px 5px;
     cursor: pointer;
   }
-  .move:hover:not(:disabled) { color: #f0e0b0; border-color: #7a4a4a; }
+  .move:hover:not(:disabled) { color: var(--bone-13); border-color: var(--edge-4); }
   .move:disabled { opacity: 0.35; cursor: default; }
 
   .head,
@@ -731,13 +725,13 @@
     flex: 1 1 auto;
     min-width: 0;
     font: inherit;
-    color: #f0e0b0;
+    color: var(--bone-13);
     background: none;
     border: none;
     outline: none;
   }
 
-  .file { flex: 1 1 auto; min-width: 0; color: #7b6a63; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file { flex: 1 1 auto; min-width: 0; color: var(--dim-2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* drawn by us, like the sliders on the other panels: an engine left to its
      own devices renders a different control on every platform */
   .vol {
@@ -751,18 +745,18 @@
   }
   .vol::-webkit-slider-runnable-track {
     height: 4px;
-    background: #241a1c;
-    border: 1px solid #3d2a2c;
+    background: var(--ground-7);
+    border: 1px solid var(--ground-11);
   }
   .vol::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 11px;
     height: 11px;
     margin-top: -5px;
-    background: #c3af75;
-    border: 1px solid #241a1c;
+    background: var(--bone-6);
+    border: 1px solid var(--ground-7);
   }
-  .vol:hover::-webkit-slider-thumb { background: #f0e0b0; }
+  .vol:hover::-webkit-slider-thumb { background: var(--bone-13); }
 
   .field {
     flex: none;
@@ -773,7 +767,7 @@
     border-image-width: 6px;
     image-rendering: pixelated;
     font: inherit;
-    color: #f0e0b0;
+    color: var(--bone-13);
     background: none;
     outline: none;
     padding: 0 6px;
@@ -801,7 +795,7 @@
     cursor: pointer;
   }
   .hit:hover { background: rgba(150, 37, 56, 0.45); }
-  .already { margin-left: auto; color: #8d5f5f; font-size: 10px; }
+  .already { margin-left: auto; color: var(--edge-2b); font-size: 10px; }
 
   .items {
     flex: 1 1 auto;
@@ -815,7 +809,7 @@
   .items::-webkit-scrollbar,
   .results::-webkit-scrollbar { width: 6px; }
   .items::-webkit-scrollbar-thumb,
-  .results::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .results::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .listhead {
     flex: none;
@@ -824,25 +818,25 @@
     gap: 6px;
     margin-top: 2px;
     padding: 0 2px 2px;
-    border-bottom: 1px solid #3a2b2b;
-    color: #8d5f5f;
+    border-bottom: 1px solid var(--ground-10);
+    color: var(--edge-2b);
     font-size: 10px;
     letter-spacing: 0.3px;
     text-transform: uppercase;
   }
-  .listhead .count { margin-left: auto; color: #6b5b53; }
+  .listhead .count { margin-left: auto; color: var(--edge-5); }
   .link {
     font: inherit;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.3px;
-    color: #8d7d63;
+    color: var(--bone-3);
     background: none;
     border: none;
     padding: 0;
     cursor: pointer;
   }
-  .link:hover { color: #f0e0b0; }
+  .link:hover { color: var(--bone-13); }
 
   /* flat rows with a rarity edge: unmistakably contents, not controls */
   .row {
@@ -853,14 +847,14 @@
     padding: 4px 8px 4px 6px;
     min-height: 24px;
     background: rgba(0, 0, 0, 0.22);
-    border-left: 3px solid #3a2b2b;
+    border-left: 3px solid var(--ground-10);
   }
   .row:nth-child(even) { background: rgba(0, 0, 0, 0.12); }
   .row:hover { background: rgba(150, 37, 56, 0.22); }
   .row.c-sat { border-left-color: #d24b4b; }
   .row.c-set { border-left-color: #45c15a; }
   .row.c-her { border-left-color: #35d3c1; }
-  .row.c-ang { border-left-color: #e2c563; }
+  .row.c-ang { border-left-color: var(--gold-1); }
   .row.c-unh { border-left-color: #e04a7a; }
   .row span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -869,14 +863,14 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    color: #7b6a63;
+    color: var(--dim-2);
     font-size: 10px;
   }
   .letter { min-width: 16px; text-align: right; }
   .odds {
     min-width: 48px;
     text-align: right;
-    color: #6b5b53;
+    color: var(--edge-5);
     font-variant-numeric: tabular-nums;
   }
 
@@ -884,7 +878,7 @@
     flex: none;
     font: inherit;
     font-size: 14px;
-    color: #8d5a5a;
+    color: var(--edge-1b);
     background: none;
     border: none;
     cursor: pointer;
@@ -900,7 +894,7 @@
   }
 
   .empty {
-    color: #7b6a63;
+    color: var(--dim-2);
     text-align: center;
     font-size: 11px;
     line-height: 1.5;
@@ -917,7 +911,7 @@
     flex: none;
     font: inherit;
     font-size: 11px;
-    color: #f0e0b0;
+    color: var(--bone-13);
     border: 6px solid transparent;
     border-image-source: var(--btn);
     border-image-slice: 6 fill;
@@ -933,6 +927,6 @@
   .c-sat { color: #d24b4b; }
   .c-set { color: #45c15a; }
   .c-her { color: #35d3c1; }
-  .c-ang { color: #e2c563; }
+  .c-ang { color: var(--gold-1); }
   .c-unh { color: #e04a7a; }
 </style>

@@ -1,10 +1,6 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
-
-  import chipBg from './assets/game/chip_dark.png';
-  import btnBg from './assets/game/button.png';
-  import btnHoverBg from './assets/game/button_hover.png';
-  import btnDownBg from './assets/game/button_down.png';
+  import { art } from './skin.svelte.js';
 
   let items = $state([]);
   let draft = $state('');
@@ -45,23 +41,23 @@
   <div class="entry">
     <input
       class="field"
-      style:border-image-source="url({chipBg})"
+      style:border-image-source="url({art('chip_dark')})"
       placeholder="add item…"
       bind:value={draft}
       onkeydown={(e) => e.key === 'Enter' && add()}
     />
     <button
       class="btn"
-      style:--btn="url({btnBg})"
-      style:--btn-hover="url({btnHoverBg})"
-      style:--btn-down="url({btnDownBg})"
+      style:--btn="url({art('button')})"
+      style:--btn-hover="url({art('button_hover')})"
+      style:--btn-down="url({art('button_down')})"
       onclick={add}>Add</button
     >
   </div>
 
   <div class="list">
     {#each items as it, i}
-      <div class="row" style:border-image-source="url({chipBg})">
+      <div class="row" style:border-image-source="url({art('chip_dark')})">
         <button class="text" class:copied={copied === i} onclick={() => copy(i)} title="Click to copy">
           {copied === i ? 'copied!' : it}
         </button>
@@ -102,7 +98,7 @@
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
 
   .entry {
@@ -122,11 +118,11 @@
     image-rendering: pixelated;
     background: none;
     font: inherit;
-    color: #e0cc90;
+    color: var(--bone-9);
     padding: 0 4px;
     outline: none;
   }
-  .field::placeholder { color: #8a7a5a; }
+  .field::placeholder { color: var(--edge-8); }
 
   .btn {
     box-sizing: border-box;
@@ -139,8 +135,8 @@
     flex: none;
     font: inherit;
     font-size: 12px;
-    color: #e8d9b0;
-    text-shadow: 0 1px 0 #1a0a0a;
+    color: var(--bone-12);
+    text-shadow: 0 1px 0 var(--ground-2);
     background: var(--btn) no-repeat;
     background-size: 100% 100%;
     image-rendering: pixelated;
@@ -160,7 +156,7 @@
     gap: 4px;
   }
   .list::-webkit-scrollbar { width: 6px; }
-  .list::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .list::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .row {
     box-sizing: border-box;
@@ -188,7 +184,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .text:hover { color: #f0e0b0; }
+  .text:hover { color: var(--bone-13); }
   .text.copied { color: #00ffae; }
 
   .del {
@@ -196,7 +192,7 @@
     width: 20px;
     font: inherit;
     font-size: 14px;
-    color: #8a5a5a;
+    color: var(--edge-7);
     background: none;
     border: none;
     cursor: pointer;
@@ -208,7 +204,7 @@
     padding: 16px 8px;
     text-align: center;
     font-size: 11px;
-    color: #8a7a5a;
+    color: var(--edge-8);
     line-height: 16px;
   }
 </style>

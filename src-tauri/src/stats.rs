@@ -33,6 +33,51 @@ const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "ma
 /// bury the Angelic and Satanic keys the counter exists for.
 const DULL_KEYS: [&str; 2] = ["basic key", "crystal key"];
 
+/// What the save counts besides kills, in the order it is shown: the bosses the
+/// character has put down, then the chests it has opened. The game sends all 33
+/// of its `statistic…` counters on every save, so a session's worth of each is
+/// the difference between two saves — exactly how kills already work.
+///
+/// Keys are the game's own names flattened to letters and digits. A name the
+/// game changes simply stops matching: the counter disappears from the panel
+/// rather than showing a wrong number.
+pub const TALLIES: &[(&str, &str, &str)] = &[
+    ("statisticsatankills", "Satan", "boss"),
+    ("statisticdamienkills", "Damien", "boss"),
+    ("statisticreaperkills", "Reaper", "boss"),
+    ("statisticanubiskills", "Anubis", "boss"),
+    ("statisticguragkills", "Gurag", "boss"),
+    ("statisticmeviuskills", "Mevius", "boss"),
+    ("statisticodinkills", "Odin", "boss"),
+    ("statistickarpkingkills", "Karp King", "boss"),
+    ("statisticuberdamienkills", "Uber Damien", "boss"),
+    ("statisticuberreaperkills", "Uber Reaper", "boss"),
+    ("statisticuberlunakills", "Uber Luna", "boss"),
+    ("statisticuberendrixiakills", "Uber Endrixia", "boss"),
+    ("statisticubergabrielkills", "Uber Gabriel", "boss"),
+    ("statisticuberkingrakhulkills", "Uber King Rakhul", "boss"),
+    ("statisticubersheepkingkills", "Uber Sheep King", "boss"),
+    ("statisticubersungleekills", "Uber Sung Lee", "boss"),
+    ("statisticuberamunrakills", "Uber Amun Ra", "boss"),
+    ("statisticuberarchitectkills", "Uber Architect", "boss"),
+    ("statisticuberchaostowerkills", "Uber Chaos Tower", "boss"),
+    ("statisticchaostowerfloorclears", "Chaos Tower floors", "boss"),
+    ("statisticwormholeclears", "Wormholes", "boss"),
+    ("statisticcommonchestsopened", "Common", "chest"),
+    ("statisticrarechestopened", "Rare", "chest"),
+    ("statisticcrystalchestopened", "Crystal", "chest"),
+    ("statisticrubychestsopened", "Ruby", "chest"),
+    ("statisticdungeonchestsopened", "Dungeon", "chest"),
+];
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TallyCount {
+    pub label: String,
+    /// "boss" or "chest" — which list it belongs under
+    pub group: String,
+    pub total: i64,
+}
+
 /// Drops worth their own counter, matched by resolved item name. The rune
 /// groups follow the game's own grades — S is Qi through Zed, SS is the four
 /// level-100 runes. Override the whole list in settings.json if the game
@@ -108,6 +153,10 @@ pub struct DropEntry {
     /// which alert to play, decided here so the announcement, the drop and the
     /// pickup of one item cannot chime three times
     pub sound: Option<String>,
+    /// passed the alert rules — the ticker and the journal are for these
+    pub announce: bool,
+    /// passed the flourish's own rules, which are a different question
+    pub flourish: bool,
 }
 
 /// How many of a run's finds are kept with it. A long farm can drop hundreds;
@@ -131,6 +180,9 @@ pub struct Run {
     pub notable: Vec<RunDrop>,
     /// room -> seconds spent there, longest first
     pub zones: Vec<(String, u64)>,
+    /// bosses put down and chests opened; absent from runs filed before 0.9.8
+    #[serde(default)]
+    pub tallies: Vec<TallyCount>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -156,6 +208,16 @@ pub struct GameStats {
     /// the current one has been counting
     zone_time: HashMap<String, u64>,
     room_since: Option<Instant>,
+    /// A paused session keeps its counters and stops its clock. `paused_at` is
+    /// when it stopped — back-dated when the pause was the app noticing that
+    /// nothing had happened for a while, so the idle minutes do not count as
+    /// farming. `by_hand` marks a pause the player asked for, which no amount of
+    /// activity may lift.
+    paused_at: Option<Instant>,
+    paused_total: Duration,
+    by_hand: bool,
+    /// the last time the run actually moved: gold, experience, a kill, a drop
+    last_progress: Instant,
     has_mail: bool,
     total_gold: i64,
     gold_earned: i64,
@@ -166,8 +228,18 @@ pub struct GameStats {
     items: HashMap<&'static str, ItemCount>,
     /// how many items of each grade the session has produced (1 = D .. 6 = SS)
     graded: HashMap<i64, i64>,
+    /// the last figure the save reported for each `statistic…` counter, and how
+    /// far it has moved this session. A counter is only in the baseline once a
+    /// save has named it, so the very first boss of a fresh install still counts
+    tally_base: HashMap<&'static str, i64>,
+    tally_earned: HashMap<&'static str, i64>,
     resources: HashMap<&'static str, i64>,
     satanic: Option<SatanicZone>,
+    /// the character's magic find as the client last reported it, and whether
+    /// the room it is standing in is the satanic one — both straight from the
+    /// heartbeat rather than worked out from zone codes
+    mf: i64,
+    satanic_here: bool,
     room: Option<String>,
     sz_changed: Option<Instant>,
     season_mode: Option<&'static str>,
@@ -185,6 +257,12 @@ pub struct GameStats {
     prefer_ground: bool,
     alerts: Vec<String>,
     min_tier: i64,
+    /// What the flourish window answers to. It is asked here rather than after
+    /// the fact because a drop that fails the alert rules never leaves this
+    /// function — which made the flourish's own settings look like they did
+    /// nothing at all.
+    fx_rarities: Vec<String>,
+    fx_tier: i64,
     notable_defs: Vec<(String, Vec<String>)>,
     /// (sound key, item names) — an item on one of these is announced by it
     sound_lists: Vec<(String, Vec<String>)>,
@@ -209,6 +287,10 @@ impl Default for GameStats {
             started_ms: now_ms(),
             zone_time: HashMap::new(),
             room_since: None,
+            paused_at: None,
+            paused_total: Duration::ZERO,
+            by_hand: false,
+            last_progress: Instant::now(),
             has_mail: false,
             total_gold: 0,
             gold_earned: 0,
@@ -218,8 +300,12 @@ impl Default for GameStats {
             kills_earned: 0,
             items: RARITIES.iter().map(|(_, name)| (*name, ItemCount::default())).collect(),
             graded: HashMap::new(),
+            tally_base: HashMap::new(),
+            tally_earned: HashMap::new(),
             resources: RESOURCES.iter().map(|(_, name)| (*name, 0)).collect(),
             satanic: None,
+            mf: 0,
+            satanic_here: false,
             room: None,
             sz_changed: None,
             season_mode: None,
@@ -234,6 +320,8 @@ impl Default for GameStats {
             prefer_ground: true,
             alerts: JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
             min_tier: 0,
+            fx_rarities: Vec::new(),
+            fx_tier: 6,
             notable_defs: default_notable(),
             sound_lists: Vec::new(),
             notable: HashMap::new(),
@@ -257,6 +345,8 @@ impl GameStats {
         let carry = (
             self.character.take(),
             self.satanic.take(),
+            self.mf,
+            self.satanic_here,
             self.sz_changed.take(),
             self.season_mode.take(),
             self.gold_mode.take(),
@@ -272,11 +362,16 @@ impl GameStats {
             self.min_tier,
             std::mem::take(&mut self.notable_defs),
             std::mem::take(&mut self.sound_lists),
+            // the marks the boss and chest counters are measured from: a reset
+            // starts the tally again, it does not make the game recount
+            std::mem::take(&mut self.tally_base),
         );
         *self = Self::default();
         (
             self.character,
             self.satanic,
+            self.mf,
+            self.satanic_here,
             self.sz_changed,
             self.season_mode,
             self.gold_mode,
@@ -292,6 +387,7 @@ impl GameStats {
             self.min_tier,
             self.notable_defs,
             self.sound_lists,
+            self.tally_base,
         ) = carry;
         self.revision = revision + 1;
     }
@@ -328,11 +424,18 @@ impl GameStats {
     /// Add the time spent in the current room to its total and start counting
     /// again from now.
     fn bank_room_time(&mut self) {
+        self.bank_room_time_at(Instant::now());
+    }
+
+    /// The same, but counting only up to a given moment and leaving the clock
+    /// stopped: pausing must not credit the room with the idle minutes that
+    /// caused the pause.
+    fn bank_room_time_at(&mut self, at: Instant) {
         let (Some(room), Some(since)) = (self.room.clone(), self.room_since) else {
             self.room_since = Some(Instant::now());
             return;
         };
-        let secs = since.elapsed().as_secs();
+        let secs = at.saturating_duration_since(since).as_secs();
         if secs > 0 {
             *self.zone_time.entry(room).or_insert(0) += secs;
         }
@@ -344,7 +447,7 @@ impl GameStats {
     /// none of those are runs, and a history full of them is noise.
     pub fn finish(&mut self) -> Option<Run> {
         self.bank_room_time();
-        let secs = self.start.elapsed().as_secs();
+        let secs = self.active().as_secs();
         let nothing_happened = self.gold_earned == 0 && self.xp_earned == 0 && self.kills_earned == 0;
         if secs < 60 || nothing_happened {
             return None;
@@ -379,7 +482,82 @@ impl GameStats {
             items: self.items.iter().map(|(name, c)| (name.to_string(), c.total)).collect(),
             notable,
             zones,
+            tallies: self.tallies(),
         })
+    }
+
+    /// How long the session has actually been running: the clock less whatever
+    /// it has spent paused. Every rate divides by this, so a run left standing
+    /// while the player made tea reports what the farming was worth, not what
+    /// the wall clock says.
+    fn active(&self) -> Duration {
+        let mut ran = self.start.elapsed().saturating_sub(self.paused_total);
+        if let Some(at) = self.paused_at {
+            ran = ran.saturating_sub(at.elapsed());
+        }
+        ran
+    }
+
+    pub fn paused(&self) -> bool {
+        self.paused_at.is_some()
+    }
+
+    /// Stop the clock as of `since`, which is now for a pause the player asked
+    /// for and the last sign of life for one the app decided on.
+    fn hold(&mut self, since: Instant, by_hand: bool) {
+        if self.paused_at.is_none() {
+            self.bank_room_time_at(since);
+            self.room_since = None;
+            self.paused_at = Some(since);
+            self.revision += 1;
+        }
+        self.by_hand |= by_hand;
+    }
+
+    fn release(&mut self) {
+        if let Some(at) = self.paused_at.take() {
+            self.paused_total += at.elapsed();
+            self.room_since = Some(Instant::now());
+            self.revision += 1;
+        }
+        self.by_hand = false;
+        self.last_progress = Instant::now();
+    }
+
+    /// The pause button and the hotkey. A hand-made pause outranks the idle
+    /// watch: it lasts until the same hand lifts it.
+    pub fn set_paused(&mut self, on: bool) {
+        if on {
+            self.hold(Instant::now(), true);
+        } else {
+            self.release();
+        }
+    }
+
+    /// Called on the watcher's beat. A run that has shown no sign of life for
+    /// `after` is not a run in progress, so the clock stops — back to the moment
+    /// it went quiet, not to now.
+    pub fn watch_idle(&mut self, after: Option<Duration>) {
+        let Some(after) = after else {
+            // the setting went off; only a hand-made pause survives it
+            if self.paused() && !self.by_hand {
+                self.release();
+            }
+            return;
+        };
+        if self.paused() || self.last_progress.elapsed() < after {
+            return;
+        }
+        let since = self.last_progress;
+        self.hold(since, false);
+    }
+
+    /// The run moved. Anything that lifts an idle pause goes through here.
+    fn progressed(&mut self) {
+        self.last_progress = Instant::now();
+        if self.paused() && !self.by_hand {
+            self.release();
+        }
     }
 
     /// How many items of one grade this session has produced.
@@ -410,6 +588,12 @@ impl GameStats {
         self.revision += 1;
         self.alerts = alerts;
         self.min_tier = min_tier;
+    }
+
+    /// The flourish has rules of its own, and they are not the alert rules.
+    pub fn set_flourish_filter(&mut self, rarities: Vec<String>, tier: i64) {
+        self.fx_rarities = rarities;
+        self.fx_tier = tier;
     }
 
     /// Lists the user built by hand: their sound wins over the rarity alerts,
@@ -466,6 +650,10 @@ impl GameStats {
         self.alerts.iter().any(|r| r == rarity) && tier >= self.min_tier
     }
 
+    fn worth_a_flourish(&self, rarity: &str, tier: i64) -> bool {
+        self.fx_rarities.iter().any(|r| r == rarity) && tier >= self.fx_tier
+    }
+
     /// Returns the journal entry when this event produced a new tracked drop.
     pub fn apply(&mut self, event: &GameEvent) -> Option<DropEntry> {
         self.revision += 1;
@@ -478,6 +666,7 @@ impl GameStats {
                 if gained > 0 {
                     self.total_xp += gained;
                     self.xp_earned += gained;
+                    self.progressed();
                 }
             }
             GameEvent::Account {
@@ -491,6 +680,7 @@ impl GameStats {
                 herolevel,
                 difficulty,
                 kills,
+                tallies,
             } => {
                 if *has_experience {
                     self.last_save = Some(Instant::now());
@@ -507,6 +697,7 @@ impl GameStats {
                         let diff = experience - self.total_xp;
                         if diff > 0 {
                             self.xp_earned += diff;
+                            self.progressed();
                         }
                     }
                     self.total_xp = *experience;
@@ -522,9 +713,27 @@ impl GameStats {
                         let diff = kills - self.total_kills;
                         if diff > 0 {
                             self.kills_earned += diff;
+                            self.progressed();
                         }
                     }
                     self.total_kills = *kills;
+                }
+                // the same rebase for the bosses and the chests: the first save
+                // to name a counter only sets the mark it is measured from
+                for (key, _, _) in TALLIES {
+                    let Some(&now) = tallies.get(*key) else { continue };
+                    match self.tally_base.entry(key) {
+                        std::collections::hash_map::Entry::Occupied(mut seen) => {
+                            let diff = now - seen.get();
+                            if diff > 0 {
+                                *self.tally_earned.entry(key).or_insert(0) += diff;
+                            }
+                            seen.insert(now);
+                        }
+                        std::collections::hash_map::Entry::Vacant(fresh) => {
+                            fresh.insert(now);
+                        }
+                    }
                 }
                 // a login-identity packet carries no experience and may report
                 // a different season than the character actually plays, so it
@@ -569,6 +778,26 @@ impl GameStats {
                     self.bank_room_time();
                     self.room = Some(room.clone());
                     self.room_since = Some(Instant::now());
+                }
+            }
+            GameEvent::Vitals { mf, level, hlevel, satanic_here } => {
+                if *mf != self.mf || *satanic_here != self.satanic_here {
+                    self.revision += 1;
+                }
+                self.mf = *mf;
+                self.satanic_here = *satanic_here;
+                // The save carries these too, but it arrives when the game
+                // decides to save; the heartbeat is a few seconds old at worst.
+                // Only what the heartbeat actually reported is taken.
+                if let Some(c) = self.character.as_mut() {
+                    if *level > 0 && c.level != *level {
+                        c.level = *level;
+                        self.revision += 1;
+                    }
+                    if *hlevel > 0 && c.herolevel != *hlevel {
+                        c.herolevel = *hlevel;
+                        self.revision += 1;
+                    }
                 }
             }
             GameEvent::ItemAdded {
@@ -652,6 +881,7 @@ impl GameStats {
                         }
                     }
                     self.count_notable(name, n);
+                    self.progressed();
                 }
                 // One notification per item: either when it hits the ground or
                 // when it lands in the bag, never both. The drop on the ground
@@ -667,11 +897,11 @@ impl GameStats {
                 } else {
                     !*ground
                 };
-                if wanted
-                    && (*announced
-                        || listed_hit
-                        || (!is_resource && self.passes_filter(&rarity_key, tier)))
-                {
+                let announce = *announced
+                    || listed_hit
+                    || (!is_resource && self.passes_filter(&rarity_key, tier));
+                let flourish = !is_resource && self.worth_a_flourish(&rarity_key, tier);
+                if wanted && (announce || flourish) {
                     // The server announces a notable find in chat the moment
                     // it drops — the only signal that arrives before the item
                     // is picked up and says what it is. The local drop and the
@@ -707,11 +937,17 @@ impl GameStats {
                         announced: *announced,
                         zone: self.satanic.as_ref().map(|s| s.zone.clone()),
                         room: self.room.clone(),
+                        announce,
+                        flourish,
                     };
-                    if self.drops.len() >= JOURNAL_CAP {
-                        self.drops.pop_front();
+                    // the journal is the alert rules' list; a drop that only
+                    // earned a flourish does not belong in it
+                    if announce {
+                        if self.drops.len() >= JOURNAL_CAP {
+                            self.drops.pop_front();
+                        }
+                        self.drops.push_back(entry.clone());
                     }
-                    self.drops.push_back(entry.clone());
                     return Some(entry);
                 }
             }
@@ -739,6 +975,7 @@ impl GameStats {
         // then subtracted from the balance step so the same coins count once.
         if c.delta > 0 {
             self.gold_earned += c.delta;
+            self.progressed();
             self.banked += c.delta;
             self.last_bank = Some(Instant::now());
         }
@@ -764,6 +1001,7 @@ impl GameStats {
                 self.banked -= already;
                 if diff > already {
                     self.gold_earned += diff - already;
+                    self.progressed();
                 }
             }
         }
@@ -773,24 +1011,45 @@ impl GameStats {
 
     /// Called once a sampling interval by the watcher thread.
     pub fn sample(&mut self) {
+        // a paused run has nothing to plot: its clock is not moving
+        if self.paused() {
+            return;
+        }
         self.revision += 1;
         if self.series.len() >= SERIES_CAP {
             return;
         }
         self.series.push(SeriesPoint {
-            t: self.start.elapsed().as_secs(),
+            t: self.active().as_secs(),
             gold: self.gold_earned,
             xp: self.xp_earned,
         });
     }
 
     fn per_hour(&self, value: i64) -> i64 {
-        let secs = self.start.elapsed().as_secs();
+        let secs = self.active().as_secs();
         if secs == 0 {
             0
         } else {
             value * 3600 / secs as i64
         }
+    }
+
+    /// The bosses and chests this session has to its name, in the table's own
+    /// order and without the ones still at zero — a list of everything the game
+    /// counts would be a wall of noughts.
+    fn tallies(&self) -> Vec<TallyCount> {
+        TALLIES
+            .iter()
+            .filter_map(|(key, label, group)| {
+                let total = *self.tally_earned.get(key)?;
+                (total > 0).then(|| TallyCount {
+                    label: label.to_string(),
+                    group: group.to_string(),
+                    total,
+                })
+            })
+            .collect()
     }
 
     pub fn snapshot(&self, status: String) -> Snapshot {
@@ -807,7 +1066,8 @@ impl GameStats {
             .collect();
         Snapshot {
             status,
-            session_secs: self.start.elapsed().as_secs(),
+            session_secs: self.active().as_secs(),
+            paused: self.paused(),
             has_mail: self.has_mail,
             gold: Line {
                 total: self.total_gold,
@@ -840,7 +1100,10 @@ impl GameStats {
             items,
             satanic_zone: self.satanic.clone(),
             room: self.room.clone(),
+            mf: self.mf,
+            satanic_here: self.satanic_here,
             character: self.character.clone(),
+            tallies: self.tallies(),
         }
     }
 
@@ -915,6 +1178,8 @@ pub struct ItemStats {
 pub struct Snapshot {
     pub status: String,
     pub session_secs: u64,
+    /// the clock is stopped: by hand, or because nothing has happened for a while
+    pub paused: bool,
     /// how long ago the game last reported these — it only does so when it
     /// saves the character or banks gold
     pub save_age_secs: Option<u64>,
@@ -933,7 +1198,13 @@ pub struct Snapshot {
     pub satanic_zone: Option<SatanicZone>,
     /// where the character is standing, e.g. "Act_08_02"
     pub room: Option<String>,
+    /// magic find, live off the heartbeat, and whether this room is the
+    /// satanic zone — the game says so itself
+    pub mf: i64,
+    pub satanic_here: bool,
     pub character: Option<CharacterInfo>,
+    /// bosses put down and chests opened this session
+    pub tallies: Vec<TallyCount>,
 }
 
 #[derive(Serialize)]
@@ -1036,6 +1307,7 @@ mod tests {
             herolevel: 20,
             difficulty: 2,
             kills: 0,
+            tallies: HashMap::new(),
         }
     }
 
@@ -1113,6 +1385,7 @@ mod tests {
             herolevel: 112,
             difficulty: 2,
             kills,
+            tallies: HashMap::new(),
         }
     }
 
@@ -1217,6 +1490,89 @@ mod tests {
         assert_eq!(listed.sound.as_deref(), Some("list-chase"));
         // and an item that is on no list still obeys the switches
         assert!(s.apply(&drop("Eternity", "b")).is_none(), "unlisted items follow the filter");
+    }
+
+    #[test]
+    fn the_flourish_asks_its_own_question() {
+        let mut s = GameStats::default();
+        // alerts want only the very top; the flourish is set wider
+        s.set_filter(vec!["Unholy".into()], 6);
+        s.set_flourish_filter(vec!["Satanic".into()], 5);
+        s.set_prefer_ground(false);
+
+        // an S-grade Satanic: nothing for the alerts, everything for the window
+        let drop = s.apply(&tiered_satanic(5, "a")).expect("the flourish wants it");
+        assert!(!drop.announce, "the alert rules did not ask for this one");
+        assert!(drop.flourish);
+        assert!(s.extra().drops.is_empty(), "and it does not join the journal");
+
+        // below the flourish's grade and below the alerts' — nothing at all
+        assert!(s.apply(&tiered_satanic(4, "b")).is_none());
+
+        // switching the flourish off leaves the alerts as they were
+        s.set_flourish_filter(Vec::new(), 6);
+        assert!(s.apply(&tiered_satanic(5, "c")).is_none());
+    }
+
+    #[test]
+    fn a_quiet_run_stops_its_own_clock() {
+        let mut s = GameStats::default();
+        // the first save only calibrates; nothing has been earned yet
+        s.apply(&account_packet("x", 5, 500));
+
+        // no patience at all, so the next beat finds the run standing still
+        s.watch_idle(Some(Duration::ZERO));
+        assert!(s.paused(), "a run with nothing happening stops counting");
+
+        s.apply(&account_packet("x", 9, 900));
+        assert!(!s.paused(), "and the next sign of life starts it again");
+
+        // a pause the player asked for is theirs alone to lift
+        s.set_paused(true);
+        s.apply(&account_packet("x", 20, 2000));
+        assert!(s.paused(), "activity does not undo a hand-made pause");
+        s.watch_idle(None);
+        assert!(s.paused(), "nor does switching the idle watch off");
+        s.set_paused(false);
+        assert!(!s.paused());
+    }
+
+    #[test]
+    fn bosses_and_chests_count_from_the_first_save_on() {
+        let save = |satan: i64, odin: i64, ruby: i64| match account_packet("x", 1, 1) {
+            GameEvent::Account { experience, season, hardcore, blood_pact, name, level, herolevel, difficulty, kills, .. } => {
+                GameEvent::Account {
+                    experience, has_experience: true, season, hardcore, blood_pact, name, level,
+                    herolevel, difficulty, kills,
+                    tallies: HashMap::from([
+                        ("statisticsatankills".to_string(), satan),
+                        ("statisticodinkills".to_string(), odin),
+                        ("statisticrubychestsopened".to_string(), ruby),
+                    ]),
+                }
+            }
+            other => other,
+        };
+        let counted = |s: &GameStats, label: &str| {
+            s.tallies().iter().find(|t| t.label == label).map_or(0, |t| t.total)
+        };
+
+        let mut s = GameStats::default();
+        // the character arrives with a history; none of it belongs to this session
+        s.apply(&save(60, 0, 376));
+        assert!(s.tallies().is_empty(), "the first save only sets the mark");
+
+        s.apply(&save(63, 1, 380));
+        assert_eq!(counted(&s, "Satan"), 3);
+        assert_eq!(counted(&s, "Ruby"), 4);
+        // a counter that stood at zero still counts its first kill
+        assert_eq!(counted(&s, "Odin"), 1);
+
+        s.reset();
+        assert!(s.tallies().is_empty(), "a reset starts the tally again");
+        s.apply(&save(64, 1, 380));
+        assert_eq!(counted(&s, "Satan"), 1, "and the game is not made to recount");
+        assert_eq!(counted(&s, "Odin"), 0);
     }
 
     #[test]

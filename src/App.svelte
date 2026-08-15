@@ -1,18 +1,9 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
   import { listen } from '@tauri-apps/api/event';
   import { buffInfo, defaultBuffIcon, zoneName, icon } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
-
-  import panelBg from './assets/game/panel.png';
-  import chipBg from './assets/game/chip_dark.png';
-  import btnBg from './assets/game/button.png';
-  import btnHoverBg from './assets/game/button_hover.png';
-  import btnDownBg from './assets/game/button_down.png';
-  import headerBg from './assets/game/header.png';
-  import coinStrip from './assets/game/coin_strip.png';
-  import lockGold from './assets/game/lock_gold.png';
-  import lockPale from './assets/game/lock_pale.png';
 
   let snap = $state(null);
 
@@ -52,7 +43,9 @@
   // running locally so the seconds never stutter between two pushes
   let clock = $state({ secs: 0, at: Date.now() });
   let tick = $state(Date.now());
-  let sessionSecs = $derived(clock.secs + Math.floor((tick - clock.at) / 1000));
+  let sessionSecs = $derived(
+    clock.secs + (snap?.paused ? 0 : Math.floor((tick - clock.at) / 1000)),
+  );
 
   function received(s) {
     snap = s;
@@ -104,6 +97,22 @@
       return id == null ? null : buffInfo(id);
     })
   );
+
+  // The window is only ever as tall as the panel inside it. Measuring here and
+  // telling the backend keeps the two in step whatever rows are switched on —
+  // and means adding a row to this file needs nothing done anywhere else.
+  let panelEl;
+  $effect(() => {
+    if (!panelEl) return;
+    const report = () => {
+      const height = panelEl.getBoundingClientRect().height;
+      if (height > 0) invoke('fit_overlay', { height }).catch(() => {});
+    };
+    const observer = new ResizeObserver(report);
+    observer.observe(panelEl);
+    report();
+    return () => observer.disconnect();
+  });
 
   let status = $derived.by(() => {
     const s = snap?.status ?? '';
@@ -181,9 +190,12 @@
 <svelte:window onclick={closeMenu} onblur={closeMenu} oncontextmenu={onContext} />
 
 <div
+  bind:this={panelEl}
   class="panel"
   class:ghost
-  style:border-image-source="url({panelBg})"
+  class:held={snap?.paused}
+  style:--frost="url({art('frozen')})"
+  style:border-image-source="url({art('panel')})"
   style:opacity={cfg?.opacity ?? 1}
   data-tauri-drag-region={drag}
 >
@@ -196,30 +208,30 @@
       : 'Click to lock: the overlay becomes click-through except this button (Ctrl+Shift+L works too)'}
     aria-label="lock"
   >
-    <img src={locked ? lockGold : lockPale} alt="" />
+    <img src={locked ? art('lock_gold') : art('lock_pale')} alt="" />
   </button>
 
   {#if shown('session')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({chipBg})" title={status.tip}>
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={status.tip}>
         <span class="dot {status.cls}"></span>
-        <img src={icon('time')} alt="" class="ic" />
-        <span class="val">{snap ? dur(sessionSecs) : '0:00:00'}</span>
+        <img src={snap?.paused ? art('frozen_icon') : icon('time')} alt="" class="ic" />
+        <span class="val" class:frozen={snap?.paused}>{snap ? dur(sessionSecs) : '0:00:00'}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({chipBg})">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
         <span class="val">{snap?.has_mail ? 'Mail!' : 'No mail'}</span>
       </div>
       {#if shown('reset') && !ghost}
         <button
           class="btn md"
-          style:--btn="url({btnBg})"
-          style:--btn-hover="url({btnHoverBg})"
-          style:--btn-down="url({btnDownBg})"
+          style:--btn="url({art('button')})"
+          style:--btn-hover="url({art('button_hover')})"
+          style:--btn-down="url({art('button_down')})"
           onclick={() => danger('reset', reset)}>{armed === 'reset' ? 'Sure?' : 'Reset Stats'}</button
         >
       {:else}
-        <div class="chip md" style:border-image-source="url({chipBg})">
+        <div class="chip md" style:border-image-source="url({art('chip_dark')})">
           <span class="dot {status.cls}"></span>
           <span class="val">{fmt(snap?.kills.earned)} kills</span>
         </div>
@@ -229,14 +241,14 @@
 
   {#if shown('gold')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({chipBg})">
-        <span class="coin" class:idle={!live} style:background-image="url({coinStrip})"></span>
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})">
+        <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
         <span class="val">{fmt(snap?.gold.total)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({chipBg})">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <span class="val">+{fmt(snap?.gold.earned)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({chipBg})">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <span class="val">{fmt(snap?.gold.per_hour)}/h</span>
       </div>
     </div>
@@ -244,14 +256,14 @@
 
   {#if shown('xp')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({chipBg})">
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})">
         <img src={icon('xp')} alt="" class="ic" />
         <span class="val">{fmt(snap?.xp.total)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({chipBg})">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <span class="val">+{fmt(snap?.xp.earned)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({chipBg})">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <span class="val">{fmt(snap?.xp.per_hour)}/h</span>
       </div>
     </div>
@@ -259,7 +271,7 @@
 
   {#if shown('items')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({chipBg})" title="Angelic | Unholy">
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="Angelic | Unholy">
         <img src={icon('chest')} alt="" class="ic" />
         <span class="val">
           <span class="c-ang">{fmt(item('Angelic').total)}</span>
@@ -268,7 +280,7 @@
           <span class="c-blue">({fmt(item('Unholy').mf)})</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({chipBg})" title="Heroic | Set">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Heroic | Set">
         <span class="val">
           <span class="c-her">{fmt(item('Heroic').total)}</span>
           <span class="c-blue">({fmt(item('Heroic').mf)})</span>
@@ -276,7 +288,7 @@
           <span class="c-blue">({fmt(item('Set').mf)})</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({chipBg})">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <span class="val">
           <span class="c-sat">{fmt(item('Satanic').total)}</span>
           <span class="c-blue">({fmt(item('Satanic').mf)})</span>
@@ -286,9 +298,28 @@
     </div>
   {/if}
 
+  {#if shown('vitals')}
+    <div class="row" data-tauri-drag-region={drag}>
+      <div
+        class="chip lg"
+        style:border-image-source="url({art('chip_dark')})"
+        title="magic find, off the client's heartbeat rather than the character save"
+      >
+        <img src={icon('mf')} alt="" class="ic" />
+        <span class="val c-blue">{snap?.mf ? `${fmt(snap.mf)}%` : '—'}</span>
+      </div>
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="character level">
+        <span class="val">Lv {snap?.character?.level || '—'}</span>
+      </div>
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="hero level">
+        <span class="val">HLv {snap?.character?.herolevel || '—'}</span>
+      </div>
+    </div>
+  {/if}
+
   {#if shown('zone')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg buffs" style:border-image-source="url({chipBg})">
+      <div class="chip lg buffs" style:border-image-source="url({art('chip_dark')})">
         {#each buffs as b}
           <img
             class="buff"
@@ -298,8 +329,10 @@
           />
         {/each}
       </div>
-      <div class="zone" style:background-image="url({headerBg})" data-tauri-drag-region={drag}>
-        <span class="zone-name">{snap?.satanic_zone ? zoneName(snap.satanic_zone.zone) : '—'}</span>
+      <div class="zone" style:background-image="url({art('header')})" data-tauri-drag-region={drag}>
+        <span class="zone-name" class:here={snap?.satanic_here}>
+          {snap?.satanic_zone ? zoneName(snap.satanic_zone.zone) : '—'}
+        </span>
       </div>
     </div>
   {/if}
@@ -307,7 +340,7 @@
   {#if menu}
     <div
       class="menu"
-      style:border-image-source="url({chipBg})"
+      style:border-image-source="url({art('chip_dark')})"
       style:left="{menuPos.x}px"
       style:top="{menuPos.y}px"
       bind:clientWidth={menuSize.w}
@@ -358,8 +391,26 @@
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 13px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
+
+  /* Held: the run's clock has stopped, by hand or because nothing has happened
+     for a while. The panel wears the same ice the game lays over a frozen
+     enemy, tiled and faint — enough to read as frozen at a glance, not enough
+     to hide the numbers underneath. */
+  .panel.held::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: var(--frost);
+    background-size: 38px 50px;
+    image-rendering: pixelated;
+    opacity: 0.28;
+    mix-blend-mode: screen;
+    pointer-events: none;
+  }
+  .panel.held .val { color: #bfe4ff; }
+  .val.frozen { color: #dff2ff; }
 
   /* the border box stays, only its art goes — layout must not shift */
   .panel.ghost {
@@ -429,8 +480,8 @@
     width: 106px;
     font: inherit;
     font-size: 12px;
-    color: #e8d9b0;
-    text-shadow: 0 1px 0 #1a0a0a;
+    color: var(--bone-12);
+    text-shadow: 0 1px 0 var(--ground-2);
     background: var(--btn) no-repeat;
     background-size: 100% 100%;
     image-rendering: pixelated;
@@ -498,6 +549,9 @@
 
   .c-ang { color: #f6f794; }
   .c-her { color: #00ffae; }
+  /* the game says outright when this is the room you are in */
+  .zone-name.here { color: #ff6a6a; }
+
   .c-sat { color: #ca1717; }
   .c-blue { color: #5050ae; }
   .c-set { color: #40d040; }
@@ -519,7 +573,7 @@
   .menu button {
     font: inherit;
     font-size: 12px;
-    color: #c3af75;
+    color: var(--bone-6);
     text-align: left;
     background: none;
     border: none;
@@ -528,7 +582,7 @@
   }
   .menu button:hover {
     background: rgba(150, 37, 56, 0.55);
-    color: #f0e0b0;
+    color: var(--bone-13);
   }
   .menu button.danger:hover {
     background: rgba(180, 30, 30, 0.7);

@@ -144,7 +144,9 @@ def wash(size: tuple[int, int], colour: tuple[int, int, int], alpha) -> Image.Im
 
 
 def cover(base: Image.Image) -> Image.Image:
-    """The 16:9 illustration Discord puts on an invitation.
+    """The 16:9 illustration Discord puts on an invitation, and the banner the
+    README opens with — the same picture serves both, so the project has one
+    face rather than two.
 
     A wide picture is not the icon stretched: the plate becomes the frame around
     everything, the mark keeps its square inside it, the name stands beside it,

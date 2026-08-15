@@ -1,9 +1,8 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
   import { listen } from '@tauri-apps/api/event';
   import { itemName, rarityByName, tierLabel, typeLabel } from './items.js';
-
-  import chipBg from './assets/game/chip_dark.png';
 
   const TTL_MS = 8000;
   const FADE_MS = 600;
@@ -75,7 +74,7 @@
 
 <div class="stack">
   {#each entries as it (it.key)}
-    <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source="url({chipBg})">
+    <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source="url({art('chip_dark')})">
       <span class="rar {rarityCls[rarity(it)] ?? ''}">{rarity(it)}</span>
       <span class="name {rarityCls[rarity(it)] ?? ''}">{label(it)}</span>
       {#if it.tier > 0}<span class="dim">{tierLabel(it.tier)}</span>{/if}
@@ -106,7 +105,7 @@
     padding: 0 8px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
 
   .entry {
@@ -139,7 +138,7 @@
 
   .rar { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; flex: none; }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .dim { color: #8a7a5a; font-size: 10px; flex: none; }
+  .dim { color: var(--edge-8); font-size: 10px; flex: none; }
 
   .c-ang { color: #f6f794; }
   .c-her { color: #00ffae; }
@@ -148,5 +147,5 @@
   .c-myt { color: #c060e0; }
   .c-unh { color: #e04a7a; }
   .c-set { color: #40d040; }
-  .c-ble { color: #f0e8b0; }
+  .c-ble { color: var(--bone-14); }
 </style>

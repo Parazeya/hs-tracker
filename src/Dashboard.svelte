@@ -1,5 +1,7 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
+  import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import Stats from './Stats.svelte';
   import Runs from './Runs.svelte';
@@ -7,15 +9,6 @@
   import SoundFilter from './SoundFilter.svelte';
   import Sounds from './Sounds.svelte';
   import Settings from './Settings.svelte';
-
-  import panelBg from './assets/game/panel.png';
-  import chipBg from './assets/game/chip_dark.png';
-  import btnBg from './assets/game/button.png';
-  import btnHoverBg from './assets/game/button_hover.png';
-  import btnDownBg from './assets/game/button_down.png';
-  import closeImg from './assets/game/close.png';
-  import closeHoverImg from './assets/game/close_hover.png';
-  import headerBg from './assets/game/header.png';
 
   const DIRECTIONS = {
     n: 'North',
@@ -57,14 +50,73 @@
   });
 
   let Current = $derived((SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]).component);
+
+  // Why the numbers are not moving, said out loud. The overlay has always had a
+  // coloured dot with a tooltip for this; on a Wayland session there is no
+  // overlay, so a player watching zeros had nothing to read at all — twice now
+  // that has cost a round of questions to work out what the app already knew.
+  let snap = $state(null);
+  $effect(() => {
+    invoke('snapshot').then((s) => (snap = s)).catch(() => {});
+    const unsub = listen('stats', (e) => (snap = e.payload));
+    return () => unsub.then((f) => f());
+  });
+
+  let trouble = $derived.by(() => {
+    if (!snap) return null;
+    const status = snap.status ?? '';
+    if (status === 'npcap-missing')
+      return {
+        bad: true,
+        title: 'Npcap is not installed',
+        detail:
+          'It is the driver that lets the app read the game’s traffic. Without it nothing can be counted. Get it from npcap.com — its defaults are right.',
+      };
+    if (status === 'no-capture')
+      return {
+        bad: true,
+        title: 'Not allowed to read network traffic',
+        detail:
+          'The binary needs the capture right. A packaged install grants it; an AppImage cannot, so it has to be given by hand:',
+        fix: 'sudo setcap cap_net_raw,cap_net_admin=eip <the hs-tracker binary>',
+      };
+    if (status === 'no-interface')
+      return { bad: true, title: 'No network interface to listen on', detail: 'No adapter could be opened for capture.' };
+    if (status === 'waiting-for-game')
+      return { bad: false, title: 'Waiting for Hero Siege', detail: 'Counting starts a moment after the game is running.' };
+    if (status.startsWith('capturing')) {
+      const [, iface, hosts] = status.split('|');
+      // the game is up and adapters are open, but nothing of the game's own has
+      // been seen — the usual causes are a sandbox around the game or a tunnel
+      // its traffic takes that we are not on
+      if (Number(hosts) === 0)
+        return {
+          bad: true,
+          title: 'Listening, but the game’s traffic is not reaching us',
+          detail:
+            `Capturing on ${iface}. The game is running, yet none of its connections can be seen. A Flatpak or Snap install of Steam hides the game from us; a VPN or a second network adapter can carry its traffic somewhere we are not listening.`,
+        };
+      // hosts found, but the game has never once reported the character
+      if (snap.save_age_secs == null && snap.bank_age_secs == null && snap.session_secs > 240)
+        return {
+          bad: false,
+          title: 'Connected, still nothing from the game',
+          detail:
+            'Its traffic is being read, but no character save has arrived yet. Gold, experience and kills travel only when the game saves; if this stays after a few minutes of fighting, the packet log in Settings is worth switching on.',
+        };
+    }
+    return null;
+  });
 </script>
 
 <div
   class="panel"
-  style:border-image-source="url({panelBg})"
-  style:--btn="url({btnBg})"
-  style:--btn-hover="url({btnHoverBg})"
-  style:--btn-down="url({btnDownBg})"
+  class:scenic={art('backdrop')}
+  style:--backdrop="url({art('backdrop')})"
+  style:border-image-source="url({art('panel')})"
+  style:--btn="url({art('button')})"
+  style:--btn-hover="url({art('button_hover')})"
+  style:--btn-down="url({art('button_down')})"
   data-tauri-drag-region
 >
   <button
@@ -73,15 +125,16 @@
     title="Minimize to the taskbar"
     aria-label="minimize"
   >
-    <span></span>
+    <img src={art('minimize')} alt="" class="min-normal" />
+    <img src={art('minimize_hover')} alt="" class="min-hover" />
   </button>
 
   <button class="close" onclick={() => invoke('hide_dashboard')} title="Close to tray" aria-label="close">
-    <img src={closeImg} alt="" class="close-normal" />
-    <img src={closeHoverImg} alt="" class="close-hover" />
+    <img src={art('close')} alt="" class="close-normal" />
+    <img src={art('close_hover')} alt="" class="close-hover" />
   </button>
 
-  <div class="title" style:background-image="url({headerBg})" data-tauri-drag-region>
+  <div class="title" style:background-image="url({art('header')})" data-tauri-drag-region>
     <span>HS Tracker</span>
   </div>
 
@@ -104,7 +157,14 @@
       {/if}
     </nav>
 
-    <div class="pane" style:border-image-source="url({chipBg})">
+    <div class="pane" style:border-image-source="url({art('chip_dark')})">
+      {#if trouble}
+        <div class="trouble" class:bad={trouble.bad}>
+          <div class="tt">{trouble.title}</div>
+          <div class="td">{trouble.detail}</div>
+          {#if trouble.fix}<code class="tf">{trouble.fix}</code>{/if}
+        </div>
+      {/if}
       <Current />
     </div>
   </div>
@@ -137,6 +197,25 @@
   :global(#app) { height: 100%; }
   :global(img) { image-rendering: pixelated; }
 
+  /* A season may bring its own sky. It sits behind everything, dimmed hard —
+     the panel is a place to read numbers first and a view second. */
+  .panel.scenic::before {
+    content: '';
+    position: absolute;
+    inset: 14px;
+    background-image: var(--backdrop);
+    background-size: cover;
+    background-position: center;
+    opacity: 0.22;
+    pointer-events: none;
+  }
+  /* Only the two blocks that sit in the flow need lifting above the sky. The
+     close and minimize buttons and the resize grips are positioned already, and
+     positioning them again as `relative` drops them back into the flow — which
+     is exactly what sent them to the corner the first time. */
+  .panel.scenic > .title,
+  .panel.scenic > .body { position: relative; }
+
   .panel {
     position: relative;
     box-sizing: border-box;
@@ -153,7 +232,7 @@
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
 
   .title {
@@ -190,30 +269,26 @@
   /* The game's art has no minimise glyph, so the close plate is rebuilt in
      CSS — same square, same frame, a bar instead of the cross — and it lights
      up the way the cross does. */
+  /* The pair is the game's own close button and one built from it, so both
+     wear the same frame and a reskin moves them together. It carried a
+     hand-drawn border before, which under a season's colours was the one thing
+     on the window that did not belong to it. */
   .min {
     position: absolute;
     top: 2px;
     right: 26px;
     width: 22px;
     height: 22px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     padding: 0;
-    box-sizing: border-box;
-    border: 1px solid #a99873;
-    background: #180d10;
+    border: none;
+    background: none;
     cursor: pointer;
     z-index: 5;
   }
-  .min span {
-    display: block;
-    width: 12px;
-    height: 3px;
-    background: #b2262c;
-  }
-  .min:hover { border-color: #e0cc90; }
-  .min:hover span { background: #e2453f; }
+  .min img { width: 100%; height: 100%; display: block; }
+  .min .min-hover { display: none; }
+  .min:hover .min-normal { display: none; }
+  .min:hover .min-hover { display: block; }
 
   .body {
     flex: 1 1 auto;
@@ -241,21 +316,21 @@
     min-height: 30px;
     font: inherit;
     font-size: 12px;
-    color: #9a8a68;
+    color: var(--bone-4);
     text-align: left;
     border: 6px solid transparent;
-    background: linear-gradient(180deg, #2c1a1d, #1b1013);
+    background: linear-gradient(180deg, var(--ground-8), var(--ground-4));
     image-rendering: pixelated;
     padding: 0 3px;
     cursor: pointer;
-    text-shadow: 0 1px 0 #140a0a;
+    text-shadow: 0 1px 0 var(--ground-1);
   }
   .tab:hover {
-    color: #e2cf98;
-    background: linear-gradient(180deg, #3b2126, #24151a);
+    color: var(--bone-10);
+    background: linear-gradient(180deg, var(--ground-9), var(--ground-6));
   }
   .tab.on {
-    color: #f4e6bb;
+    color: var(--bone-15);
     background: none;
     border-image-source: var(--btn);
     border-image-slice: 6 fill;
@@ -276,8 +351,8 @@
     flex: none;
     font: inherit;
     font-size: 11px;
-    color: #f0e0b0;
-    text-shadow: 0 1px 0 #140a0a;
+    color: var(--bone-13);
+    text-shadow: 0 1px 0 var(--ground-1);
     border: 6px solid transparent;
     border-image-source: var(--btn);
     border-image-slice: 6 fill;
@@ -312,5 +387,36 @@
     image-rendering: pixelated;
     padding: 6px;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Above whatever section is open, because it explains all of them at once.
+     Amber for something to wait out, crimson for something to go and fix. */
+  .trouble {
+    flex: none;
+    margin-bottom: 6px;
+    padding: 6px 10px;
+    border-left: 3px solid #8a7a4a;
+    background: rgba(120, 96, 40, 0.16);
+    font-family: 'CookieRun Bold', sans-serif;
+  }
+  .trouble.bad {
+    border-left-color: #ca1717;
+    background: rgba(150, 37, 56, 0.18);
+  }
+  .trouble .tt { font-size: 13px; color: var(--gold-2); }
+  .trouble.bad .tt { color: #ff7a7a; }
+  .trouble .td { font-size: 11px; color: var(--bone-7); line-height: 1.45; margin-top: 2px; }
+  .trouble .tf {
+    display: block;
+    margin-top: 4px;
+    padding: 3px 6px;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11px;
+    color: var(--bone-11);
+    background: rgba(0, 0, 0, 0.35);
+    user-select: text;
+    overflow-x: auto;
   }
 </style>

@@ -1,14 +1,8 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
   import { listen } from '@tauri-apps/api/event';
   import { RARITIES, soundUrl, play } from './audio.js';
-
-  import chipBg from './assets/game/chip_dark.png';
-  import btnBg from './assets/game/button.png';
-  import btnHoverBg from './assets/game/button_hover.png';
-  import btnDownBg from './assets/game/button_down.png';
-  import checkOff from './assets/game/check_off.png';
-  import checkOn from './assets/game/check_on.png';
 
   const LABELS = {
     satanic: ['Satanic drop', 'c-sat'],
@@ -82,10 +76,10 @@
   <div class="body">
   {#if settings}
     {#each RARITIES as rarity}
-      <div class="section" style:border-image-source="url({chipBg})">
+      <div class="section" style:border-image-source="url({art('chip_dark')})">
         <div class="line" data-tauri-drag-region>
           <button class="check" onclick={() => toggle(rarity)} aria-label="toggle">
-            <img src={settings[rarity].enabled ? checkOn : checkOff} alt="" />
+            <img src={settings[rarity].enabled ? art('check_on') : art('check_off')} alt="" />
           </button>
           <span class="name {LABELS[rarity][1]}">{LABELS[rarity][0]}</span>
           <input
@@ -109,23 +103,23 @@
           </span>
           <button
             class="btn sm"
-            style:--btn="url({btnBg})"
-            style:--btn-hover="url({btnHoverBg})"
-            style:--btn-down="url({btnDownBg})"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
             onclick={() => test(rarity)}>Test</button
           >
           <button
             class="btn sm"
-            style:--btn="url({btnBg})"
-            style:--btn-hover="url({btnHoverBg})"
-            style:--btn-down="url({btnDownBg})"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
             onclick={() => pickFile(rarity)}>Browse…</button
           >
           <button
             class="btn sm"
-            style:--btn="url({btnBg})"
-            style:--btn-hover="url({btnHoverBg})"
-            style:--btn-down="url({btnDownBg})"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
             disabled={!custom[rarity]}
             onclick={() => danger(rarity, () => resetSound(rarity))}
             >{armed === rarity ? 'Sure?' : 'Default'}</button
@@ -175,7 +169,7 @@
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 13px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
 
   /* the list grows as features are added, so it scrolls instead of clipping */
@@ -189,7 +183,7 @@
     padding-right: 2px;
   }
   .body::-webkit-scrollbar { width: 6px; }
-  .body::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .body::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .section {
     box-sizing: border-box;
@@ -238,7 +232,7 @@
     flex: none;
     font-size: 11px;
     line-height: 16px;
-    color: #8a7a5a;
+    color: var(--edge-8);
     padding: 0 2px 2px;
   }
 
@@ -256,18 +250,18 @@
   }
   input[type='range']::-webkit-slider-runnable-track {
     height: 4px;
-    background: #241a1c;
-    border: 1px solid #3d2a2c;
+    background: var(--ground-7);
+    border: 1px solid var(--ground-11);
   }
   input[type='range']::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 11px;
     height: 11px;
     margin-top: -5px;
-    background: #c3af75;
-    border: 1px solid #241a1c;
+    background: var(--bone-6);
+    border: 1px solid var(--ground-7);
   }
-  input[type='range']:hover:not(:disabled)::-webkit-slider-thumb { background: #f0e0b0; }
+  input[type='range']:hover:not(:disabled)::-webkit-slider-thumb { background: var(--bone-13); }
   input[type='range']:disabled { opacity: 0.4; cursor: default; }
 
   .pct { width: 38px; text-align: right; flex: none; font-size: 12px; }
@@ -275,7 +269,7 @@
   .src {
     flex: 1;
     font-size: 11px;
-    color: #8a7a5a;
+    color: var(--edge-8);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -292,8 +286,8 @@
     flex: none;
     font: inherit;
     font-size: 11px;
-    color: #e8d9b0;
-    text-shadow: 0 1px 0 #1a0a0a;
+    color: var(--bone-12);
+    text-shadow: 0 1px 0 var(--ground-2);
     background: var(--btn) no-repeat;
     background-size: 100% 100%;
     image-rendering: pixelated;
@@ -310,5 +304,5 @@
   .c-sat { color: #ca1717; }
   .c-set { color: #40d040; }
   .c-unh { color: #e04a7a; }
-  .c-gold { color: #e8c860; }
+  .c-gold { color: var(--gold-2); }
 </style>

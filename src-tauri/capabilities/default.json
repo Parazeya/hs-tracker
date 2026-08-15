@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "the dashboard, the overlay and the ticker",
+  "description": "the dashboard, the overlay, the ticker and the drop flourish",
   "windows": [
     "dashboard",
     "main",
-    "ticker"
+    "ticker",
+    "flourish"
   ],
   "permissions": [
     "core:default",

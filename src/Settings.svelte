@@ -1,13 +1,7 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
   import { listen } from '@tauri-apps/api/event';
-
-  import chipBg from './assets/game/chip_dark.png';
-  import btnBg from './assets/game/button.png';
-  import btnHoverBg from './assets/game/button_hover.png';
-  import btnDownBg from './assets/game/button_down.png';
-  import checkOff from './assets/game/check_off.png';
-  import checkOn from './assets/game/check_on.png';
 
   let settings = $state(null);
 
@@ -73,9 +67,28 @@
     ['gold', 'Gold'],
     ['xp', 'Experience'],
     ['items', 'Item counters'],
+    ['vitals', 'Magic find & levels'],
     ['zone', 'Satanic zone'],
     ['reset', 'Reset Stats button'],
   ];
+
+  const TIERS = ['D', 'C', 'B', 'A', 'S', 'SS'];
+
+  // the two that are stored as a fraction but shown as a percentage
+  let scalePct = $state(100);
+  let shadePct = $state(55);
+  $effect(() => {
+    if (!settings) return;
+    scalePct = Math.round((settings.flourish_scale ?? 1) * 100);
+    shadePct = Math.round((settings.flourish_shade ?? 0.55) * 100);
+  });
+
+  function toggleFlourish(name) {
+    const on = new Set(settings.flourish_rarities ?? []);
+    on.has(name) ? on.delete(name) : on.add(name);
+    settings.flourish_rarities = [...on];
+    save();
+  }
 
   function toggleSection(id) {
     const hidden = new Set(settings.hidden ?? []);
@@ -90,7 +103,7 @@
 <div class="panel">
   <div class="body">
   {#if settings && session}
-    <div class="section" style:border-image-source="url({chipBg})">
+    <div class="section" style:border-image-source="url({art('chip_dark')})">
       {#if overlay}
         <div class="line" data-tauri-drag-region>
           <span class="name">Opacity</span>
@@ -116,20 +129,39 @@
         </div>
         <div class="line" data-tauri-drag-region>
           <button class="check" onclick={() => { settings.auto_show = !settings.auto_show; save(); }} aria-label="auto show">
-            <img src={settings.auto_show ? checkOn : checkOff} alt="" />
+            <img src={settings.auto_show ? art('check_on') : art('check_off')} alt="" />
           </button>
           <span class="opt">Show / hide the overlay with the game</span>
         </div>
       {/if}
       <div class="line" data-tauri-drag-region>
+        <span class="name">Theme</span>
+        <select
+          class="picker"
+          value={settings.theme ?? 'default'}
+          onchange={(e) => { settings.theme = e.target.value; save(); }}
+        >
+          <option value="default">Hero Siege</option>
+          <option value="ebontharn">Ebontharn</option>
+        </select>
+      </div>
+      <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.autostart = !settings.autostart; save(); }} aria-label="autostart">
-          <img src={settings.autostart ? checkOn : checkOff} alt="" />
+          <img src={settings.autostart ? art('check_on') : art('check_off')} alt="" />
         </button>
         <span class="opt">Start on login</span>
       </div>
       <div class="line" data-tauri-drag-region>
+        <button class="check" onclick={() => { settings.auto_pause = !settings.auto_pause; save(); }} aria-label="auto pause">
+          <img src={settings.auto_pause ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="opt" title="After five quiet minutes the clock stops and the idle time is taken back out, so the per-hour figures describe the farming rather than the break">
+          Pause the session when nothing happens
+        </span>
+      </div>
+      <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.discord = !settings.discord; save(); }} aria-label="discord">
-          <img src={settings.discord ? checkOn : checkOff} alt="" />
+          <img src={settings.discord ? art('check_on') : art('check_off')} alt="" />
         </button>
         <span class="opt" title="Zone, difficulty, the drops so far and how long the run has been going">
           Show the run in Discord while the game is open
@@ -137,8 +169,73 @@
       </div>
       {#if overlay}
         <div class="line" data-tauri-drag-region>
+          <button class="check" onclick={() => { settings.flourish = !settings.flourish; save(); }} aria-label="flourish">
+            <img src={settings.flourish ? art('check_on') : art('check_off')} alt="" />
+          </button>
+          <span class="opt" title="The game's own loot pillar, played over the screen where you put it">
+            Announce the best drops with the game's loot pillar
+          </span>
+        </div>
+        {#if settings.flourish}
+          <div class="line" data-tauri-drag-region>
+            <span class="name">Size</span>
+            <input
+              type="range" min="50" max="200"
+              bind:value={scalePct}
+              oninput={() => setNumber('flourish_scale', scalePct / 100)}
+            />
+            <span class="pct">{Math.round((settings.flourish_scale ?? 1) * 100)}%</span>
+          </div>
+          <div class="line" data-tauri-drag-region>
+            <span class="name">On screen</span>
+            <input
+              type="range" min="2" max="12" step="0.5"
+              bind:value={settings.flourish_secs}
+              oninput={() => save()}
+            />
+            <span class="pct">{(settings.flourish_secs ?? 6).toFixed(1)}s</span>
+          </div>
+          <div class="line" data-tauri-drag-region>
+            <span class="name">Shading</span>
+            <input
+              type="range" min="0" max="90"
+              bind:value={shadePct}
+              oninput={() => setNumber('flourish_shade', shadePct / 100)}
+            />
+            <span class="pct">{Math.round((settings.flourish_shade ?? 0.55) * 100)}%</span>
+          </div>
+          <div class="grid">
+            {#each ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'] as name}
+              <button class="secopt" onclick={() => toggleFlourish(name)}>
+                <img src={(settings.flourish_rarities ?? []).includes(name) ? art('check_on') : art('check_off')} alt="" />
+                <span>{name}</span>
+              </button>
+            {/each}
+          </div>
+          <div class="line" data-tauri-drag-region>
+            <span class="name">Least grade</span>
+            <input
+              type="range" min="1" max="6"
+              bind:value={settings.flourish_tier}
+              oninput={() => save()}
+            />
+            <span class="pct">{TIERS[(settings.flourish_tier ?? 6) - 1]}</span>
+          </div>
+          <div class="line">
+            <button
+              class="btn wide"
+              style:--btn="url({art('button')})"
+              style:--btn-hover="url({art('button_hover')})"
+              style:--btn-down="url({art('button_down')})"
+              onclick={() => invoke('place_flourish', { placing: true })}
+            >
+              Place it on the screen…
+            </button>
+          </div>
+        {/if}
+        <div class="line" data-tauri-drag-region>
           <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label="ticker">
-            <img src={settings.ticker ? checkOn : checkOff} alt="" />
+            <img src={settings.ticker ? art('check_on') : art('check_off')} alt="" />
           </button>
           <span class="opt">Drop ticker under the overlay</span>
         </div>
@@ -149,19 +246,20 @@
           onclick={() => { settings.sound_on_ground = !settings.sound_on_ground; save(); }}
           aria-label="sound on ground"
         >
-          <img src={settings.sound_on_ground ? checkOn : checkOff} alt="" />
+          <img src={settings.sound_on_ground ? art('check_on') : art('check_off')} alt="" />
         </button>
         <span class="opt">Alert when the item drops (off = when picked up)</span>
       </div>
       <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.debug_log = !settings.debug_log; save(); }} aria-label="debug">
-          <img src={settings.debug_log ? checkOn : checkOff} alt="" />
+          <img src={settings.debug_log ? art('check_on') : art('check_off')} alt="" />
         </button>
         <span class="opt">Log parsed packets to debug-capture.jsonl</span>
       </div>
       {#if overlay}
         <div class="hotkeys" data-tauri-drag-region>
-          Ctrl+Shift+O — show/hide · Ctrl+Shift+L — lock · Ctrl+Shift+R — reset stats
+          Ctrl+Shift+O — show/hide · Ctrl+Shift+L — lock · Ctrl+Shift+R — reset stats ·
+          Ctrl+Shift+P — pause
         </div>
       {:else}
         <div class="hotkeys" data-tauri-drag-region>
@@ -175,9 +273,9 @@
           <div class="line">
             <button
               class="btn wide"
-              style:--btn="url({btnBg})"
-              style:--btn-hover="url({btnHoverBg})"
-              style:--btn-down="url({btnDownBg})"
+              style:--btn="url({art('button')})"
+              style:--btn-hover="url({art('button_hover')})"
+              style:--btn-down="url({art('button_down')})"
               onclick={() => restart(true)}
             >
               Enable the overlay — restart through XWayland
@@ -194,9 +292,9 @@
         <div class="line">
           <button
             class="btn wide"
-            style:--btn="url({btnBg})"
-            style:--btn-hover="url({btnHoverBg})"
-            style:--btn-down="url({btnDownBg})"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
             onclick={() => restart(false)}
             title="Native Wayland is sharper and scales better, but has no overlay"
           >
@@ -208,12 +306,12 @@
     </div>
 
     {#if overlay}
-      <div class="section" style:border-image-source="url({chipBg})">
+      <div class="section" style:border-image-source="url({art('chip_dark')})">
         <div class="sechead" data-tauri-drag-region>Overlay sections</div>
         <div class="grid">
           {#each SECTIONS as [id, label]}
             <button class="secopt" onclick={() => toggleSection(id)}>
-              <img src={(settings.hidden ?? []).includes(id) ? checkOff : checkOn} alt="" />
+              <img src={(settings.hidden ?? []).includes(id) ? art('check_off') : art('check_on')} alt="" />
               <span>{label}</span>
             </button>
           {/each}
@@ -257,7 +355,7 @@
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 13px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
 
   /* the list grows as features are added, so it scrolls instead of clipping */
@@ -271,7 +369,7 @@
     padding-right: 2px;
   }
   .body::-webkit-scrollbar { width: 6px; }
-  .body::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .body::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .section {
     box-sizing: border-box;
@@ -314,7 +412,7 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #9a8a68;
+    color: var(--bone-4);
     padding: 2px 0 4px;
   }
   .grid {
@@ -328,7 +426,7 @@
     gap: 6px;
     font: inherit;
     font-size: 11px;
-    color: #c3af75;
+    color: var(--bone-6);
     background: none;
     border: none;
     cursor: pointer;
@@ -336,12 +434,53 @@
     text-align: left;
   }
   .secopt img { width: 19px; height: 19px; flex: none; }
-  .secopt:hover { color: #f0e0b0; }
+  .secopt:hover { color: var(--bone-13); }
+
+  .picker {
+    flex: 1 1 auto;
+    min-width: 0;
+    box-sizing: border-box;
+    appearance: none;
+    -webkit-appearance: none;
+    font: inherit;
+    font-size: 11px;
+    color: var(--bone-13);
+    background-color: rgba(0, 0, 0, 0.35);
+    background-image: linear-gradient(45deg, transparent 50%, var(--bone-6) 50%),
+      linear-gradient(135deg, var(--bone-6) 50%, transparent 50%);
+    background-position: calc(100% - 12px) 50%, calc(100% - 7px) 50%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    border: 1px solid var(--ground-10);
+    border-radius: 0;
+    padding: 3px 22px 3px 6px;
+    height: 24px;
+    cursor: pointer;
+  }
+  .picker:hover { border-color: var(--edge-4); }
+  .picker:focus,
+  .picker:focus-visible {
+    outline: none;
+    border-color: var(--edge-4);
+  }
+  /* the popup list is the toolkit's own window; these are the only two
+     properties it honours */
+  .picker option {
+    background: var(--ground-7);
+    color: var(--bone-9);
+  }
+
+  .tabs {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
 
   .hotkeys {
     font-size: 10px;
     line-height: 15px;
-    color: #8a7a5a;
+    color: var(--edge-8);
     text-align: center;
     padding-top: 2px;
     max-width: 620px;
@@ -361,18 +500,18 @@
   }
   input[type='range']::-webkit-slider-runnable-track {
     height: 4px;
-    background: #241a1c;
-    border: 1px solid #3d2a2c;
+    background: var(--ground-7);
+    border: 1px solid var(--ground-11);
   }
   input[type='range']::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 11px;
     height: 11px;
     margin-top: -5px;
-    background: #c3af75;
-    border: 1px solid #241a1c;
+    background: var(--bone-6);
+    border: 1px solid var(--ground-7);
   }
-  input[type='range']:hover:not(:disabled)::-webkit-slider-thumb { background: #f0e0b0; }
+  input[type='range']:hover:not(:disabled)::-webkit-slider-thumb { background: var(--bone-13); }
   input[type='range']:disabled { opacity: 0.4; cursor: default; }
 
   .pct { width: 38px; text-align: right; flex: none; font-size: 12px; }
@@ -387,8 +526,8 @@
     flex: none;
     font: inherit;
     font-size: 11px;
-    color: #f0e0b0;
-    text-shadow: 0 1px 0 #140a0a;
+    color: var(--bone-13);
+    text-shadow: 0 1px 0 var(--ground-1);
     border: 6px solid transparent;
     border-image-source: var(--btn);
     border-image-slice: 6 fill;

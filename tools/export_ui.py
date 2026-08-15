@@ -2,13 +2,14 @@
 
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from datawin import DataWin
 
 DEST = Path(r"e:\Workspace\HeroSiege\src\assets\game")
 BUFFS = Path(r"e:\Workspace\HeroSiege\src\assets\buffs")
-TRAY = Path(r"e:\Workspace\HeroSiege\src-tauri\icons\tray.png")
+# the overlay's row icons, which are not panel sprites
+UI_ICONS = Path(r"e:\Workspace\HeroSiege\src\assets\icons")
 
 dw = DataWin()
 DEST.mkdir(parents=True, exist_ok=True)
@@ -24,6 +25,10 @@ SIMPLE = {
     "close_hover.png": ("Button_Close_spr", 1),
     "header.png": ("Mailbox_Header_spr", 0),
     "satanic_star.png": ("Hud_Satanic_Zone_spr", 0),
+    # what the game lays over a frozen enemy, and the status icon that goes
+    # with it — a paused session wears both
+    "frozen.png": ("Enemy_Debuff_Frozen_spr", 0),
+    "frozen_icon.png": ("Buff_Frozen_spr", 0),
 }
 
 for fname, (sprite, idx) in SIMPLE.items():
@@ -62,15 +67,8 @@ for bid, part in BUFF_SPRITES.items():
     im.save(BUFFS / f"{bid}.png")
 print("buffs:", len(BUFF_SPRITES))
 
-# tray icon: the coin, trimmed and pixel-doubled into a 32x32 canvas
-coin = frames[0]
-bbox = coin.getbbox()
-trimmed = coin.crop(bbox)
-big = trimmed.resize((trimmed.width * 2, trimmed.height * 2), Image.NEAREST)
-canvas = Image.new("RGBA", (32, 32))
-canvas.paste(big, ((32 - big.width) // 2, (32 - big.height) // 2))
-canvas.save(TRAY)
-print("tray.png", big.size, "->", canvas.size)
+# The tray icon used to be the game's coin, exported here. It is the app's own
+# mark now — tools/gen_icon.py owns it, and this file must not write over it.
 
 # settings-window bits: square button, gold token, checkbox states, padlock
 dw.sprite_frames("UI_Button_Square_spr")[0].save(DEST / "square.png")
@@ -102,22 +100,12 @@ for i, fname in enumerate(["check_off.png", "check_on.png"]):
     bright.save(DEST / fname)
 print("settings sprites done")
 
-# app icon: the gold coin pile (bright, readable at 16px, matches the tray)
-ICONS = Path(r"e:\Workspace\HeroSiege\src-tauri\icons")
-coin_icon = frames[0].crop(frames[0].getbbox())
+UI_ICONS.mkdir(parents=True, exist_ok=True)
+# magic find: the game's own badge, which already reads "MF" — the drops row
+# next to it uses the chest, and one icon must not stand for two things
+dw.sprite_frames("Buff_Magic_Find_spr")[0].save(UI_ICONS / "mf.png")
+print("mf.png written")
 
-
-def fit(size):
-    scale = max(1, min(size // coin_icon.width, size // coin_icon.height))
-    big = coin_icon.resize((coin_icon.width * scale, coin_icon.height * scale), Image.NEAREST)
-    canvas = Image.new("RGBA", (size, size))
-    canvas.paste(big, ((size - big.width) // 2, (size - big.height) // 2))
-    return canvas
-
-
-fit(256).save(ICONS / "icon.png")
-fit(32).save(ICONS / "32x32.png")
-sizes = [16, 24, 32, 48, 64, 128, 256]
-imgs = [fit(s) for s in sizes]
-imgs[-1].save(ICONS / "icon.ico", format="ICO", append_images=imgs[:-1])
-print("app icon (gold coins) written:", ", ".join(str(s) for s in sizes))
+# The app icon used to be made here from the gold coin. It is the app's own mark
+# now — tools/gen_icon.py owns icon.png, the .ico and the tray, and this file
+# must not write over them.

@@ -34,12 +34,19 @@ const SOUND_EXTS: [(&str, &str); 4] = [
     ("flac", "audio/flac"),
 ];
 
-// base overlay size at scale 1.0; keep in sync with App.svelte layout
-// (panel chrome 40px, each row 27px, 6px between rows)
+// The overlay's width never changes; its height is whatever its rows add up to,
+// and the web side measures that itself (see `fit_overlay`). The figures here
+// are only the opening bid, so the window is about right before the first frame
+// rather than resizing in front of the player.
 const BASE_W: f64 = 444.0;
-const OVERLAY_ROWS: [&str; 5] = ["session", "gold", "xp", "items", "zone"];
+const OVERLAY_ROWS: [&str; 6] = ["session", "gold", "xp", "items", "vitals", "zone"];
 
 fn overlay_height(settings: &Settings) -> f64 {
+    // what the overlay says it is, and only otherwise what its rows suggest
+    let measured = PANEL_H.load(Ordering::Relaxed);
+    if measured > 0 {
+        return measured as f64;
+    }
     let rows = OVERLAY_ROWS.iter().filter(|r| !settings.hidden.iter().any(|h| h == *r)).count();
     34.0 + 33.0 * rows.max(1) as f64
 }
@@ -47,6 +54,7 @@ fn overlay_height(settings: &Settings) -> f64 {
 const HK_TOGGLE: &str = "ctrl+shift+o";
 const HK_LOCK: &str = "ctrl+shift+l";
 const HK_RESET: &str = "ctrl+shift+r";
+const HK_PAUSE: &str = "ctrl+shift+p";
 
 // lock-button rect in overlay CSS px, with a small margin (see App.svelte .lock)
 const LOCK_RECT: (f64, f64, f64, f64) = (BASE_W - 32.0, 0.0, BASE_W, 34.0);
@@ -57,7 +65,19 @@ static TICKER: AtomicBool = AtomicBool::new(true);
 /// screen the compositor keeps blending it, empty or not. It is only shown
 /// while an entry is actually visible.
 static TICKER_BUSY: AtomicBool = AtomicBool::new(false);
+/// Whether the flourish is on at all. Which drops deserve one is the engine's
+/// question, and it is asked there — see `set_flourish_filter`.
+static FLOURISH: AtomicBool = AtomicBool::new(false);
 static SCALE_MILLI: AtomicU32 = AtomicU32::new(1000);
+/// The panel's own height in CSS pixels, as the overlay last measured it. Zero
+/// until the first frame has been drawn, when the guess below stands in.
+static PANEL_H: AtomicU32 = AtomicU32::new(0);
+/// How long a run may show no sign of life before the clock stops, in seconds;
+/// zero means the player would rather it never did.
+pub(crate) static IDLE_AFTER: AtomicU32 = AtomicU32::new(IDLE_DEFAULT);
+/// Five minutes: long enough to survive a boss fight, a long walk or a stretch
+/// of bad luck, short enough that a tea break does not end up in the rates.
+const IDLE_DEFAULT: u32 = 300;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -136,6 +156,23 @@ pub struct Settings {
     pub ticker: bool,
     pub debug_log: bool,
     pub sound_on_ground: bool,
+    /// stop the session clock when nothing has happened for a while, so a break
+    /// does not quietly halve every per-hour figure
+    pub auto_pause: bool,
+    /// which skin the windows wear: "default", or a season's own colours
+    pub theme: String,
+    /// A window that plays the game's own loot pillar when something worth it
+    /// drops. Off by default: it is a window over the game, and that is the
+    /// player's screen to give away, not ours to take.
+    pub flourish: bool,
+    /// how big it is drawn, how hard it shades the game behind it, and how long
+    /// it stays on screen
+    pub flourish_scale: f32,
+    pub flourish_shade: f32,
+    pub flourish_secs: f32,
+    /// which rarities are worth it, and the grade a drop must reach
+    pub flourish_rarities: Vec<String>,
+    pub flourish_tier: i64,
     /// show the run in Discord while the game is open. Off unless asked for:
     /// it puts what the player is doing in front of everyone on their list.
     pub discord: bool,
@@ -175,6 +212,14 @@ impl Default for Settings {
             ticker: true,
             debug_log: false,
             sound_on_ground: true,
+            auto_pause: true,
+            theme: "default".into(),
+            flourish: false,
+            flourish_scale: 1.0,
+            flourish_shade: 0.55,
+            flourish_secs: 6.0,
+            flourish_rarities: ["Heroic", "Angelic", "Unholy"].iter().map(|r| r.to_string()).collect(),
+            flourish_tier: 6,
             discord: false,
             compact: false,
             x11_backend: false,
@@ -365,6 +410,9 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
             }
             parser::GameEvent::Mail(has) => format!("mail  {has}"),
             parser::GameEvent::Room(room) => format!("room  {room}"),
+            parser::GameEvent::Vitals { mf, level, hlevel, satanic_here } => {
+                format!("vitals  mf {mf}  lv {level}  hlv {hlevel}  sz {satanic_here}")
+            }
             parser::GameEvent::ItemAdded { name, rarity, tier, ground, item_type, item_id, weapon_type, .. } => {
                 // an empty name means the item tables predate this item
                 let label = if name.is_empty() {
@@ -454,7 +502,9 @@ fn save_carried(app: &AppHandle) {
     }
 }
 
-const REMEMBERED_WINDOWS: [&str; 2] = ["main", "dashboard"];
+// The flourish is here because the player puts it somewhere deliberately: it is
+// the one window whose position is a choice rather than a convenience.
+const REMEMBERED_WINDOWS: [&str; 3] = ["main", "dashboard", "flourish"];
 
 /// Where each window was, and how big — the dashboard can be resized, so its
 /// size is worth remembering too. Only windows that are actually on screen have
@@ -737,6 +787,9 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         .cloned()
         .collect();
     stats.set_filter(alerts, settings.min_tier);
+    // the flourish asks a different question of the same drop
+    let fx = if settings.flourish { settings.flourish_rarities.clone() } else { Vec::new() };
+    stats.set_flourish_filter(fx, settings.flourish_tier.clamp(1, 6));
     let active = settings
         .use_filter
         .then(|| settings.filters.iter().find(|f| f.id == settings.filter))
@@ -769,6 +822,9 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     DEBUG_LOG.store(settings.debug_log, Ordering::Relaxed);
     SCALE_MILLI.store((scale * 1000.0) as u32, Ordering::Relaxed);
     presence::set_enabled(settings.discord);
+    FLOURISH.store(settings.flourish, Ordering::Relaxed);
+    ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
+    IDLE_AFTER.store(if settings.auto_pause { IDLE_DEFAULT } else { 0 }, Ordering::Relaxed);
     if let Some(w) = app.get_webview_window("main") {
         // the lock poller owns this once the overlay is up; touching a window
         // that has never been shown is what breaks on GTK
@@ -969,6 +1025,153 @@ fn reset_stats(app: AppHandle) {
     close_session(&app);
 }
 
+/// Stop or restart the session clock. The counters are untouched either way —
+/// what a pause changes is what the run is divided by.
+#[tauri::command]
+fn set_paused(app: AppHandle, paused: bool) {
+    app.state::<Shared>().stats.lock().unwrap().set_paused(paused);
+}
+
+fn toggle_pause(app: &AppHandle) {
+    let shared = app.state::<Shared>();
+    let mut stats = shared.stats.lock().unwrap();
+    let on = !stats.paused();
+    stats.set_paused(on);
+}
+
+/// The overlay is exactly as tall as its panel, and the panel is drawn by the
+/// web side — so that is what knows the height. Working it out here meant a
+/// formula kept in step with the CSS by hand, and the row added in 0.9.8 is what
+/// that costs: the panel grew, the window did not, and the last row was cut off.
+/// The size the flourish window is built at, before the player's scale.
+// wide enough for the name with a burst either side of it, and no taller than
+// that needs — there is no beam to make room for
+const FLOURISH_W: f64 = 560.0;
+const FLOURISH_H: f64 = 220.0;
+
+/// Build the flourish window, or take it down again.
+///
+/// It is not declared in tauri.conf.json on purpose: a window there is created
+/// at every start whether it is wanted or not, and this one is a third webview
+/// — on Linux a third GL context, which is exactly where the driver trouble we
+/// have already been bitten by lives. A player who leaves the feature off never
+/// pays for it.
+fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
+    let existing = app.get_webview_window("flourish");
+    if !wanted || !overlay_supported() {
+        if let Some(w) = existing {
+            let _ = w.destroy();
+        }
+        return;
+    }
+    let size = LogicalSize::new(FLOURISH_W * scale, FLOURISH_H * scale);
+    if let Some(w) = existing {
+        let _ = w.set_size(size);
+        return;
+    }
+    let built = tauri::WebviewWindowBuilder::new(app, "flourish", tauri::WebviewUrl::default())
+        .title("HS Tracker Flourish")
+        .inner_size(size.width, size.height)
+        .resizable(false)
+        .visible(false)
+        .focused(false)
+        .focusable(false)
+        .always_on_top(true)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .skip_taskbar(true)
+        .build();
+    match built {
+        Ok(w) => {
+            let _ = w.set_ignore_cursor_events(true);
+        }
+        Err(e) => eprintln!("the flourish window could not be built: {e}"),
+    }
+}
+
+/// Whether a drop is worth stopping the screen for, and if so, showing it.
+pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
+    if !FLOURISH.load(Ordering::Relaxed) {
+        return;
+    }
+    // The server announces a find in chat and the client also rolls it on the
+    // ground: one item, two sightings, and nobody wants it announced twice.
+    if !drop.name.is_empty() {
+        static SHOWN: std::sync::Mutex<Vec<(String, Instant)>> = std::sync::Mutex::new(Vec::new());
+        if let Ok(mut seen) = SHOWN.lock() {
+            seen.retain(|(_, at)| at.elapsed() < Duration::from_secs(20));
+            if seen.iter().any(|(n, _)| n == &drop.name) {
+                return;
+            }
+            seen.push((drop.name.clone(), Instant::now()));
+        }
+    }
+    let Some(w) = app.get_webview_window("flourish") else { return };
+    let _ = app.emit_to("flourish", "flourish-play", drop);
+    show_flourish(app, &w);
+}
+
+/// On screen without taking the keyboard, click-through, and where the player
+/// left it. It hides itself again when the animation is over — the window tells
+/// us, because it is the one that knows how long that is.
+fn show_flourish(app: &AppHandle, w: &tauri::WebviewWindow) {
+    if w.is_visible().unwrap_or(false) {
+        return;
+    }
+    reveal(app, "flourish", false);
+    let _ = w.set_ignore_cursor_events(true);
+}
+
+/// The window says when it has finished playing, or that the player has parked
+/// it and it may go away again.
+#[tauri::command]
+fn flourish_done(app: AppHandle) {
+    if PLACING.load(Ordering::Relaxed) {
+        return;
+    }
+    hide_aux(&app, "flourish");
+}
+
+/// While a flourish is being placed it stays on screen, takes the mouse and
+/// loops, so it can be dragged where the player wants it.
+static PLACING: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+fn place_flourish(app: AppHandle, placing: bool) {
+    PLACING.store(placing, Ordering::Relaxed);
+    let Some(w) = app.get_webview_window("flourish") else { return };
+    if placing {
+        reveal(&app, "flourish", false);
+        let _ = w.set_ignore_cursor_events(false);
+        let _ = app.emit_to("flourish", "flourish-placing", true);
+    } else {
+        let _ = app.emit_to("flourish", "flourish-placing", false);
+        let _ = w.set_ignore_cursor_events(true);
+        hide_aux(&app, "flourish");
+    }
+}
+
+#[tauri::command]
+fn fit_overlay(app: AppHandle, height: f64) {
+    let height = height.clamp(60.0, 1200.0);
+    // kept for the scale slider: zoom changes the window without changing a
+    // single CSS pixel of the panel, so nothing would measure it again
+    PANEL_H.store(height.round() as u32, Ordering::Relaxed);
+    let Some(w) = app.get_webview_window("main") else { return };
+    let scale = SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
+    let wanted = LogicalSize::new(BASE_W * scale, height * scale);
+    // a resize that changes nothing still goes through the window manager, and
+    // on X11 that can shift the window out from under the player
+    if let (Ok(now), Ok(factor)) = (w.inner_size(), w.scale_factor()) {
+        let now = now.to_logical::<f64>(factor);
+        if (now.height - wanted.height).abs() < 1.5 && (now.width - wanted.width).abs() < 1.5 {
+            return;
+        }
+    }
+    let _ = w.set_size(wanted);
+}
+
 #[tauri::command]
 fn hide_window(app: AppHandle) {
     hide_aux(&app, "main");
@@ -1010,6 +1213,13 @@ fn reveal(app: &AppHandle, label: &str, focus: bool) {
         if on_a_monitor(app, pos) {
             let _ = w.set_position(pos);
         }
+    }
+    // Hiding a window unmaps it, and the state a window manager keeps for an
+    // unmapped window is its own business — the position is already restored
+    // above for the same reason. Asking again for the one thing an overlay
+    // cannot do without costs nothing on a window that already has it.
+    if label != "dashboard" {
+        let _ = w.set_always_on_top(true);
     }
     if focus {
         let _ = w.set_focus();
@@ -1254,16 +1464,38 @@ fn set_shopping(items: Vec<String>) -> Result<(), String> {
 /// text back to nobody unless a clipboard manager happens to be running.
 #[tauri::command]
 fn copy_text(text: String) -> Result<(), String> {
+    with_clipboard(|c| c.set_text(text))
+}
+
+/// One clipboard, opened once. Both the shopping list and the run card use it.
+fn with_clipboard<T>(
+    job: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
+) -> Result<T, String> {
     static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
     let mut guard = CLIPBOARD.lock().map_err(|_| "the clipboard is busy".to_string())?;
     if guard.is_none() {
         *guard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }
-    guard
-        .as_mut()
-        .expect("just filled")
-        .set_text(text)
-        .map_err(|e| e.to_string())
+    job(guard.as_mut().expect("just filled")).map_err(|e| e.to_string())
+}
+
+/// Put a picture on the clipboard, ready to be pasted into a chat.
+///
+/// The card is drawn in the window — that is where the fonts and the game's
+/// sprites are — and arrives here as raw pixels, base64'd because the bridge
+/// carries JSON and a megabyte of numbers spelled out is not that.
+#[tauri::command]
+fn copy_image(width: u32, height: u32, rgba: String) -> Result<(), String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(rgba)
+        .map_err(|_| "the picture did not survive the trip".to_string())?;
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || bytes.len() != w * h * 4 {
+        return Err("the picture is not the size it says it is".into());
+    }
+    with_clipboard(|c| {
+        c.set_image(arboard::ImageData { width: w, height: h, bytes: bytes.into() })
+    })
 }
 
 #[tauri::command]
@@ -1390,9 +1622,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let dashboard = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
     let compact = MenuItem::with_id(app, "compact", "Compact overlay", overlay, None::<&str>)?;
     let lock = MenuItem::with_id(app, "lock", "Lock / Unlock overlay", overlay, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause", "Pause / Resume session", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", "Reset stats", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&dashboard, &compact, &lock, &reset, &quit])?;
+    let menu = Menu::with_items(app, &[&dashboard, &compact, &lock, &pause, &reset, &quit])?;
     TrayIconBuilder::with_id("main")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .tooltip("HS Tracker")
@@ -1402,6 +1635,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "dashboard" => full_mode(app.clone()),
             "compact" => compact_mode(app.clone()),
             "lock" => toggle_lock(app),
+            "pause" => toggle_pause(app),
             "reset" => close_session(app),
             "quit" => app.exit(0),
             _ => {}
@@ -1463,12 +1697,44 @@ fn honour_backend_choice() {
 #[cfg(windows)]
 fn honour_backend_choice() {}
 
+/// Keep WebKitGTK away from the renderer NVIDIA's driver cannot survive.
+///
+/// Since 2.40 WebKitGTK composites through a DMA-BUF renderer. On the
+/// proprietary NVIDIA driver its web process segfaults inside
+/// `libnvidia-eglcore` while tearing a GL context down — which from the outside
+/// looks like the tray icon arriving and the window never following, with a
+/// crash reporter naming `WebKitWebProcess`. Every GTK application in the same
+/// position turns the renderer off, and the cost here is a little smoothness on
+/// a panel that is mostly still pictures.
+///
+/// Only machines that actually carry the driver pay for it, and never one where
+/// the user has already made the choice themselves. It has to be set before GTK
+/// starts, which is why it lives at the top of `run` — and the process is still
+/// single-threaded here, so setting it is safe.
+#[cfg(not(windows))]
+fn ease_webkit() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return;
+    }
+    let nvidia = ["/dev/nvidiactl", "/sys/module/nvidia/version"]
+        .iter()
+        .any(|p| std::path::Path::new(p).exists());
+    if nvidia {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
+#[cfg(windows)]
+fn ease_webkit() {}
+
 pub fn run() {
+    ease_webkit();
     honour_backend_choice();
     sniffer::prepare_capture();
     let hk_toggle: Shortcut = HK_TOGGLE.parse().unwrap();
     let hk_lock: Shortcut = HK_LOCK.parse().unwrap();
     let hk_reset: Shortcut = HK_RESET.parse().unwrap();
+    let hk_pause: Shortcut = HK_PAUSE.parse().unwrap();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -1483,6 +1749,8 @@ pub fn run() {
                         toggle_lock(app);
                     } else if *shortcut == hk_reset {
                         close_session(app);
+                    } else if *shortcut == hk_pause {
+                        toggle_pause(app);
                     }
                 })
                 .build(),
@@ -1492,6 +1760,10 @@ pub fn run() {
             snapshot,
             get_extra,
             reset_stats,
+            set_paused,
+            fit_overlay,
+            flourish_done,
+            place_flourish,
             hide_window,
             hide_dashboard,
             compact_mode,
@@ -1507,6 +1779,7 @@ pub fn run() {
             get_shopping,
             set_shopping,
             copy_text,
+            copy_image,
             quit,
             get_settings,
             save_settings,
@@ -1523,7 +1796,7 @@ pub fn run() {
             // need is X11's; registering them under Wayland reports success and
             // then nothing ever fires
             if overlay {
-                for hk in [HK_TOGGLE, HK_LOCK, HK_RESET] {
+                for hk in [HK_TOGGLE, HK_LOCK, HK_RESET, HK_PAUSE] {
                     if let Err(e) = app.global_shortcut().register(hk) {
                         eprintln!("hotkey {hk} not registered: {e}");
                     }

@@ -3,6 +3,7 @@
   let { embedded = false } = $props();
 
   import { invoke } from '@tauri-apps/api/core';
+  import { art } from './skin.svelte.js';
   import { listen } from '@tauri-apps/api/event';
   import { buffInfo, debuffInfo, zoneName } from './buffs.js';
   import {
@@ -20,8 +21,6 @@
     zoneCode,
     zoneLabel,
   } from './items.js';
-
-  import chipBg from './assets/game/chip_dark.png';
 
   let snap = $state(null);
   let extra = $state(null);
@@ -78,6 +77,10 @@
   const DIFFICULTIES = ['Normal', 'Nightmare', 'Hell'];
 
   const item = (name) => snap?.items?.[name] ?? { total: 0, mf: 0, per_hour: 0 };
+
+  // the character save counts these; they only appear once something has moved
+  let bosses = $derived((snap?.tallies ?? []).filter((t) => t.group === 'boss'));
+  let chests = $derived((snap?.tallies ?? []).filter((t) => t.group === 'chest'));
 
   let charSub = $derived.by(() => {
     const c = extra?.character;
@@ -188,7 +191,7 @@
     ctx.clearRect(0, 0, W, H);
     const data = rates();
     if (data.length < 2) {
-      ctx.fillStyle = '#8a7a5a';
+      ctx.fillStyle = 'var(--edge-8)';
       ctx.font = '11px sans-serif';
       ctx.fillText('the graph appears after a couple of minutes of farming', 10, H / 2 + 4);
       return;
@@ -210,12 +213,12 @@
       ctx.lineWidth = 1.5;
       ctx.stroke();
     };
-    line('gold', maxGold, '#e8c860');
+    line('gold', maxGold, 'var(--gold-2)');
     line('xp', maxXp, '#a06ae0');
     // the two captions sit side by side however wide the box gets
     ctx.font = '11px sans-serif';
     ctx.textBaseline = 'top';
-    ctx.fillStyle = '#e8c860';
+    ctx.fillStyle = 'var(--gold-2)';
     ctx.fillText(`gold/h peak ${fmt(Math.round(maxGold))}`, 8, 4);
     ctx.fillStyle = '#a06ae0';
     const xp = `xp/h peak ${fmt(Math.round(maxXp))}`;
@@ -298,25 +301,34 @@
   <div class="body">
     <!-- what the run is doing right now: three numbers and the clock -->
     <div class="run" data-tauri-drag-region>
-      <div class="clock" style:border-image-source="url({chipBg})">
-        <div class="value">{snap ? dur(clock.secs + (nowTick - clock.at) / 1000) : '0:00'}</div>
-        <div class="sub">{charSub}</div>
-      </div>
-      <div class="card" style:border-image-source="url({chipBg})">
+      <button
+        class="clock"
+        class:held={snap?.paused}
+        style:border-image-source="url({art('chip_dark')})"
+        onclick={() => invoke('set_paused', { paused: !snap?.paused }).catch(() => {})}
+        title="Stop the clock. The counters keep counting — what a pause changes is what they are divided by. Ctrl+Shift+P"
+      >
+        <div class="value">
+          {snap?.paused ? '' : ''}{snap ? dur(clock.secs + (snap.paused ? 0 : (nowTick - clock.at) / 1000)) : '0:00'}
+          {#if snap?.paused}<img class="frost" src={art('frozen_icon')} alt="" />{/if}
+        </div>
+        <div class="sub">{snap?.paused ? 'paused — click to carry on' : charSub}</div>
+      </button>
+      <div class="card" style:border-image-source="url({art('chip_dark')})">
         <div class="label">Gold</div>
         <div class="value c-gold">{fmt(snap?.gold.earned)}</div>
         <div class="sub" title={snap?.carried_bank ? 'the balance the last run ended on — the game has not sent a new one yet' : 'bank balance as the game last reported it'}>
           {fmt(snap?.gold.per_hour)}/h · bank {fmt(snap?.gold.total)}{snap?.carried_bank ? ' *' : ''}
         </div>
       </div>
-      <div class="card" style:border-image-source="url({chipBg})">
+      <div class="card" style:border-image-source="url({art('chip_dark')})">
         <div class="label">XP</div>
         <div class="value c-xp">{fmt(snap?.xp.earned)}</div>
         <div class="sub" title="the big number is what this session earned; 'in level' is the game's own bar — the experience banked towards the next hero level">
           {fmt(snap?.xp.per_hour)}/h · in level {fmt(snap?.xp.total)}
         </div>
       </div>
-      <div class="card" style:border-image-source="url({chipBg})">
+      <div class="card" style:border-image-source="url({art('chip_dark')})">
         <div class="label">Kills</div>
         <div class="value c-her">{fmt(snap?.kills.earned)}</div>
         <div class="sub" title={snap?.carried_totals ? 'the total the last run ended on — the game has not saved the character yet' : 'lifetime total as the game last saved it'}>
@@ -332,7 +344,7 @@
     <div class="cols">
       <!-- left: what dropped -->
       <div class="col">
-        <div class="box" style:border-image-source="url({chipBg})">
+        <div class="box" style:border-image-source="url({art('chip_dark')})">
           <div class="box-head"><span class="accent">Loot</span><span class="right">this session</span></div>
           <div class="rows">
             <div class="row colhead">
@@ -363,7 +375,29 @@
           </div>
         </div>
 
-    <div class="box grow" style:border-image-source="url({chipBg})">
+        {#if bosses.length || chests.length}
+          <div class="box" style:border-image-source="url({art('chip_dark')})">
+            <div class="box-head"><span class="accent">Killed &amp; opened</span><span class="right">this session</span></div>
+            {#if bosses.length}
+              <div class="subhead">Bosses</div>
+              <div class="tally">
+                {#each bosses as b}
+                  <div class="tallyrow"><span class="dim">{b.label}</span><b class="c-sat">{fmt(b.total)}</b></div>
+                {/each}
+              </div>
+            {/if}
+            {#if chests.length}
+              <div class="subhead">Chests</div>
+              <div class="tally">
+                {#each chests as c}
+                  <div class="tallyrow"><span class="dim">{c.label}</span><b class="c-gold">{fmt(c.total)}</b></div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+    <div class="box grow" style:border-image-source="url({art('chip_dark')})">
       <div class="box-head">
         <span class="accent">Item timeline</span>
         {#if added}<span class="added">{added}</span>{/if}
@@ -398,7 +432,7 @@
 
       <!-- right: where you are and how the run is trending -->
       <div class="col">
-    <div class="box" style:border-image-source="url({chipBg})">
+    <div class="box" style:border-image-source="url({art('chip_dark')})">
       <div class="box-head">
         <span class="accent">Satanic Zone</span>
         <span class="right">resets in {zoneReset.in} · at {zoneReset.at}</span>
@@ -439,10 +473,23 @@
       {/if}
     </div>
 
-    <div class="box" style:border-image-source="url({chipBg})">
+    <div class="box" style:border-image-source="url({art('chip_dark')})">
       <div class="box-head">
         <span class="accent">Drops in this area</span>
+        {#if snap?.satanic_here}
+          <span class="szhere" title="the game reports this room as the Satanic Zone">Satanic Zone</span>
+        {/if}
         <span class="right">{snap?.room ? zoneLabel(snap.room) : 'waiting for the game'}</span>
+      </div>
+      <div class="vitals">
+        <span class="dim">Magic find</span>
+        <b class="c-blue" title="the character's magic find as the client last reported it — it arrives with the heartbeat, not with the save">
+          {snap?.mf ? `${fmt(snap.mf)}%` : '—'}
+        </b>
+        <span class="dim">Level</span>
+        <b>{snap?.character?.level || '—'}</b>
+        <span class="dim">Hero</span>
+        <b>{snap?.character?.herolevel || '—'}</b>
       </div>
       {#if here.length}
         <div class="tied">
@@ -463,7 +510,7 @@
       {/if}
     </div>
 
-        <div class="box" style:border-image-source="url({chipBg})">
+        <div class="box" style:border-image-source="url({art('chip_dark')})">
           <div class="box-head"><span class="accent">Session rates</span></div>
           <canvas bind:this={canvas}></canvas>
         </div>
@@ -501,7 +548,7 @@
     gap: 6px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
-    color: #c3af75;
+    color: var(--bone-6);
   }
 
   .cards {
@@ -525,7 +572,7 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #9a8a68;
+    color: var(--bone-4);
   }
   .value { font-size: 19px; line-height: 22px; }
 
@@ -535,11 +582,11 @@
     gap: 18px;
     justify-content: center;
     font-size: 10px;
-    color: #8a7a5a;
+    color: var(--edge-8);
   }
   .sub {
     font-size: 10px;
-    color: #8a7a5a;
+    color: var(--edge-8);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -565,7 +612,7 @@
   .lag {
     flex: none;
     font-size: 10px;
-    color: #7b6a63;
+    color: var(--dim-2);
     text-align: center;
     margin-top: -2px;
   }
@@ -580,7 +627,7 @@
     gap: 1px;
   }
   .tied::-webkit-scrollbar { width: 6px; }
-  .tied::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .tied::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
   .tied .where { min-width: 84px; text-align: right; }
   .note { font-size: 10px; line-height: 1.4; padding: 4px 2px 0; }
 
@@ -588,13 +635,13 @@
     flex: none;
     font: inherit;
     font-size: 11px;
-    color: #8d7d63;
+    color: var(--bone-3);
     background: rgba(0, 0, 0, 0.3);
-    border: 1px solid #3a2b2b;
+    border: 1px solid var(--ground-10);
     padding: 0 5px;
     cursor: pointer;
   }
-  .tolist:hover { color: #f0e0b0; border-color: #7a4a4a; }
+  .tolist:hover { color: var(--bone-13); border-color: var(--edge-4); }
 
   .picker {
     position: absolute;
@@ -602,21 +649,21 @@
     z-index: 4;
     display: flex;
     flex-direction: column;
-    background: #1d1414;
-    border: 1px solid #5a3a3a;
+    background: var(--ground-5);
+    border: 1px solid var(--edge-2);
     padding: 2px;
   }
   .picker button {
     font: inherit;
     font-size: 11px;
-    color: #c3af75;
+    color: var(--bone-6);
     background: none;
     border: none;
     text-align: left;
     padding: 3px 8px;
     cursor: pointer;
   }
-  .picker button:hover { background: rgba(150, 37, 56, 0.55); color: #f0e0b0; }
+  .picker button:hover { background: rgba(150, 37, 56, 0.55); color: var(--bone-13); }
 
   .body {
     flex: 1 1 auto;
@@ -628,7 +675,7 @@
     padding-right: 2px;
   }
   .body::-webkit-scrollbar { width: 6px; }
-  .body::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .body::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .run {
     flex: none;
@@ -648,7 +695,19 @@
     flex-direction: column;
     justify-content: center;
   }
-  .clock .value { font-size: 20px; color: #f0e0b0; }
+  .clock {
+    /* it is a button now, but it is still the same tile */
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    background: none;
+  }
+  .clock .value { font-size: 20px; color: var(--bone-13); display: flex; align-items: center; gap: 6px; }
+  .clock:hover .sub { color: var(--bone-8); }
+  /* held: the game's own ice, on the tile whose clock has stopped */
+  .clock.held .value { color: #bfe4ff; }
+  .clock.held .sub { color: #7fa8c4; }
+  .clock .frost { width: 16px; height: 16px; image-rendering: pixelated; }
 
   .cols {
     flex: 1 1 auto;
@@ -685,7 +744,7 @@
   /* the numbers on their own said nothing; the header says what they are */
   .rows .row.colhead {
     background: none;
-    color: #8d5f5f;
+    color: var(--edge-2b);
     font-size: 9px;
     letter-spacing: 0.4px;
     text-transform: uppercase;
@@ -694,7 +753,7 @@
   .row.colhead .rowval { font-size: 9px; }
 
   .subhead {
-    color: #8d5f5f;
+    color: var(--edge-2b);
     font-size: 9px;
     letter-spacing: 0.4px;
     text-transform: uppercase;
@@ -716,7 +775,7 @@
     border-bottom: 1px solid rgba(58, 43, 43, 0.7);
   }
   .tallyrow span { font-size: 11px; }
-  .tallyrow b { font-size: 12px; color: #c3af75; }
+  .tallyrow b { font-size: 12px; color: var(--bone-6); }
 
   .box-head {
     flex: none;
@@ -726,11 +785,11 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #9a8a68;
+    color: var(--bone-4);
     margin-bottom: 3px;
   }
   .accent { color: #ca4545; }
-  .right { color: #8a7a5a; text-transform: none; letter-spacing: 0; }
+  .right { color: var(--edge-8); text-transform: none; letter-spacing: 0; }
 
   .szname { font-size: 15px; margin-bottom: 4px; }
 
@@ -760,11 +819,11 @@
   }
   .buffrow img { width: 21px; height: 21px; flex: none; }
   .buffrow > div { min-width: 0; }
-  .buffname { font-size: 12px; color: #e0cc90; line-height: 14px; }
+  .buffname { font-size: 12px; color: var(--bone-9); line-height: 14px; }
   .buffname.cons { color: #d09090; }
   .buffdesc {
     font-size: 10px;
-    color: #8a7a5a;
+    color: var(--edge-8);
     line-height: 12px;
     white-space: nowrap;
     overflow: hidden;
@@ -782,7 +841,7 @@
     gap: 2px;
   }
   .list::-webkit-scrollbar { width: 6px; }
-  .list::-webkit-scrollbar-thumb { background: #4a3a3a; border-radius: 3px; }
+  .list::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
   .drop {
     position: relative;
@@ -792,7 +851,7 @@
     white-space: nowrap;
     flex: none;
   }
-  .ts { color: #7a6a4e; font-size: 11px; width: 62px; flex: none; }
+  .ts { color: var(--edge-6); font-size: 11px; width: 62px; flex: none; }
   .rar { width: 54px; flex: none; font-size: 11px; }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* fixed, right-aligned trailing columns — with an auto-width chance the
@@ -800,7 +859,7 @@
   .tier { width: 28px; flex: none; text-align: right; }
   .odds { width: 54px; flex: none; text-align: right; }
   .mf { width: 20px; flex: none; }
-  .dim { color: #8a7a5a; font-size: 11px; }
+  .dim { color: var(--edge-8); font-size: 11px; }
   .zone { overflow: hidden; text-overflow: ellipsis; }
   .empty { padding: 8px 0; text-align: center; width: 100%; }
 
@@ -811,7 +870,22 @@
   .c-myt { color: #c060e0; }
   .c-unh { color: #e04a7a; }
   .c-set { color: #40d040; }
-  .c-ble { color: #f0e8b0; }
-  .c-gold { color: #e8c860; }
+  .c-ble { color: var(--bone-14); }
+  .vitals {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 2px 2px;
+    font-size: 12px;
+  }
+  .vitals b { font-size: 13px; color: var(--bone-11); }
+  .vitals .dim + b { margin-right: 8px; }
+  .szhere {
+    font-size: 11px;
+    color: #ca1717;
+    margin-left: 8px;
+  }
+
+  .c-gold { color: var(--gold-2); }
   .c-xp { color: #a06ae0; }
 </style>

@@ -28,3 +28,9 @@ linux-packages/
 
 # a look at the icon, made by tools/gen_icon.py --preview
 src-tauri/icons/preview.png
+
+# swatch sheet from tools/gen_theme.py --preview
+src/theme-preview.png
+
+# sheet from tools/gen_skin.py --preview
+src/skin-preview.png
