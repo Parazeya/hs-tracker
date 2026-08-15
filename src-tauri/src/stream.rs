@@ -100,7 +100,7 @@ pub fn spawn(app: AppHandle) {
                     None => {
                         // the port is taken; keep serving on the old one rather
                         // than leaving the streamer with nothing
-                        eprintln!("stream: port {port} is not free");
+                        crate::log::warn(format!("stream: port {port} is not free"));
                         std::thread::sleep(Duration::from_secs(5));
                     }
                 }

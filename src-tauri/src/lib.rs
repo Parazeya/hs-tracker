@@ -1,4 +1,5 @@
 mod items;
+mod log;
 mod parser;
 mod presence;
 mod sniffer;
@@ -1076,8 +1077,14 @@ const FLOURISH_H: f64 = 220.0;
 fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
     let existing = app.get_webview_window("flourish");
     if !wanted || !overlay_supported() {
-        if let Some(w) = existing {
-            let _ = w.destroy();
+        // Hidden, never destroyed. Tearing a webview down and building another
+        // under the same label moments later is what froze the app: switching
+        // the announcement off and straight back on did exactly that, and the
+        // next thing to touch the window never got an answer. A hidden webview
+        // costs a little memory; a window nobody can close costs the session.
+        if existing.is_some() {
+            PLACING.store(false, Ordering::Relaxed);
+            hide_aux(app, "flourish");
         }
         return;
     }
@@ -1112,7 +1119,7 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
                 show_flourish(app, &w);
             }
         }
-        Err(e) => eprintln!("the flourish window could not be built: {e}"),
+        Err(e) => log::error(format!("the flourish window could not be built: {e}")),
     }
 }
 
@@ -1163,19 +1170,55 @@ fn flourish_done(app: AppHandle) {
 /// While a flourish is being placed it stays on screen, takes the mouse and
 /// loops, so it can be dragged where the player wants it.
 static PLACING: AtomicBool = AtomicBool::new(false);
+/// Which placement is current. A placement that outlives its welcome is ended
+/// from here rather than by the window, because the whole trouble with a window
+/// that takes the mouse is that it might be the thing not answering.
+static PLACING_GEN: AtomicU32 = AtomicU32::new(0);
+/// long enough to drag a box somewhere, short enough not to be stuck with it
+const PLACING_LIMIT: Duration = Duration::from_secs(180);
 
 #[tauri::command]
 fn place_flourish(app: AppHandle, placing: bool) {
+    let Some(w) = app.get_webview_window("flourish") else {
+        // Nothing to place. Saying so beats setting the flag and leaving the
+        // app in a mode it cannot be talked out of.
+        PLACING.store(false, Ordering::Relaxed);
+        return;
+    };
     PLACING.store(placing, Ordering::Relaxed);
-    let Some(w) = app.get_webview_window("flourish") else { return };
     if placing {
+        // It has never been put anywhere, so it goes in the middle rather than
+        // wherever the window manager fancies — which on a first run has been
+        // on top of the dashboard, over the buttons, invisible.
+        if parked("flourish").is_none() {
+            let _ = w.center();
+        }
         reveal(&app, "flourish", false);
+        // While it is being placed it is an ordinary window: it takes the
+        // mouse, and it has to be able to take the keyboard too, or its own
+        // Done button is the one thing on screen that cannot be clicked.
+        let _ = w.set_focusable(true);
         let _ = w.set_ignore_cursor_events(false);
+        let _ = w.set_focus();
         let _ = app.emit_to("flourish", "flourish-placing", true);
+        let mine = PLACING_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+        let later = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(PLACING_LIMIT);
+            if PLACING.load(Ordering::Relaxed) && PLACING_GEN.load(Ordering::Relaxed) == mine {
+                place_flourish(later, false);
+            }
+        });
     } else {
+        PLACING_GEN.fetch_add(1, Ordering::Relaxed);
         let _ = app.emit_to("flourish", "flourish-placing", false);
         let _ = w.set_ignore_cursor_events(true);
-        hide_aux(&app, "flourish");
+        let _ = w.set_focusable(false);
+        if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
+            show_flourish(&app, &w);
+        } else {
+            hide_aux(&app, "flourish");
+        }
     }
 }
 
@@ -1204,6 +1247,38 @@ fn stream_urls() -> Option<(String, String, String)> {
             format!("http://127.0.0.1:{port}/?view=flourish"),
         )
     })
+}
+
+/// The front end's own errors. A panel that throws while rendering goes blank
+/// and says nothing; this is how it says something.
+#[tauri::command]
+fn report(level: String, message: String) {
+    let level = match level.as_str() {
+        "warn" => "warn",
+        _ => "error",
+    };
+    // it arrives from the web side, so it is text and nothing else
+    let trimmed: String = message.chars().take(2000).collect();
+    log::say(level, &format!("ui: {trimmed}"));
+}
+
+/// Where the log is, for anyone being asked to send it.
+#[tauri::command]
+fn log_path() -> String {
+    log::path().display().to_string()
+}
+
+/// Show it in the file manager, selected.
+#[tauri::command]
+fn show_log() -> Result<(), String> {
+    let file = log::path();
+    #[cfg(windows)]
+    let spawned = std::process::Command::new("explorer").arg(format!("/select,{}", file.display())).spawn();
+    #[cfg(not(windows))]
+    let spawned = std::process::Command::new("xdg-open")
+        .arg(file.parent().unwrap_or(&file))
+        .spawn();
+    spawned.map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1757,7 +1832,7 @@ fn honour_backend_choice() {
         if let Ok(json) = serde_json::to_string_pretty(&settings) {
             let _ = std::fs::write(settings_path(), json);
         }
-        eprintln!("the last start through XWayland failed; coming up on Wayland instead");
+        log::warn("the last start through XWayland failed; coming up on Wayland instead");
         return;
     }
     if !x11_reachable() {
@@ -1814,6 +1889,7 @@ fn ease_webkit() {
 fn ease_webkit() {}
 
 pub fn run() {
+    log::init(env!("CARGO_PKG_VERSION"));
     ease_webkit();
     honour_backend_choice();
     sniffer::prepare_capture();
@@ -1848,6 +1924,9 @@ pub fn run() {
             reset_stats,
             set_paused,
             about,
+            report,
+            log_path,
+            show_log,
             stream_urls,
             open_url,
             fit_overlay,
@@ -1887,11 +1966,11 @@ pub fn run() {
             if overlay {
                 for hk in [HK_TOGGLE, HK_LOCK, HK_RESET, HK_PAUSE] {
                     if let Err(e) = app.global_shortcut().register(hk) {
-                        eprintln!("hotkey {hk} not registered: {e}");
+                        log::warn(format!("hotkey {hk} not registered: {e}"));
                     }
                 }
             } else {
-                eprintln!("wayland session: running as the dashboard, without the overlay");
+                log::say("info", "wayland session: running as the dashboard, without the overlay");
             }
             let settings = read_settings();
             app.state::<Shared>().stats.lock().unwrap().restore(&read_carried());

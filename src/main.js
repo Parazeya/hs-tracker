@@ -10,6 +10,26 @@ import Flourish from './Flourish.svelte';
 // no default WebView2 context menu anywhere; the overlay draws its own
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// A panel that throws while rendering goes blank and says nothing — which has
+// already cost an evening once. Everything the web side throws is written to
+// the app's log instead of the console nobody can see in a released build.
+const told = new Set();
+function tell(what) {
+  // the same error can fire on every frame; one line per kind is plenty
+  if (told.has(what) || told.size > 40) return;
+  told.add(what);
+  invoke('report', { level: 'error', message: what }).catch(() => {});
+}
+window.addEventListener('error', (e) => {
+  const where = e.filename ? ` (${e.filename}:${e.lineno}:${e.colno})` : '';
+  tell(`${e.message}${where}
+${e.error?.stack ?? ''}`.trim());
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const reason = e.reason;
+  tell(`unhandled rejection: ${reason?.stack ?? reason?.message ?? String(reason)}`);
+});
+
 // The skin is chosen once, before anything is drawn, so no window ever flashes
 // in the wrong colours. Every window follows the same setting, and a change in
 // Settings reaches the others through the event the backend already emits.

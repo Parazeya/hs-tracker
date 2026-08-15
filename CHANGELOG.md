@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.8 — 2026-08-15
+## 0.9.88 — 2026-08-16
 
 ### Added
 
@@ -14,6 +14,8 @@
 - An **Ebontharn** skin in Settings: the season's palette, its sprites, and its
   sky behind the dashboard.
 - The dashboard now says why the numbers are not moving.
+- Errors are written to a log beside the settings — panics with a backtrace, and
+  anything a panel throws. About says where it is and opens the folder.
 - **OBS**: the overlay window is named apart from the dashboard, so a Window
   Capture can tell them apart — and, for anyone who would rather it were on the
   stream and not on screen, both are served as pages on `127.0.0.1` for a
@@ -30,6 +32,16 @@
 - The overlay did not grow when a row was added to it; it measures itself now.
 - The overlay could lose always-on-top across a hide and show.
 - The minimize button was drawn by hand and did not follow the skin.
+- The bank showed nothing until the game next saved. It is read from the one
+  purse that has money in it now, and the save still has the last word.
+- Switching the drop announcement off and straight back on, then placing it,
+  froze the app. Its window was destroyed and another built under the same
+  label; it is only hidden now.
+- Placing the drop announcement could leave the app unusable: a transparent
+  window took the mouse where the window manager happened to put it, and swallowed
+  every click meant for what was underneath. It centres itself, is now plainly a
+  box, takes the keyboard so its own button works, ends on Escape, and ends by
+  itself after three minutes.
 
 ### Changed
 

@@ -135,6 +135,11 @@ shows.
 
 ## If something does not work
 
+**Send the log.** The app writes what goes wrong to `hs-tracker.log` beside its
+settings — panics, and anything a panel throws. **About** gives the path and a
+button that opens the folder. It is small and safe to paste: it holds errors, a
+line saying which version started, and nothing about you.
+
 **The numbers stay at zero.** The app has to be allowed to read network traffic:
 on Windows that means Npcap, on Linux the packaged install does it for you and an
 AppImage needs the `setcap` line above.

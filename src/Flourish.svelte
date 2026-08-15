@@ -43,6 +43,19 @@
 
   const SAMPLE = { rarity: 'Heroic', name: "Fenrir's Bloodfang", tier: 6, item_type: 3, weapon_type: 1 };
 
+  const stopPlacing = () => invoke('place_flourish', { placing: false }).catch(() => {});
+
+  // While it is being placed this window takes the mouse, and a window that
+  // takes the mouse and cannot be dismissed is a trap: it sits over whatever is
+  // underneath and swallows every click meant for it. Escape always ends it.
+  $effect(() => {
+    const key = (e) => {
+      if (e.key === 'Escape' && placing) stopPlacing();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  });
+
   $effect(() => {
     invoke('get_settings').then((s) => (cfg = s)).catch(() => {});
     const unsubs = [
@@ -139,8 +152,8 @@
     <!-- while it is being placed the window takes the mouse, so it can be
          dragged, and says what it is -->
     <div class="place" data-tauri-drag-region>
-      <div class="hint" data-tauri-drag-region>Drag me where you want drops announced</div>
-      <button class="done" onclick={() => invoke('place_flourish', { placing: false })}>Done</button>
+      <div class="hint" data-tauri-drag-region>Drag this box where you want drops announced</div>
+      <button class="done" onclick={stopPlacing}>Done — or press Esc</button>
     </div>
   {/if}
 </div>
@@ -286,32 +299,33 @@
   }
 
   /* only while it is being parked */
+  /* It has to be unmistakable. Transparent and outlined in a thin dash, it was
+     a window nobody could see grabbing clicks nobody could explain. */
   .place {
     position: absolute;
     inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
-    gap: 8px;
-    padding-top: 10px;
-    outline: 1px dashed rgba(232, 216, 168, 0.5);
-    outline-offset: -6px;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(12, 8, 14, 0.72);
+    border: 2px dashed rgba(232, 216, 168, 0.75);
+    box-sizing: border-box;
     cursor: move;
   }
   .hint {
-    font-size: 12px;
+    font-size: 13px;
     color: #e8d8a8;
-    background: rgba(0, 0, 0, 0.65);
-    padding: 4px 10px;
+    text-shadow: 0 1px 0 #000;
   }
   .done {
     font: inherit;
-    font-size: 12px;
+    font-size: 13px;
     color: #e8d8a8;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.85);
     border: 1px solid #8a7a5a;
-    padding: 3px 14px;
+    padding: 6px 20px;
     cursor: pointer;
   }
   .done:hover { border-color: #e8c860; }

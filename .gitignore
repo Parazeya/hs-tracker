@@ -4,6 +4,7 @@ dist/
 RELEASE_NOTES.md
 src-tauri/target/
 src-tauri/gen/schemas/
+scripts/
 *.log
 
 # runtime data, written next to the executable — the leading slash matters,

@@ -54,6 +54,11 @@
 
   const open = (url) => invoke('open_url', { url }).catch((e) => (failed = String(e)));
 
+  let logAt = $state('');
+  $effect(() => {
+    invoke('log_path').then((p) => (logAt = p)).catch(() => {});
+  });
+
   // the two addresses a streamer pastes into OBS, or nothing while it is off
   let urls = $state(null);
   let copied = $state('');
@@ -125,6 +130,23 @@
         </div>
         {#if copied}<div class="ok">copied</div>{/if}
       {/if}
+    </div>
+
+    <div class="card" style:border-image-source="url({art('chip_dark')})">
+      <div class="head">If something goes wrong</div>
+      <div class="note">
+        Errors are written down as they happen — panics, and anything a panel
+        throws. If you are asked for it, this is the file.
+      </div>
+      <div class="row obs">
+        <span class="k">Log</span>
+        <button class="link" onclick={() => copy(logAt)}>{logAt || '…'}</button>
+      </div>
+      <div class="line">
+        <button class="btn" onclick={() => invoke('show_log').catch((e) => (failed = String(e)))}>
+          Show it in the folder
+        </button>
+      </div>
     </div>
 
     <div class="card" style:border-image-source="url({art('chip_dark')})">

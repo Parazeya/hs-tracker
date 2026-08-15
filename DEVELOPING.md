@@ -22,6 +22,7 @@ The pieces of the Rust side, in the order data moves through them:
 | `items.rs` | Generated tables — item identity, rarity, grade, drop rates. |
 | `lib.rs` | Windows, tray, hotkeys, settings, commands. |
 | `presence.rs` | The Discord status. |
+| `log.rs` | Panics, warnings and whatever the front end throws, appended to `hs-tracker.log`. A released build has no console, so nothing else survives. |
 | `stream.rs` | A loopback HTTP server that serves the front end and a snapshot stream, so OBS can add the overlay as a Browser Source. |
 
 The front end is drawn twice: in the app's windows, where Tauri is under it, and
@@ -64,6 +65,22 @@ the installer, the crate and the tag cannot disagree.
 Tagging is what publishes: `.github/workflows/release.yml` fires on `v*`, builds
 the Windows installer and the three Linux packages, and cuts the release notes
 out of the first section of `CHANGELOG.md`.
+
+### Releasing
+
+```bash
+npm run ship 0.9.9        # or: patch / minor / major
+npm run ship -- --dry     # print the plan and stop
+```
+
+It sets the version, builds, runs the tests, commits, tags and pushes — and asks
+before any of it. Flags go after `--`, and none of them start with `--no-`: npm
+takes those for its own configuration and never passes them on.
+
+It refuses rather than ships when the tag already exists, the branch is not main,
+or `CHANGELOG.md` does not open with the version being released — the release
+notes are cut from that section, so a mismatch would describe the wrong release.
+`--skip-notes`, `--skip-tests` and `--any-branch` each waive one check.
 
 ### Linux
 
