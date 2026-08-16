@@ -4,8 +4,13 @@ dist/
 RELEASE_NOTES.md
 src-tauri/target/
 src-tauri/gen/schemas/
-scripts/
 *.log
+
+# scripts/ used to be ignored wholesale, which quietly kept every helper
+# package.json calls — start, test, ship, deb — out of the repository, so a
+# fresh clone had a package.json pointing at files that were not there.
+# Ignore what is generated in there, not the directory.
+scripts/*.local.*
 
 # runtime data, written next to the executable — the leading slash matters,
 # or src/assets/sounds (the bundled alerts) would be ignored too

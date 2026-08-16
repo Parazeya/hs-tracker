@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.9 — 2026-08-16
+## 0.9.90 — 2026-08-16
 
 Linux, gone over properly. Windows is unchanged.
 
