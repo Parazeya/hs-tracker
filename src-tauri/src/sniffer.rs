@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use etherparse::{NetSlice, SlicedPacket, TransportSlice};
 use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
-use sysinfo::{ProcessesToUpdate, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::Emitter;
 
 use crate::parser::{self, Reassembler};
@@ -60,6 +60,10 @@ struct Capture {
     /// messages this adapter has produced; one that yields nothing is dropped
     /// again, so the usual case costs a single capture
     hits: Arc<AtomicU32>,
+    /// set once the device is open and filtered — "the thread has not ended"
+    /// is also true of one that is about to fail, and that read the status
+    /// green on every spawn
+    opened: Arc<AtomicBool>,
     started: std::time::Instant,
 }
 
@@ -91,13 +95,32 @@ pub fn capture_available() -> bool {
         || npcap_dir().parent().is_some_and(|s| s.join("wpcap.dll").exists())
 }
 
-/// Elsewhere libpcap is a package dependency, and listing devices needs no
-/// privileges — so there is nothing to test here. What can be missing is the
-/// right to *open* a device, and only the attempt can tell us that; the capture
-/// threads report it.
+/// Elsewhere libpcap is a package dependency and listing devices needs no
+/// privileges — but *opening* one does, and that is exactly what is missing on
+/// a fresh install without `cap_net_raw`, or after any rebuild, since the
+/// capability lives on the inode and every relink drops it.
+///
+/// This used to be left to the capture threads, which only ever run while the
+/// game does — so a machine with no capture rights at all sat on a friendly
+/// blue "waiting for Hero Siege" and never said the one thing that was wrong.
+/// One device is opened here and closed again to find out.
 #[cfg(not(windows))]
 pub fn capture_available() -> bool {
-    true
+    let Some(dev) = capture_devices().into_iter().next() else {
+        return true; // nothing to test against; the threads will say so
+    };
+    let name = dev.name.clone();
+    match pcap::Capture::from_device(dev).and_then(|c| c.immediate_mode(true).timeout(50).open()) {
+        Ok(_) => true,
+        Err(e) => {
+            let refused = denied_open(&e);
+            crate::log::warn(format!(
+                "cannot open {name} for capture: {e}{}",
+                if refused { " - the binary needs cap_net_raw" } else { "" }
+            ));
+            !refused
+        }
+    }
 }
 
 /// wpcap.dll is delay-loaded; make sure the loader can find it.
@@ -114,18 +137,35 @@ pub fn prepare_capture() {
 pub fn prepare_capture() {}
 
 fn game_pids(sys: &mut System) -> Vec<u32> {
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    // Only names are wanted here. The default refresh also reads memory, io and
+    // the executable path of every process on the box, three times a second,
+    // for the whole time the game is not running.
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+    );
+    let looks_like_it = |s: &str| {
+        let flat: String =
+            s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+        flat.starts_with("herosiege")
+    };
     sys.processes()
         .iter()
         .filter(|(_, p)| {
-            let name: String = p
-                .name()
-                .to_string_lossy()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .collect::<String>()
-                .to_lowercase();
-            name.starts_with("herosiege")
+            // The comm is enough on Windows and for a native build. Behind a
+            // Steam launch wrapper or Proton the recognisable name is on the
+            // executable path or the command line instead, and matching the
+            // comm alone would find nothing at all.
+            looks_like_it(&p.name().to_string_lossy())
+                || p.exe()
+                    .and_then(|e| e.file_name())
+                    .is_some_and(|f| looks_like_it(&f.to_string_lossy()))
+                || p.cmd().first().is_some_and(|a| {
+                    std::path::Path::new(a)
+                        .file_name()
+                        .is_some_and(|f| looks_like_it(&f.to_string_lossy()))
+                })
         })
         .map(|(pid, _)| pid.as_u32())
         .collect()
@@ -135,6 +175,21 @@ fn game_pids(sys: &mut System) -> Vec<u32> {
 /// adapters to watch — with split tunnelling the game talks over the VPN and
 /// over the LAN at the same time, and one adapter would only show half of it.
 /// The remote side is for the status line.
+/// `::ffff:10.8.1.8` and `10.8.1.8` are the same address, and only one of them
+/// can be written into a packet filter that will ever match.
+///
+/// A Linux build of the game opens IPv6 sockets and talks IPv4 over them, so
+/// every endpoint arrives v4-mapped. Left that way, `scope_for` produced
+/// `host ::ffff:10.8.1.8`, libpcap compiled it as an IPv6 test, and no packet
+/// on the wire — all of them plain IPv4 — could satisfy it. The capture stayed
+/// up, the counters stayed at zero, and nothing anywhere said why.
+fn unmap(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        v4 => v4,
+    }
+}
+
 fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, BTreeSet<IpAddr>) {
     let (mut local, mut remote) = (BTreeSet::new(), BTreeSet::new());
     if pids.is_empty() {
@@ -147,12 +202,13 @@ fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, BTreeSet<IpAddr>) {
                 continue;
             }
             if let ProtocolSocketInfo::Tcp(t) = &s.protocol_socket_info {
-                if t.remote_addr.is_unspecified() || t.remote_addr.is_loopback() {
+                let (near, far) = (unmap(t.local_addr), unmap(t.remote_addr));
+                if far.is_unspecified() || far.is_loopback() {
                     continue;
                 }
-                remote.insert(t.remote_addr);
-                if !t.local_addr.is_unspecified() && !t.local_addr.is_loopback() {
-                    local.insert(t.local_addr);
+                remote.insert(far);
+                if !near.is_unspecified() && !near.is_loopback() {
+                    local.insert(near);
                 }
             }
         }
@@ -216,7 +272,8 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
     let mut tick: u64 = 0;
     let mut wanted: Vec<pcap::Device> = Vec::new();
     let mut scope = String::new();
-    let mut barren: HashMap<String, std::time::Instant> = HashMap::new();
+    // adapter -> when it went quiet, and how long to leave it alone
+    let mut barren: HashMap<String, (std::time::Instant, Duration)> = HashMap::new();
     let mut looked = std::time::Instant::now() - Duration::from_secs(10);
 
     loop {
@@ -224,14 +281,6 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         if tick.is_multiple_of(30) {
             stats.lock().unwrap().sample();
         }
-        // a run nobody is playing should not be dividing its totals by the time
-        // it spent standing still
-        let idle_after = crate::IDLE_AFTER.load(Ordering::Relaxed);
-        stats
-            .lock()
-            .unwrap()
-            .watch_idle((idle_after > 0).then(|| Duration::from_secs(idle_after as u64)));
-
         if !capture_available() {
             set_status(&status, Status::NoCapture);
             std::thread::sleep(Duration::from_secs(3));
@@ -295,7 +344,16 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             // loop that also keeps overwriting the reason on the status line.
             let refused = c.handle.is_finished() && c.hits.load(Ordering::Relaxed) == 0;
             if silent || refused {
-                barren.insert(name.clone(), std::time::Instant::now());
+                // How long to stay away depends on why. A capture that never
+                // opened was refused - no rights, no such device - and asking
+                // again in a moment only busies the loop. One that opened and
+                // then died lost its adapter underneath it, which is what a
+                // VPN does every time it reconnects: that comes back, often
+                // within seconds, and five minutes of deafness after every
+                // reconnect is not a diagnosis, it is a wait.
+                let opened = c.opened.load(Ordering::Relaxed);
+                let rest = if opened { Duration::from_secs(10) } else { Duration::from_secs(300) };
+                barren.insert(name.clone(), (std::time::Instant::now(), rest));
             }
             let keep = running
                 && !silent
@@ -308,7 +366,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             keep
         });
         // a barren adapter is retried now and then: routes change
-        barren.retain(|_, at| at.elapsed() < Duration::from_secs(300));
+        barren.retain(|_, (at, rest)| at.elapsed() < *rest);
 
         for dev in &wanted {
             if captures.contains_key(&dev.name) || barren.contains_key(&dev.name) {
@@ -319,15 +377,25 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let stop = Arc::new(AtomicBool::new(false));
             let dropped = Arc::new(AtomicU32::new(0));
             let hits = Arc::new(AtomicU32::new(0));
+            let opened = Arc::new(AtomicBool::new(false));
             let handle = {
+                let name = dev.name.clone();
                 let (stop, stats, status, app) = (stop.clone(), stats.clone(), status.clone(), app.clone());
                 let (dev, dropped, scope, hits) = (dev.clone(), dropped.clone(), scope.clone(), hits.clone());
+                let opened = opened.clone();
                 std::thread::spawn(move || {
                     // "no interface" is the wrong story when the adapter is
                     // there and the process simply may not open it — the usual
                     // state of a fresh Linux install without cap_net_raw.
-                    if let Err(e) = capture_loop(dev, scope, stop, stats, dropped, hits, &app) {
-                        set_status(&status, if denied_open(&e) { Status::NoCapture } else { Status::NoInterface });
+                    if let Err(e) = capture_loop(dev, scope, stop, stats, dropped, hits, opened, &app) {
+                        let refused = denied_open(&e);
+                        // The README asks for this log when something is wrong;
+                        // until now the whole module never wrote a line to it.
+                        crate::log::warn(format!(
+                            "capture on {name} ended: {e}{}",
+                            if refused { " - the binary needs cap_net_raw" } else { "" }
+                        ));
+                        set_status(&status, if refused { Status::NoCapture } else { Status::NoInterface });
                     }
                 })
             };
@@ -335,14 +403,27 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             println!("[capture] {iface} — filter: tcp and len > 30 and ({scope})");
             captures.insert(
                 dev.name.clone(),
-                Capture { stop, handle, iface, scope, dropped, hits, started: std::time::Instant::now() },
+                Capture {
+                    stop,
+                    handle,
+                    iface,
+                    scope,
+                    dropped,
+                    hits,
+                    opened,
+                    started: std::time::Instant::now(),
+                },
             );
         }
 
-        // only threads still on their feet count as capturing; one that died on
-        // open has already put the reason on the status line and must not be
-        // painted over with a green "capturing"
-        let alive: Vec<&Capture> = captures.values().filter(|c| !c.handle.is_finished()).collect();
+        // Only a capture that actually opened its device counts. "Has not
+        // finished yet" is also true of one spawned a moment ago and about to
+        // die on a permission error, so the line went green on every spawn and
+        // a machine without the right watched it alternate every five minutes.
+        let alive: Vec<&Capture> = captures
+            .values()
+            .filter(|c| c.opened.load(Ordering::Relaxed) && !c.handle.is_finished())
+            .collect();
         if !alive.is_empty() {
             let dropped = alive.iter().map(|c| c.dropped.load(Ordering::Relaxed)).sum();
             let mut ifaces: Vec<&str> = alive.iter().map(|c| c.iface.as_str()).collect();
@@ -361,6 +442,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture_loop(
     dev: pcap::Device,
     scope: String,
@@ -368,6 +450,7 @@ fn capture_loop(
     stats: Arc<Mutex<GameStats>>,
     dropped: Arc<AtomicU32>,
     hits: Arc<AtomicU32>,
+    opened: Arc<AtomicBool>,
     app: &tauri::AppHandle,
 ) -> Result<(), pcap::Error> {
     let mut cap = pcap::Capture::from_device(dev)?
@@ -375,6 +458,8 @@ fn capture_loop(
         .timeout(400)
         .open()?;
     cap.filter(&format!("tcp and len > 30 and ({scope})"), true)?;
+    // past every way this can fail: only now is it a capture
+    opened.store(true, Ordering::Relaxed);
 
     // VPN/tunnel adapters (WireGuard etc.) deliver raw IP or a 4-byte
     // loopback family header instead of Ethernet frames

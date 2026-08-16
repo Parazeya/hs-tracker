@@ -35,3 +35,5 @@ src/theme-preview.png
 
 # sheet from tools/gen_skin.py --preview
 src/skin-preview.png
+
+dist-linux/

@@ -81,6 +81,8 @@ pub fn spawn(app: AppHandle) {
         let viewers: Arc<Mutex<Vec<Viewer>>> = Arc::new(Mutex::new(Vec::new()));
         pump(app.clone(), viewers.clone());
         let mut bound: Option<(TcpListener, u16)> = None;
+        // the port we have already complained about, so we do not do it again
+        let mut complained: Option<u16> = None;
         loop {
             let wanted = WANTED.load(Ordering::Relaxed);
             let port = PORT.load(Ordering::Relaxed);
@@ -94,13 +96,22 @@ pub fn spawn(app: AppHandle) {
                     Some(server) => {
                         // the old listener goes only once a new one is standing
                         bound = Some((server, port));
+                        complained = None;
                         SERVING.store(port, Ordering::Relaxed);
                         viewers.lock().unwrap().clear();
                     }
                     None => {
-                        // the port is taken; keep serving on the old one rather
-                        // than leaving the streamer with nothing
-                        crate::log::warn(format!("stream: port {port} is not free"));
+                        // The port is taken; keep serving on the old one rather
+                        // than leaving the streamer with nothing. Said once per
+                        // port: repeated every five seconds it wrote 40 KB an
+                        // hour, rolled the log and took the older copy — and
+                        // any panic or capture diagnostic in it — with it.
+                        if complained != Some(port) {
+                            complained = Some(port);
+                            crate::log::warn(format!(
+                                "stream: port {port} is not free; nothing is being served"
+                            ));
+                        }
                         std::thread::sleep(Duration::from_secs(5));
                     }
                 }
@@ -243,10 +254,14 @@ fn request_head(stream: &mut TcpStream) -> Option<(String, String)> {
 }
 
 /// Only this machine, asked for by an address that means this machine.
+/// The defence against a page on another site pointing a script at this
+/// server: a browser always sends `Host`, and one it is willing to send is one
+/// of the names below. An *absent* header used to pass too, which let any
+/// local process read the settings and the run history with two lines of nc.
 fn local_host(host: &str) -> bool {
     let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
     let name = name.trim_matches(['[', ']']);
-    matches!(name, "127.0.0.1" | "localhost" | "::1" | "")
+    matches!(name, "127.0.0.1" | "localhost" | "::1")
 }
 
 fn send(stream: &mut TcpStream, mime: &str, body: Vec<u8>) {

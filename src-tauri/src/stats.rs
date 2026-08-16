@@ -552,24 +552,6 @@ impl GameStats {
         }
     }
 
-    /// Called on the watcher's beat. A run that has shown no sign of life for
-    /// `after` is not a run in progress, so the clock stops — back to the moment
-    /// it went quiet, not to now.
-    pub fn watch_idle(&mut self, after: Option<Duration>) {
-        let Some(after) = after else {
-            // the setting went off; only a hand-made pause survives it
-            if self.paused() && !self.by_hand {
-                self.release();
-            }
-            return;
-        };
-        if self.paused() || self.last_progress.elapsed() < after {
-            return;
-        }
-        let since = self.last_progress;
-        self.hold(since, false);
-    }
-
     /// The run moved. Anything that lifts an idle pause goes through here.
     fn progressed(&mut self) {
         self.last_progress = Instant::now();
@@ -1684,29 +1666,6 @@ mod tests {
 
         let drop = s.apply(&tiered_satanic(1, "a")).expect("the flourish is still armed");
         assert!(drop.flourish);
-    }
-
-    #[test]
-    fn a_quiet_run_stops_its_own_clock() {
-        let mut s = GameStats::default();
-        // the first save only calibrates; nothing has been earned yet
-        s.apply(&account_packet("x", 5, 500));
-
-        // no patience at all, so the next beat finds the run standing still
-        s.watch_idle(Some(Duration::ZERO));
-        assert!(s.paused(), "a run with nothing happening stops counting");
-
-        s.apply(&account_packet("x", 9, 900));
-        assert!(!s.paused(), "and the next sign of life starts it again");
-
-        // a pause the player asked for is theirs alone to lift
-        s.set_paused(true);
-        s.apply(&account_packet("x", 20, 2000));
-        assert!(s.paused(), "activity does not undo a hand-made pause");
-        s.watch_idle(None);
-        assert!(s.paused(), "nor does switching the idle watch off");
-        s.set_paused(false);
-        assert!(!s.paused());
     }
 
     #[test]

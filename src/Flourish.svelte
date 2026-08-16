@@ -197,6 +197,19 @@
                vanish var(--out) ease-in var(--hold) forwards;
   }
   @keyframes appear { from { opacity: 0 } to { opacity: 1 } }
+  /* See main.js. Fading the shade in means twenty paints of a half-transparent
+     black, and on a desktop that never clears the surface those add up: the
+     soft pool arrives as a hard blob. There it is simply there, and simply
+     gone — two paints, and the gradient keeps the shape it was given. */
+  :global(html[data-os='linux']) .fx.playing .shade {
+    animation: none;
+    opacity: 1;
+  }
+  :global(html[data-os='linux']) .fx.playing .glow {
+    animation: swell var(--in) ease-out forwards,
+               vanish var(--out) ease-in var(--hold) forwards,
+               glowframes 1s steps(15) infinite;
+  }
   @keyframes vanish { from { opacity: 1 } to { opacity: 0 } }
 
   /* Everything centres on the name: the glow behind it, the sparks around it.

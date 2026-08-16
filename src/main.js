@@ -10,6 +10,14 @@ import Flourish from './Flourish.svelte';
 // no default WebView2 context menu anywhere; the overlay draws its own
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// Which desktop this is, for the handful of rules that have to differ.
+// WebKitGTK on a transparent X11 window composites each frame over the last
+// instead of clearing, so anything drawn on transparency there smears; opaque
+// paint replaces the pixel underneath and is the only thing that does not. The
+// rules that pay for that are marked [data-os='linux'] and cost Windows
+// nothing.
+document.documentElement.dataset.os = /Linux|X11/.test(navigator.userAgent) ? 'linux' : 'other';
+
 // A panel that throws while rendering goes blank and says nothing — which has
 // already cost an evening once. Everything the web side throws is written to
 // the app's log instead of the console nobody can see in a released build.
@@ -58,6 +66,16 @@ listen('settings-changed', (e) => wearTheme(e.payload?.theme));
 const label = native ? getCurrentWebviewWindow().label : view;
 const roots = { dashboard: Dashboard, ticker: Ticker, flourish: Flourish };
 
-export default mount(roots[label] ?? App, {
+const app = mount(roots[label] ?? App, {
   target: document.getElementById('app'),
 });
+
+// Tell the backend a page really did paint. Every window here is transparent,
+// so a renderer that dies leaves an *invisible* window rather than a blank one
+// and nothing else can tell the difference. Sent after a frame, not on mount:
+// mounting only means the script ran.
+if (native) {
+  requestAnimationFrame(() => requestAnimationFrame(() => invoke('ui_ready').catch(() => {})));
+}
+
+export default app;

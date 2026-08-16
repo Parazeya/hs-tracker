@@ -59,6 +59,11 @@
   // overlay, so a player watching zeros had nothing to read at all — twice now
   // that has cost a round of questions to work out what the app already knew.
   let snap = $state(null);
+  // the path to paste into setcap: guessing it is the user's job otherwise
+  let binary = $state('');
+  $effect(() => {
+    invoke('about').then((a) => (binary = a?.binary ?? '')).catch(() => {});
+  });
   $effect(() => {
     invoke('snapshot').then((s) => (snap = s)).catch(() => {});
     const unsub = listen('stats', (e) => (snap = e.payload));
@@ -80,8 +85,8 @@
         bad: true,
         title: 'Not allowed to read network traffic',
         detail:
-          'The binary needs the capture right. A packaged install grants it; an AppImage cannot, so it has to be given by hand:',
-        fix: 'sudo setcap cap_net_raw,cap_net_admin=eip <the hs-tracker binary>',
+          'The binary needs the capture right. A packaged install is meant to grant it — if this is a packaged install, the grant did not take. It can be given by hand:',
+        fix: `sudo setcap cap_net_raw=ep ${binary || '<the hs-tracker binary>'}`,
       };
     if (status === 'no-interface')
       return { bad: true, title: 'No network interface to listen on', detail: 'No adapter could be opened for capture.' };
@@ -92,7 +97,7 @@
       // the game is up and adapters are open, but nothing of the game's own has
       // been seen — the usual causes are a sandbox around the game or a tunnel
       // its traffic takes that we are not on
-      if (Number(hosts) === 0)
+      if (Number(hosts) === 0 && snap.session_secs > 60)
         return {
           bad: true,
           title: 'Listening, but the game’s traffic is not reaching us',

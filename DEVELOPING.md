@@ -43,8 +43,22 @@ Two things worth knowing before changing anything:
 ```bash
 npm install
 npm start                    # dev run: vite + tauri
-cd src-tauri && cargo test
+npm test                     # the Rust tests
 ```
+
+Both work on every platform: on Windows they load the Visual Studio environment
+first, elsewhere they call the Tauri CLI and cargo directly. Install Rust with
+[rustup](https://rustup.rs) rather than from a distribution's packages — Ubuntu
+24.04 ships 1.75 and this tree needs 1.87.
+
+On Linux a dev build reads nothing until it is allowed to capture, and the
+capability is on the file, so **every relink drops it**:
+
+```bash
+sudo setcap cap_net_raw=ep src-tauri/target/debug/hs-tracker
+```
+
+`npm start` checks and reminds you.
 
 Rust and Node are required. On Windows the MSVC toolchain must be installed;
 `tauri-dev.cmd` and `tauri-release.cmd` load the Visual Studio environment first,
@@ -82,11 +96,29 @@ or `CHANGELOG.md` does not open with the version being released — the release
 notes are cut from that section, so a mismatch would describe the wrong release.
 `--skip-notes`, `--skip-tests` and `--any-branch` each waive one check.
 
-### Linux
+### Linux, from any machine
+
+```bash
+npm run deb                 # a .deb in dist-linux/
+npm run deb -- --appimage   # and an AppImage
+npm run deb -- --rebuild    # rebuild the image after changing docker/
+```
+
+It builds in a container (`docker/Dockerfile`), so the toolchain, the WebKitGTK
+headers and the glibc the binary is linked against come from the image rather
+than from whatever the machine happens to have. The base is Ubuntu 22.04 on
+purpose: a binary linked against a newer glibc will not start on an older one,
+and the README offers the `.deb` to Ubuntu 22.04, Mint 21 and Debian 12. Raise
+the base only to drop them.
+
+The cargo registry and the target directory live in named volumes, so only the
+first build is slow. `npm run deb -- --clean` throws them away.
+
+### Linux, natively
 
 ```bash
 sudo apt install build-essential curl wget file patchelf zsync \
-                 desktop-file-utils libfuse2 \
+                 desktop-file-utils libfuse2t64 \
                  libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
                  librsvg2-dev libpcap-dev \
                  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav

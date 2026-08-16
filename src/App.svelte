@@ -9,6 +9,12 @@
 
   let cfg = $state(null);
   let locked = $derived(cfg?.locked ?? false);
+  /// Whether the cursor is over the lock's corner, as the backend sees it.
+  ///
+  /// The only source: a locked overlay is sent no mouse events, so :hover can
+  /// arrive and never leave, and an unlocked one has no way of knowing what
+  /// happened while it was locked. One report, both states.
+  let nearLock = $state(false);
   let drag = $derived(cfg?.locked ? null : '');
   const urls = {};
   const lastPlayed = {};
@@ -63,6 +69,7 @@
       listen('mail', () => playSound('mail')),
       listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
       listen('settings-changed', (e) => (cfg = e.payload)),
+      listen('lock-hover', (e) => (nearLock = !!e.payload)),
       listen('sounds-changed', async (e) => (urls[e.payload] = await soundUrl(e.payload))),
     ];
     const timer = setInterval(() => (tick = Date.now()), 1000);
@@ -133,7 +140,10 @@
   // pinned over a running game: drop the frame and the button, leave the
   // numbers floating on top of the game
   let live = $derived((snap?.status ?? '').startsWith('capturing'));
-  let ghost = $derived(locked && live);
+  // Ghost mode drops the frame so the numbers float over the game. It needs the
+  // window to clear itself between frames, which this desktop does not — see
+  // main.js — so the setting defaults off there and says why in Settings.
+  let ghost = $derived(locked && live && (cfg?.ghost ?? true));
 
   // anything that throws work away asks once; the second click does it
   let armed = $state(null);
@@ -202,6 +212,7 @@
   <button
     class="lock"
     class:locked
+    class:near={nearLock}
     onclick={toggleLock}
     title={locked
       ? 'Locked — click to unlock'
@@ -271,7 +282,7 @@
 
   {#if shown('items')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Angelic | Unholy">
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="Angelic | Unholy">
         <img src={icon('chest')} alt="" class="ic" />
         <span class="val">
           <span class="c-ang">{fmt(item('Angelic').total)}</span>
@@ -434,10 +445,11 @@
     white-space: nowrap;
   }
 
-  /* the row is 388px whatever it holds: 3 × 124 with two 8px gaps, or a wide
-     chip and a narrow one. The loot chips carried a second figure each and
-     needed 140 for the first of them; a plain count fits the same 124 as the
-     rest, and three of a size sit better than two and a half. */
+  /* Every row is 140 + 124 + 124 with two 8px gaps: 388px, and the same column
+     boundaries down the whole panel. The loot row was briefly 124 × 124 × 124
+     after its bracketed figures came out — the same total, so nothing
+     overflowed, but its first boundary sat 16px left of every other row's and
+     the panel read as crooked. The widths are the grid, not the content. */
   .chip.lg { width: 140px; }
   .chip.md { width: 124px; }
 
@@ -505,18 +517,25 @@
     pointer-events: none;
     transition: opacity 0.15s;
   }
-  .panel:hover .lock {
-    opacity: 0.9;
-    pointer-events: auto;
-  }
-  .panel:hover .lock:hover,
-  .panel:hover .lock.locked { opacity: 1; }
+  /* No :hover anywhere near this button — see `nearLock`. */
+  .lock.near { opacity: 1; pointer-events: auto; }
   .lock img {
     width: 21px;
     height: 30px;
     display: block;
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.9));
   }
+
+  /* See main.js. The panel's art is pixel art with soft edges, so the text
+     and its shadow sit partly on transparency — which on this desktop never
+     clears, and every changed value leaves its last few frames behind as a
+     dark smear. A solid colour behind the art replaces those pixels instead
+     of blending with them. Ghost mode is the one place this must not apply:
+     dropping the frame is the whole point of it, and painting a slab behind
+     the numbers instead is not a frameless overlay, it is a darker one. Its
+     smearing is what the switch in Settings is for. */
+  :global(html[data-os='linux']) .panel:not(.ghost) { background-color: var(--ground-3); }
+  :global(html[data-os='linux']) .panel:not(.ghost) .chip { background-color: var(--ground-5); }
 
   .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
   .dot.ok { background: #4caf50; }

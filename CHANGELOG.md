@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.9.9 — 2026-08-16
+
+Linux, gone over properly. Windows is unchanged.
+
+### Fixed
+
+- The app aborted on X11 when the drop announcement was switched on, and with
+  the overlay locked — and saved the setting before applying it, so it did the
+  same at every start afterwards.
+- A missing tray library killed the app before it had a window.
+- Capture rights were never checked until the game ran, so a machine without
+  them showed a friendly "waiting for Hero Siege" forever.
+- The capture wrote nothing to the log.
+- The status went green on every attempt, including the failing ones.
+- "The game's traffic is not reaching us" fired in the first minute of every
+  session.
+- The game was found by process name alone — not enough under a Steam wrapper
+  or Proton.
+- Its address arrived IPv4-in-IPv6, which built a packet filter nothing could
+  match: counters stayed at zero with the capture up.
+- A VPN reconnect took that adapter down for five minutes.
+- Window positions saved on Wayland were always (0, 0).
+- The tray's Dashboard entry did nothing after the window was minimised.
+- The drop ticker sat across the overlay instead of under it, and lost its
+  always-on-top when hidden.
+- Custom alert sounds could never be served over the asset protocol.
+- The drop announcement could not be switched on without an overlay, so its
+  OBS page never received anything.
+- The OBS server filled the log and answered a request with no `Host` header.
+- Copy buttons said "copied" whether or not it worked.
+- Every "open the folder" left a zombie process behind.
+- With no `HOME`, everything the app writes went to a directory never created.
+- The overlay appeared in Alt-Tab.
+- The postinstall script hid its own failure and asked for more rights than it
+  uses.
+- `npm start` and `npm test` were Windows batch files.
+- Two copies could run at once, each with its own sniffer.
+- On Linux the old frame stayed under the new one; the panel is painted solid
+  there, which is the only thing that covers it.
+
+### Added
+
+- The interface says when it has painted; if nothing does within 20 seconds the
+  log says so and names the two variables worth trying.
+- One log line for the session: display server, toolkit backend, desktop,
+  graphics driver.
+- `npm run deb` builds the Linux packages in a container, against an older
+  glibc than the host's.
+- Settings: **Enable transparent overlay while locked** — on by default only
+  where it does not smear.
+
+### Changed
+
+- The automatic pause after five quiet minutes is gone; the pause by hand
+  stays.
+
 ## 0.9.89 — 2026-08-16
 
 ### Added

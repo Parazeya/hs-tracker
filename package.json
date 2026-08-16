@@ -1,18 +1,19 @@
 {
   "name": "hs-tracker",
-  "version": "0.9.89",
-  "description": "HS Tracker \u2014 Hero Siege session tracker with a pinned on-screen overlay.",
+  "version": "0.9.9",
+  "description": "HS Tracker — Hero Siege session tracker with a pinned on-screen overlay.",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "tauri-dev.cmd",
+    "start": "node scripts/dev.mjs",
     "release": "tauri-release.cmd",
     "ver": "node scripts/set-version.mjs",
     "tauri": "tauri",
     "ship": "node scripts/ship.mjs",
-    "test": "cmd /c \"%CD%\\test.cmd\""
+    "test": "node scripts/test.mjs",
+    "deb": "node scripts/build-linux.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1"

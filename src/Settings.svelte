@@ -10,6 +10,14 @@
   // would flash a row of controls that then vanish.
   let session = $state(null);
   let overlay = $derived(session?.overlay ?? false);
+  // The drop announcement is a window on the desktop AND a page OBS can take.
+  // Gating the whole block on the overlay meant a Wayland session could never
+  // switch it on, so `stream::announce` never fired and the address handed out
+  // for it was dead.
+  let canAnnounce = $derived(overlay || (settings?.stream ?? false));
+  // The frameless look is only worth offering where it can be judged, and only
+  // worth warning about where it costs something — see App.svelte.
+  const smears = typeof document !== 'undefined' && document.documentElement.dataset.os === 'linux';
   $effect(() => {
     invoke('session_info')
       .then((s) => (session = s))
@@ -55,10 +63,16 @@
     const t = setInterval(ask, 2000);
     return () => clearInterval(t);
   });
-  function copy(text) {
-    invoke('copy_text', { text }).catch(() => {});
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
+  let copyFailed = $state('');
+  async function copy(text) {
+    try {
+      await invoke('copy_text', { text });
+      copyFailed = '';
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch (e) {
+      copyFailed = String(e);
+    }
   }
 
   let saveTimer = null;
@@ -150,6 +164,19 @@
           </button>
           <span class="opt">Show / hide the overlay with the game</span>
         </div>
+        <div class="line" data-tauri-drag-region>
+          <button class="check" onclick={() => { settings.ghost = !settings.ghost; save(); }} aria-label="ghost">
+            <img src={settings.ghost ? art('check_on') : art('check_off')} alt="" />
+          </button>
+          <span
+            class="opt"
+            title={smears
+              ? 'The locked overlay drops its frame and the numbers float over the game. This desktop does not clear the overlay window between frames, so they can leave the last few of their frames behind — the frame is what hides that.'
+              : 'The locked overlay drops its frame, leaving the numbers over the game'}
+          >
+            Enable transparent overlay while locked{smears ? ' (can create artifacts)' : ''}
+          </span>
+        </div>
       {/if}
       <div class="line" data-tauri-drag-region>
         <span class="name">Theme</span>
@@ -169,14 +196,6 @@
         <span class="opt">Start on login</span>
       </div>
       <div class="line" data-tauri-drag-region>
-        <button class="check" onclick={() => { settings.auto_pause = !settings.auto_pause; save(); }} aria-label="auto pause">
-          <img src={settings.auto_pause ? art('check_on') : art('check_off')} alt="" />
-        </button>
-        <span class="opt" title="After five quiet minutes the clock stops and the idle time is taken back out, so the per-hour figures describe the farming rather than the break">
-          Pause the session when nothing happens
-        </span>
-      </div>
-      <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.discord = !settings.discord; save(); }} aria-label="discord">
           <img src={settings.discord ? art('check_on') : art('check_off')} alt="" />
         </button>
@@ -184,7 +203,7 @@
           Show the run in Discord while the game is open
         </span>
       </div>
-      {#if overlay}
+      {#if canAnnounce}
         <div class="line" data-tauri-drag-region>
           <button class="check" onclick={() => { settings.flourish = !settings.flourish; save(); }} aria-label="flourish">
             <img src={settings.flourish ? art('check_on') : art('check_off')} alt="" />
@@ -238,6 +257,7 @@
             />
             <span class="pct">{TIERS[(settings.flourish_tier ?? 6) - 1]}</span>
           </div>
+          {#if overlay}
           <div class="line" data-tauri-drag-region>
             <button class="check" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }} aria-label="flourish always">
               <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
@@ -257,7 +277,10 @@
               Place it on the screen…
             </button>
           </div>
+          {/if}
         {/if}
+      {/if}
+      {#if overlay}
         <div class="line" data-tauri-drag-region>
           <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label="ticker">
             <img src={settings.ticker ? art('check_on') : art('check_off')} alt="" />
@@ -304,7 +327,9 @@
               <button class="addr" onclick={() => copy(url)}>{url}</button>
             </div>
           {/each}
-          <div class="hint">{copied ? 'copied' : 'Click one to copy it, then add a Browser Source in OBS.'}</div>
+          <div class="hint">
+            {copyFailed ? `could not copy: ${copyFailed}` : copied ? 'copied' : 'Click one to copy it, then add a Browser Source in OBS.'}
+          </div>
         {/if}
       {/if}
       <div class="line" data-tauri-drag-region>

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HS Tracker",
-  "version": "0.9.89",
+  "version": "0.9.9",
   "identifier": "com.hstracker.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -37,7 +37,7 @@
         "decorations": false,
         "transparent": true,
         "shadow": false,
-        "skipTaskbar": false,
+        "skipTaskbar": true,
         "visible": false
       },
       {
@@ -84,14 +84,20 @@
       "deb": {
         "depends": [
           "libpcap0.8",
-          "libcap2-bin"
+          "libcap2-bin",
+          "xdg-utils",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good"
         ],
         "postInstallScript": "installer/grant-capture-rights.sh"
       },
       "rpm": {
         "depends": [
           "libpcap",
-          "libcap"
+          "libcap",
+          "xdg-utils",
+          "gstreamer1-plugins-base",
+          "gstreamer1-plugins-good"
         ],
         "postInstallScript": "installer/grant-capture-rights.sh"
       },

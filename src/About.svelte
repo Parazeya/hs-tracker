@@ -60,10 +60,16 @@
   });
 
   let copied = $state(false);
-  function copy(text) {
-    invoke('copy_text', { text }).catch(() => {});
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
+  // On a Wayland session the clipboard reaches through XWayland or not at all;
+  // saying "copied" either way sends the user to paste nothing.
+  async function copy(text) {
+    try {
+      await invoke('copy_text', { text });
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch (e) {
+      failed = `could not copy: ${e}`;
+    }
   }
 </script>
 

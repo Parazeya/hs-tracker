@@ -72,7 +72,7 @@ hand:
 
 ```bash
 ./HS\ Tracker_*.AppImage --appimage-extract     # gives ./squashfs-root
-sudo setcap cap_net_raw,cap_net_admin=eip squashfs-root/usr/bin/hs-tracker
+sudo setcap cap_net_raw=ep squashfs-root/usr/bin/hs-tracker
 ./squashfs-root/AppRun
 ```
 

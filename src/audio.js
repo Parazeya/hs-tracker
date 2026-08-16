@@ -31,8 +31,12 @@ export async function soundUrl(rarity) {
     if (path) {
       const url = convertFileSrc(path);
       if (await loadable(url)) return url;
+      // The inlined copy was handed back unchecked, which made the built-in
+      // chime below unreachable: a truncated or mislabelled file — the picker
+      // accepts anything with the right extension — then meant permanent
+      // silence, while the panel still listed the sound as installed.
       const inlined = await invoke('load_sound', { rarity });
-      if (inlined) return inlined;
+      if (inlined && (await loadable(inlined))) return inlined;
     }
   } catch {}
   return DEFAULTS[rarity];

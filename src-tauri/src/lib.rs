@@ -62,6 +62,12 @@ const HK_PAUSE: &str = "ctrl+shift+p";
 const LOCK_RECT: (f64, f64, f64, f64) = (BASE_W - 32.0, 0.0, BASE_W, 34.0);
 
 static LOCKED: AtomicBool = AtomicBool::new(false);
+/// Whether there is a tray icon to hide into. Assumed until proved otherwise:
+/// on Linux the indicator library can be missing outright, and a window that
+/// hides itself into a tray nobody can see is a window nobody gets back.
+static TRAY_OK: AtomicBool = AtomicBool::new(true);
+/// Set once any window has told us it painted; see `ui_ready`.
+static UI_READY: AtomicBool = AtomicBool::new(false);
 static TICKER: AtomicBool = AtomicBool::new(true);
 /// The ticker is a transparent window pinned over the game: while it is on
 /// screen the compositor keeps blending it, empty or not. It is only shown
@@ -76,12 +82,12 @@ static SCALE_MILLI: AtomicU32 = AtomicU32::new(1000);
 /// The panel's own height in CSS pixels, as the overlay last measured it. Zero
 /// until the first frame has been drawn, when the guess below stands in.
 static PANEL_H: AtomicU32 = AtomicU32::new(0);
-/// How long a run may show no sign of life before the clock stops, in seconds;
-/// zero means the player would rather it never did.
-pub(crate) static IDLE_AFTER: AtomicU32 = AtomicU32::new(IDLE_DEFAULT);
-/// Five minutes: long enough to survive a boss fight, a long walk or a stretch
-/// of bad luck, short enough that a tea break does not end up in the rates.
-const IDLE_DEFAULT: u32 = 300;
+
+/// Frameless-when-locked: on by default only where the compositor clears the
+/// window between frames. See `Settings::ghost`.
+fn ghost_default() -> bool {
+    cfg!(windows)
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -162,7 +168,6 @@ pub struct Settings {
     pub sound_on_ground: bool,
     /// stop the session clock when nothing has happened for a while, so a break
     /// does not quietly halve every per-hour figure
-    pub auto_pause: bool,
     /// which skin the windows wear: "default", or a season's own colours
     pub theme: String,
     /// serve the overlay as a page for OBS to add as a Browser Source, and the
@@ -191,6 +196,14 @@ pub struct Settings {
     pub discord: bool,
     /// which face was up last: the overlay (true) or the dashboard
     pub compact: bool,
+    /// Whether a locked overlay drops its frame and lets the numbers float over
+    /// the game. It needs the window to clear itself between frames, which
+    /// WebKitGTK on a transparent X11 window does not do — so it is off by
+    /// default where that is the case, and offered as a switch rather than
+    /// taken away: a still overlay smears far less than a busy one, and the
+    /// look is worth having for anyone who finds it acceptable.
+    #[serde(default = "ghost_default")]
+    pub ghost: bool,
     /// Linux only: enter a Wayland session through XWayland, which is what
     /// gives the overlay a display server that lets it float and be clicked
     /// through. Chosen in Settings, applied at the next start.
@@ -225,7 +238,6 @@ impl Default for Settings {
             ticker: true,
             debug_log: false,
             sound_on_ground: true,
-            auto_pause: true,
             theme: "default".into(),
             stream: false,
             stream_port: 4600,
@@ -238,6 +250,7 @@ impl Default for Settings {
             flourish_always: false,
             discord: false,
             compact: false,
+            ghost: ghost_default(),
             x11_backend: false,
             hidden: Vec::new(),
         }
@@ -298,13 +311,21 @@ pub struct SessionInfo {
     through_x11: bool,
     /// XWayland is there to switch to
     can_switch: bool,
+    /// there is a tray icon, so closing a window can mean hiding it
+    tray: bool,
 }
 
 #[tauri::command]
 fn session_info() -> SessionInfo {
     #[cfg(windows)]
     {
-        SessionInfo { overlay: true, wayland: false, through_x11: false, can_switch: false }
+        SessionInfo {
+            overlay: true,
+            wayland: false,
+            through_x11: false,
+            can_switch: false,
+            tray: TRAY_OK.load(Ordering::Relaxed),
+        }
     }
     #[cfg(not(windows))]
     {
@@ -314,6 +335,7 @@ fn session_info() -> SessionInfo {
             wayland,
             through_x11: forced_x11(),
             can_switch: wayland && x11_reachable(),
+            tray: TRAY_OK.load(Ordering::Relaxed),
         }
     }
 }
@@ -470,13 +492,22 @@ fn data_dir() -> PathBuf {
     // resolved and created once; every settings read would otherwise stat it
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
+        // The last resort used to be ".", and a process started by the
+        // session has "/" for a working directory: every write then failed
+        // into a discarded `let _ =` while About cheerfully reported a path
+        // that had never been created. The temp directory is a poor home, but
+        // it is a real one, and it says so.
+        let home = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        let dir = base.join("hs-tracker");
-        let _ = std::fs::create_dir_all(&dir);
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+        let scratch = home.is_none();
+        let dir = home.unwrap_or_else(std::env::temp_dir).join("hs-tracker");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("cannot create {}: {e}", dir.display());
+        } else if scratch {
+            eprintln!("no HOME: settings and runs are going to {}", dir.display());
+        }
         dir
     })
     .clone()
@@ -547,7 +578,27 @@ fn window_positions(app: &AppHandle) -> serde_json::Map<String, serde_json::Valu
     map
 }
 
+/// Whether a window position means anything in this session.
+///
+/// GDK's Wayland backend answers every `outer_position` with (0, 0) — the
+/// protocol does not tell a client where it is. Recording that overwrites real
+/// coordinates with the origin, and the next Xorg start pins the dashboard
+/// under the GNOME top bar with its own close button out of reach.
+fn can_place_windows() -> bool {
+    #[cfg(windows)]
+    {
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        !wayland_session() || forced_x11()
+    }
+}
+
 fn save_window_positions(app: &AppHandle) {
+    if !can_place_windows() {
+        return;
+    }
     if let Ok(json) = serde_json::to_string(&window_positions(app)) {
         let _ = std::fs::write(positions_path(), json);
     }
@@ -624,7 +675,6 @@ fn restore_window_positions(app: &AppHandle) {
 fn spawn_ticker_glue(app: AppHandle) {
     std::thread::spawn(move || {
         let mut shown = false;
-        let mut placed: Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)> = None;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(300));
             let (Some(main), Some(ticker)) = (app.get_webview_window("main"), app.get_webview_window("ticker"))
@@ -638,28 +688,55 @@ fn spawn_ticker_glue(app: AppHandle) {
                 if shown {
                     let _ = ticker.hide();
                     shown = false;
-                    // hiding unmaps it, and a window manager may place it
-                    // afresh: the next show has to position it again
-                    placed = None;
                 }
                 continue;
             }
             if let (Ok(pos), Ok(size), Ok(dpi)) = (main.outer_position(), main.outer_size(), main.scale_factor()) {
                 let scale = SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
                 let height = (170.0 * scale * dpi) as u32;
+                // Under the overlay, unless there is no room under the
+                // overlay. A window placed past the bottom of the screen is
+                // not left there: the window manager drags it back on, and it
+                // comes to rest across the middle of the overlay it was meant
+                // to hang below. An overlay parked near the bottom edge is the
+                // normal case, not an odd one.
+                let below = pos.y + size.height as i32 + 4;
+                let floor = main
+                    .current_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|m| m.position().y + m.size().height as i32);
+                let y = match floor {
+                    Some(bottom) if below + height as i32 > bottom => pos.y - height as i32 - 4,
+                    _ => below,
+                };
                 let want = (
-                    tauri::PhysicalPosition::new(pos.x, pos.y + size.height as i32 + 4),
+                    tauri::PhysicalPosition::new(pos.x, y),
                     tauri::PhysicalSize::new(size.width, height),
                 );
-                if placed != Some(want) {
+                // Shown first, then placed — a position handed to an unmapped
+                // window is advice the window manager may ignore, which is why
+                // `reveal` does it in that order too. Through `reveal` rather
+                // than a bare `show`, so the keep-above is asked for again:
+                // hiding unmaps the window and a window manager keeps no state
+                // for an unmapped one. This window hides and shows dozens of
+                // times a run, far more often than the overlay it sits under.
+                if !shown {
+                    reveal(&app, "ticker", false);
+                    let _ = ticker.set_zoom(scale);
+                    set_click_through(&ticker, true);
+                    shown = true;
+                }
+                // Checked against where the window actually is, not against
+                // what we remember asking for. A move or a resize issued while
+                // GTK is still mapping the window is quietly dropped, and
+                // remembering the request as if it had worked left the ticker
+                // sitting across the middle of the overlay for the rest of the
+                // session. Asking again costs nothing when it already agrees.
+                let here = (ticker.outer_position().ok(), ticker.outer_size().ok());
+                if here != (Some(want.0), Some(want.1)) {
                     let _ = ticker.set_position(want.0);
                     let _ = ticker.set_size(want.1);
-                    placed = Some(want);
-                }
-                if !shown {
-                    let _ = ticker.show();
-                    let _ = ticker.set_ignore_cursor_events(true);
-                    shown = true;
                 }
             }
         }
@@ -843,17 +920,52 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     FLOURISH.store(settings.flourish, Ordering::Relaxed);
     FLOURISH_ALWAYS.store(settings.flourish_always, Ordering::Relaxed);
     ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
-    IDLE_AFTER.store(if settings.auto_pause { IDLE_DEFAULT } else { 0 }, Ordering::Relaxed);
     if let Some(w) = app.get_webview_window("main") {
-        // the lock poller owns this once the overlay is up; touching a window
-        // that has never been shown is what breaks on GTK
-        if w.is_visible().unwrap_or(false) {
-            let _ = w.set_ignore_cursor_events(settings.locked);
-        }
+        // the lock poller owns this once the overlay is up
+        set_click_through(&w, settings.locked);
         let _ = w.set_zoom(scale);
         let _ = w.set_size(LogicalSize::new(BASE_W * scale, overlay_height(settings) * scale));
     }
     apply_autostart(settings.autostart);
+}
+
+/// Tell the webview its background is transparent, in so many words.
+///
+/// A window built with `transparent: true` is given an ARGB visual, but that
+/// only says the surface *can* hold alpha — WebKitGTK still has to be told
+/// what to clear it to, and without a background colour it clears to nothing
+/// at all: each frame is composited over the last. On this desktop that is
+/// visible as the previous text still readable under the new, and as the
+/// flourish's soft shade thickening into a hard black blob over the twenty
+/// frames it fades in across.
+///
+/// Windows and macOS do their own thing with transparency and are left alone.
+#[cfg(not(windows))]
+fn clear_to_nothing(w: &tauri::WebviewWindow) {
+    use tauri::utils::config::Color;
+    if let Err(e) = w.set_background_color(Some(Color(0, 0, 0, 0))) {
+        log::warn(format!("{}: no transparent background: {e}", w.label()));
+    }
+}
+
+#[cfg(windows)]
+fn clear_to_nothing(_w: &tauri::WebviewWindow) {}
+
+/// Click-through, asked only of a window that is actually on screen.
+///
+/// This is not defensive tidiness, it is the difference between running and
+/// not. GTK routes the `true` branch to `input_shape_combine_region` on the
+/// underlying GdkWindow, and a toplevel that has never been mapped has none —
+/// tao unwraps that `None` inside a glib callback, so the panic aborts the
+/// process instead of returning an error the `let _ =` could swallow. Turning
+/// it back off is widget-level and always safe. Windows has no such rule, but
+/// nothing there needs the call on a hidden window either.
+fn set_click_through(w: &tauri::WebviewWindow, through: bool) {
+    if !through {
+        let _ = w.set_ignore_cursor_events(false);
+    } else if w.is_visible().unwrap_or(false) {
+        let _ = w.set_ignore_cursor_events(true);
+    }
 }
 
 /// While locked the overlay is click-through EXCEPT the lock button: a poller
@@ -861,18 +973,14 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
 fn spawn_lock_poller(app: AppHandle) {
     std::thread::spawn(move || {
         let mut ignoring: Option<bool> = None;
+        let mut told: Option<bool> = None;
         loop {
             let locked = LOCKED.load(Ordering::Relaxed);
-            if !locked {
-                if ignoring != Some(false) {
-                    if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.set_ignore_cursor_events(false);
-                    }
-                    ignoring = Some(false);
-                }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                continue;
-            }
+            // Where the cursor is, reported whether the overlay is locked or
+            // not. The web side cannot work this out for itself while the
+            // window is click-through, and asking it to use :hover the rest of
+            // the time gave the button two different truths and a moment
+            // between them where it had neither.
             let over = (|| {
                 let w = app.get_webview_window("main")?;
                 if !w.is_visible().ok()? {
@@ -889,12 +997,27 @@ fn spawn_lock_poller(app: AppHandle) {
                         && cur.y >= pos.y as f64 + y0 * z
                         && cur.y <= pos.y as f64 + y1 * z,
                 )
-            })()
-            .unwrap_or(false);
-            let want_ignore = !over;
+            })();
+            // The overlay is hidden: leave the state unset so the right one is
+            // applied the first time it is really shown. Reading `None` as
+            // "the cursor is not over the button" is what asked a never-mapped
+            // window to go click-through, and that aborts the process.
+            let Some(over) = over else {
+                ignoring = None;
+                told = None;
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            };
+            if told != Some(over) {
+                told = Some(over);
+                let _ = app.emit_to("main", "lock-hover", over);
+            }
+            // Only a locked overlay is masked, and then only away from the
+            // button: that is the whole point of locking it.
+            let want_ignore = locked && !over;
             if ignoring != Some(want_ignore) {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.set_ignore_cursor_events(want_ignore);
+                    set_click_through(&w, want_ignore);
                 }
                 ignoring = Some(want_ignore);
             }
@@ -975,10 +1098,14 @@ fn save_settings(app: AppHandle, mut settings: Settings) -> Result<(), String> {
     settings.opacity = settings.opacity.clamp(0.3, 1.0);
     settings.scale = settings.scale.clamp(0.6, 1.5);
     settings.min_tier = settings.min_tier.clamp(0, 20);
-    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(settings_path(), json).map_err(|e| e.to_string())?;
+    // Applied before it is written. The other way round, a setting that kills
+    // the process on the way in is already on disk when it does — and every
+    // later start reads it back and dies again, with no way to the panel that
+    // would turn it off.
     apply_stats_settings(&app, &settings);
     apply_settings_effects(&app, &settings);
+    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(settings_path(), json).map_err(|e| e.to_string())?;
     let _ = app.emit("settings-changed", &settings);
     Ok(())
 }
@@ -1115,7 +1242,8 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
         .build();
     match built {
         Ok(w) => {
-            let _ = w.set_ignore_cursor_events(true);
+            clear_to_nothing(&w);
+            // click-through is applied when it is shown; see `set_click_through`
             if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
                 show_flourish(app, &w);
             }
@@ -1155,7 +1283,7 @@ fn show_flourish(app: &AppHandle, w: &tauri::WebviewWindow) {
         return;
     }
     reveal(app, "flourish", false);
-    let _ = w.set_ignore_cursor_events(true);
+    set_click_through(w, true);
 }
 
 /// The window says when it has finished playing, or that the player has parked
@@ -1199,7 +1327,7 @@ fn place_flourish(app: AppHandle, placing: bool) {
         // mouse, and it has to be able to take the keyboard too, or its own
         // Done button is the one thing on screen that cannot be clicked.
         let _ = w.set_focusable(true);
-        let _ = w.set_ignore_cursor_events(false);
+        set_click_through(&w, false);
         let _ = w.set_focus();
         let _ = app.emit_to("flourish", "flourish-placing", true);
         let mine = PLACING_GEN.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1213,7 +1341,7 @@ fn place_flourish(app: AppHandle, placing: bool) {
     } else {
         PLACING_GEN.fetch_add(1, Ordering::Relaxed);
         let _ = app.emit_to("flourish", "flourish-placing", false);
-        let _ = w.set_ignore_cursor_events(true);
+        set_click_through(&w, true);
         let _ = w.set_focusable(false);
         if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
             show_flourish(&app, &w);
@@ -1233,6 +1361,9 @@ pub struct About {
     /// numbers instead of being guessed at
     overlay_w: u32,
     overlay_h: u32,
+    /// where this process actually lives, so the setcap line the dashboard
+    /// shows is one that can be pasted rather than a placeholder
+    binary: String,
 }
 
 const REPO: &str = "https://github.com/Parazeya/hs-tracker";
@@ -1270,6 +1401,19 @@ fn log_path() -> String {
 }
 
 /// Show it in the file manager, selected.
+/// Wait for a helper in the background rather than dropping its handle.
+///
+/// `xdg-open` returns the moment it has handed the request on, but a `Child`
+/// that is dropped without being waited on stays a zombie for the life of the
+/// process — one per click on "Show it in the folder".
+fn reap(spawned: std::io::Result<std::process::Child>) -> std::io::Result<()> {
+    let mut child = spawned?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 #[tauri::command]
 fn show_log() -> Result<(), String> {
     let file = log::path();
@@ -1279,7 +1423,7 @@ fn show_log() -> Result<(), String> {
     let spawned = std::process::Command::new("xdg-open")
         .arg(file.parent().unwrap_or(&file))
         .spawn();
-    spawned.map(|_| ()).map_err(|e| e.to_string())
+    reap(spawned).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1295,6 +1439,13 @@ fn about() -> About {
             let measured = PANEL_H.load(Ordering::Relaxed);
             if measured > 0 { measured } else { 199 }
         },
+        // inside an AppImage the running binary is on a mount that will be
+        // gone; the file the user keeps is the one to name
+        binary: std::env::var_os("APPIMAGE")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_exe().ok())
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
     }
 }
 
@@ -1311,7 +1462,7 @@ fn open_url(url: String) -> Result<(), String> {
     let spawned = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
     #[cfg(not(windows))]
     let spawned = std::process::Command::new("xdg-open").arg(&url).spawn();
-    spawned.map(|_| ()).map_err(|e| e.to_string())
+    reap(spawned).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1368,6 +1519,10 @@ fn show_aux(app: &AppHandle, label: &str) {
 /// game it is following.
 fn reveal(app: &AppHandle, label: &str, focus: bool) {
     let Some(w) = app.get_webview_window(label) else { return };
+    // An iconified toplevel is still "visible" to GTK, so `show` on a minimised
+    // window is a no-op — tray -> Dashboard after clicking minimise did nothing
+    // at all, and on Wayland the tray is the only control there is.
+    let _ = w.unminimize();
     let _ = w.show();
     // after the show: a position set on an unmapped window is advice the window
     // manager may ignore. Only somewhere a screen still reaches.
@@ -1384,7 +1539,15 @@ fn reveal(app: &AppHandle, label: &str, focus: bool) {
         let _ = w.set_always_on_top(true);
     }
     if focus {
-        let _ = w.set_focus();
+        // tao refuses to raise a window it does not yet believe is mapped, and
+        // the show above is still queued on the main loop when we get here —
+        // so the request is handed back to that loop to run after it.
+        let (app, label) = (app.clone(), label.to_string());
+        let _ = app.clone().run_on_main_thread(move || {
+            if let Some(w) = app.get_webview_window(&label) {
+                let _ = w.set_focus();
+            }
+        });
     }
 }
 
@@ -1637,6 +1800,76 @@ fn now_id() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64);
     nanos.wrapping_add(SEQ.fetch_add(1, Ordering::Relaxed)) & 0xffff_ffff
+}
+
+/// The front end reporting that it has actually painted.
+///
+/// This is the only proof the app has that its renderer works. Windows can be
+/// built, shown and left blank — every one of them is transparent, so a dead
+/// web process is an *invisible* window, not an empty one — and nothing in
+/// WebKitGTK tells us. Two things hang off the signal: the XWayland breadcrumb
+/// is only cleared once a page is up, and a watchdog says so in the log when
+/// no page ever arrives.
+#[tauri::command]
+fn ui_ready() {
+    if UI_READY.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    #[cfg(not(windows))]
+    let _ = std::fs::remove_file(data_dir().join("x11-attempt"));
+    log::say("start", "the interface is up");
+}
+
+/// What this session actually is, in the log, once.
+///
+/// Every Linux report so far has turned on facts nobody could see afterwards:
+/// which display server, which backend the toolkit chose, which driver. The
+/// app knew all of it and wrote none of it down.
+#[cfg(not(windows))]
+fn log_environment() {
+    let var = |k: &str| std::env::var(k).unwrap_or_else(|_| "-".into());
+    let driver = if std::path::Path::new("/sys/module/nvidia/version").exists() {
+        std::fs::read_to_string("/sys/module/nvidia/version")
+            .map(|v| format!("nvidia {}", v.trim()))
+            .unwrap_or_else(|_| "nvidia".into())
+    } else if std::path::Path::new("/sys/module/nouveau").exists() {
+        "nouveau".into()
+    } else {
+        "no nvidia module".into()
+    };
+    log::say(
+        "env",
+        &format!(
+            "session={} wayland={:?} display={:?} gdk={} desktop={} | gpu: {} | overlay={} x11-forced={}",
+            var("XDG_SESSION_TYPE"),
+            var("WAYLAND_DISPLAY"),
+            var("DISPLAY"),
+            var("GDK_BACKEND"),
+            var("XDG_CURRENT_DESKTOP"),
+            driver,
+            overlay_supported(),
+            forced_x11(),
+        ),
+    );
+}
+
+#[cfg(windows)]
+fn log_environment() {}
+
+/// Nothing painted, and by now something would have. Says so where the user
+/// can find it, because on screen there is only an invisible window.
+fn spawn_render_watchdog() {
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(20));
+        if UI_READY.load(Ordering::Relaxed) {
+            return;
+        }
+        log::error(
+            "no window has drawn anything after 20s - the web process is probably dead. 
+                   Try starting with WEBKIT_DISABLE_COMPOSITING_MODE=1, or with 
+                   WEBKIT_DISABLE_DMABUF_RENDERER=1 on an NVIDIA card.",
+        );
+    });
 }
 
 #[tauri::command]
@@ -1948,6 +2181,14 @@ pub fn run() {
     let hk_reset: Shortcut = HK_RESET.parse().unwrap();
     let hk_pause: Shortcut = HK_PAUSE.parse().unwrap();
     let app = tauri::Builder::default()
+        // First, before anything else can be built: a second copy has its own
+        // sniffer, its own writes to settings.json and runs.json, and loses the
+        // race for the stream port. It hands its arguments over and leaves,
+        // and the copy already running comes to the front instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            let face = if read_settings().compact && overlay_supported() { "main" } else { "dashboard" };
+            reveal(app, face, true);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -1992,6 +2233,7 @@ pub fn run() {
             export_filter,
             import_filter,
             ticker_busy,
+            ui_ready,
             get_runs,
             clear_runs,
             get_shopping,
@@ -2010,7 +2252,15 @@ pub fn run() {
         ])
         .setup(|app| {
             let overlay = overlay_supported();
-            build_tray(app.handle())?;
+            // The tray is a convenience, not the app. On Linux the indicator
+            // library is dlopened and panics outright when it is missing, and
+            // this is the first line of setup — one absent .so and there is
+            // never a window at all. Note it and carry on; the front end asks
+            // `session_info` whether there is a tray to hide into.
+            if let Err(e) = build_tray(app.handle()) {
+                TRAY_OK.store(false, Ordering::Relaxed);
+                log::error(format!("no tray icon: {e}"));
+            }
             // hotkeys are the overlay's remote control, and the backend they
             // need is X11's; registering them under Wayland reports success and
             // then nothing ever fires
@@ -2037,9 +2287,7 @@ pub fn run() {
             // one does not have yet. The ticker gets it when it is shown, the
             // overlay from the lock poller.
             if let Some(t) = app.get_webview_window("ticker") {
-                if t.is_visible().unwrap_or(false) {
-                    let _ = t.set_ignore_cursor_events(true);
-                }
+                set_click_through(&t, true);
             }
             #[cfg(debug_assertions)]
             if let Some(w) = app.get_webview_window("main") {
@@ -2050,14 +2298,32 @@ pub fn run() {
                 spawn_lock_poller(app.handle().clone());
                 spawn_ticker_glue(app.handle().clone());
             }
+            log_environment();
+            for label in ["main", "ticker", "dashboard"] {
+                if let Some(w) = app.get_webview_window(label) {
+                    clear_to_nothing(&w);
+                }
+            }
+            // The scope in tauri.conf.json cannot match this directory on unix:
+            // there the glob refuses to let `**` cross a dot component, and the
+            // whole path lives under ~/.config. Every custom sound then 403s
+            // and is re-delivered as base64 over IPC. Granted here, by path.
+            {
+                use tauri::Manager as _;
+                let _ = app.asset_protocol_scope().allow_directory(sounds_dir(), false);
+            }
+            spawn_render_watchdog();
             spawn_position_saver(app.handle().clone());
             spawn_stats_pusher(app.handle().clone());
             presence::spawn(app.handle().clone());
             stream::spawn(app.handle().clone());
             sniffer::spawn(app.state::<Shared>().inner(), app.handle().clone());
-            // the windows are up: whatever backend this is, it worked
-            #[cfg(not(windows))]
-            let _ = std::fs::remove_file(data_dir().join("x11-attempt"));
+            // The breadcrumb that says "we already tried XWayland" used to be
+            // dropped here, but `setup` runs before `app.run` and so before a
+            // single page has painted: a backend that builds windows and then
+            // fails to render them looked like success. It is cleared once the
+            // front end says it is up — see the `ui_ready` command.
+            
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -2065,9 +2331,25 @@ pub fn run() {
             // the window, and a destroyed dashboard cannot be brought back from
             // the tray — on a Wayland session it is the only face there is.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
                 let app = window.app_handle().clone();
                 let label = window.label().to_string();
+                // Closing the placement box has to end the placement, or
+                // `PLACING` stays true for the full watchdog and the next real
+                // drop re-shows a mouse-grabbing dashed frame over the game.
+                if label == "flourish" && PLACING.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    place_flourish(app, false);
+                    return;
+                }
+                // Hiding is only kind while there is somewhere to hide into.
+                // Without a tray — an indicator library that would not load,
+                // a session with no host for one — the dashboard would be gone
+                // with no way back, and on Wayland it is the only face there
+                // is. Then let it close and take the app with it.
+                if label == "dashboard" && !TRAY_OK.load(Ordering::Relaxed) {
+                    return;
+                }
+                api.prevent_close();
                 hide_aux(&app, &label);
             }
         })
