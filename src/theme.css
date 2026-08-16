@@ -15,6 +15,41 @@ body {
   background: transparent;
 }
 
+/* The scrollbar, in the same paint as everything else. The one the
+   webview draws is a strip of system grey down the side of a panel
+   made of pixel art, and it is the first thing the eye goes to. Kept
+   here rather than per panel: every list in the app scrolls, and one
+   of them wearing the system bar is the whole point missed. It is
+   drawn from the tokens, so a season changes it along with the rest. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge-8) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgb(0 0 0 / 0.28);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--edge-8);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gold-2);
+  background-clip: padding-box;
+}
+/* the little square where the two bars meet, and the end buttons: the
+   webview draws arrows there that no amount of colour makes belong */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+
 :root {
   --bone-3: #8d7d63;
   --bone-4: #9a8a68;

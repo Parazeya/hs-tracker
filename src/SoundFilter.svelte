@@ -88,6 +88,11 @@
     return seen;
   });
 
+  /// Clear removes what the search is showing, so what it would remove changes
+  /// with the search as well as with the list. Both belong in the key that
+  /// arms it, or the confirmation is for one set and the deletion for another.
+  let clearKey = $derived(`clear:${current?.id}:${query.trim().toLowerCase()}`);
+
   // sorted by name, and narrowed by the same query that searches for new ones
   let shown = $derived.by(() => {
     const q = query.trim().toLowerCase();
@@ -112,8 +117,15 @@
     for (const list of lists) refreshStatus(`list-${list.id}`);
   });
 
+  /// The answer is written after it arrives, never around it. Written as
+  /// `status = { ...status, [key]: await … }` the spread is evaluated before
+  /// the await — so eight lists asked at once each copied the same empty map
+  /// and the last reply overwrote the other seven. An imported filter then
+  /// claimed to have no sounds while its files sat on disk and Test played
+  /// them.
   async function refreshStatus(key) {
-    status = { ...status, [key]: await invoke('sound_status', { rarity: key }).catch(() => null) };
+    const name = await invoke('sound_status', { rarity: key }).catch(() => null);
+    status[key] = name;
   }
 
   function save() {
@@ -135,6 +147,10 @@
   // Deleting a filter takes its lists and their sounds with it, and clearing a
   // list is just as final — so anything destructive asks once. The second click
   // does it; walking away forgets.
+  //
+  // The key has to name what is armed, not just which button. Keyed by button
+  // alone, arming the delete on one list and then picking another left the
+  // second one armed without ever having been asked about: one click, gone.
   let armed = $state(null);
   let armTimer;
   function danger(key, action) {
@@ -259,22 +275,46 @@
     }
   }
 
+  /// The wait here is as long as the player takes to find the file, and the
+  /// app stays usable throughout — so the settings this panel was holding when
+  /// the dialog opened may be old news by the time it closes. The import is
+  /// added to what is on disk now, not to the copy in hand, and saved outright
+  /// rather than through the debounce: the listener above brings the panel
+  /// back into step.
   async function importFilter() {
     try {
       const imported = await invoke('import_filter');
       if (!imported) return;
-      settings.filters = [...filters, imported];
-      settings.filter = imported.id;
+      const base = (await invoke('get_settings').catch(() => null)) ?? $state.snapshot(settings);
+      base.filters = [...(base.filters ?? []), imported];
+      base.filter = imported.id;
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      await invoke('save_settings', { settings: base });
+      settings = base;
       selected = 0;
-      save();
       say(`imported ${imported.name} — ${imported.lists.length} lists`);
     } catch (e) {
       say(String(e));
     }
   }
 
+  /// A copy gets fresh list ids so it cannot fight with the original — and a
+  /// list's sound is a file named after its id, so the copy has to be given
+  /// one of its own too. Without that the copy came out mute while the button
+  /// said "sounds and all".
   function duplicateFilter() {
-    addFilter(`${filter.name} copy`, lists.map((l) => ({ ...l, id: id(), items: [...l.items] })));
+    const pairs = lists.map((l) => [l.id, id()]);
+    const made = addFilter(
+      `${filter.name} copy`,
+      lists.map((l, i) => ({ ...l, id: pairs[i][1], items: [...l.items] })),
+    );
+    for (const [from, to] of pairs) {
+      invoke('copy_sound', { from: `list-${from}`, to: `list-${to}` })
+        .then(() => refreshStatus(`list-${to}`))
+        .catch(() => {});
+    }
+    return made;
   }
 
   function removeItem(name) {
@@ -302,8 +342,12 @@
     } catch {}
   }
 
+  /// The volume is read before the wait, not after it. `play(await …, current.volume)`
+  /// reads `current` only once the file has loaded, and by then the player may
+  /// have picked another list — so one list's sound played at another's volume.
   async function test() {
-    play(await soundUrl(soundKey), current?.volume ?? 0.7);
+    const volume = current?.volume ?? 0.7;
+    play(await soundUrl(soundKey), volume);
   }
 
 </script>
@@ -333,7 +377,9 @@
       <div class="note">
         Counters still record everything — this only silences the alerts. Grades come
         from the item tables, so an item they do not list stays quiet while a minimum
-        tier is set. Finds the server announces always sound.
+        tier is set. A find of your own that the server puts in chat skips the minimum
+        tier, but still needs its rarity ticked here or a list of its own. Another
+        player's find is never yours and never sounds.
       </div>
     </div>
 
@@ -368,7 +414,7 @@
           <button
             class="del"
             class:armed={armed === 'filter'}
-            onclick={() => danger('filter', removeFilter)}
+            onclick={() => danger(`filter:${filter?.id}`, removeFilter)}
             title="Delete this filter with all its lists and sounds"
           >{armed === 'filter' ? 'delete?' : '×'}</button>
         {/if}
@@ -425,7 +471,7 @@
       <button
         class="del"
         class:armed={armed === 'list'}
-        onclick={() => danger('list', () => removeList(selected))}
+        onclick={() => danger(`list:${current?.id}`, () => removeList(selected))}
         title="Delete this list and its sound"
       >{armed === 'list' ? 'delete?' : '×'}</button>
     </div>
@@ -477,7 +523,7 @@
     <div class="listhead">
       <span>Items in {current.name}</span>
       {#if shown.length}
-        <button class="link" class:armed={armed === 'clear'} onclick={() => danger('clear', removeShown)}>
+        <button class="link" class:armed={armed === clearKey} onclick={() => danger(clearKey, removeShown)}>
           {#if armed === 'clear'}
             {query.trim() ? `remove ${shown.length}?` : 'clear the list?'}
           {:else}

@@ -44,6 +44,23 @@
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
 
+  // The addresses the server is actually bound to, which is not always the port
+  // in the box above — it may have been taken. Polled while the panel is open,
+  // because switching the server on is what makes them exist.
+  let urls = $state(null);
+  let copied = $state(false);
+  $effect(() => {
+    const ask = () => invoke('stream_urls').then((u) => (urls = u)).catch(() => {});
+    ask();
+    const t = setInterval(ask, 2000);
+    return () => clearInterval(t);
+  });
+  function copy(text) {
+    invoke('copy_text', { text }).catch(() => {});
+    copied = true;
+    setTimeout(() => (copied = false), 1500);
+  }
+
   let saveTimer = null;
   function save() {
     clearTimeout(saveTimer);
@@ -262,7 +279,7 @@
         <button class="check" onclick={() => { settings.stream = !settings.stream; save(); }} aria-label="stream">
           <img src={settings.stream ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="opt" title="Serves the overlay as a page on this machine so OBS can add it as a Browser Source. The addresses are in About.">
+        <span class="opt" title="Serves the overlay as a page on this machine so OBS can add it as a Browser Source.">
           Serve the overlay to OBS
         </span>
       </div>
@@ -277,6 +294,18 @@
           />
           <span class="pct">127.0.0.1 only</span>
         </div>
+        <!-- the addresses belong with the switch that serves them: they are of
+             no use anywhere else, and looking for them in another panel is a
+             step nobody should have to be told about -->
+        {#if urls}
+          {#each [['Overlay', urls[0]], ['Dashboard', urls[1]], ['Announcement', urls[2]]] as [what, url]}
+            <div class="line" data-tauri-drag-region>
+              <span class="name">{what}</span>
+              <button class="addr" onclick={() => copy(url)}>{url}</button>
+            </div>
+          {/each}
+          <div class="hint">{copied ? 'copied' : 'Click one to copy it, then add a Browser Source in OBS.'}</div>
+        {/if}
       {/if}
       <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.debug_log = !settings.debug_log; save(); }} aria-label="debug">
@@ -517,6 +546,26 @@
     height: 24px;
   }
   .port:focus { outline: none; border-color: var(--edge-4); }
+
+  /* An address is read character by character and typed into another program,
+     so it is set in the system's monospace rather than the game's face — which
+     has no glyph of its own for a good half of ASCII. */
+  .addr {
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: 11px;
+    color: var(--gold-2);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .addr:hover { color: var(--bone-13); }
+  .hint {
+    font-size: 10px;
+    color: var(--edge-8);
+    padding: 2px 0 0 116px;
+  }
 
   .hotkeys {
     font-size: 10px;

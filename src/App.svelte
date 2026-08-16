@@ -271,27 +271,22 @@
 
   {#if shown('items')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="Angelic | Unholy">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Angelic | Unholy">
         <img src={icon('chest')} alt="" class="ic" />
         <span class="val">
           <span class="c-ang">{fmt(item('Angelic').total)}</span>
-          <span class="c-blue">({fmt(item('Angelic').mf)})</span>
           | <span class="c-unh">{fmt(item('Unholy').total)}</span>
-          <span class="c-blue">({fmt(item('Unholy').mf)})</span>
         </span>
       </div>
       <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Heroic | Set">
         <span class="val">
           <span class="c-her">{fmt(item('Heroic').total)}</span>
-          <span class="c-blue">({fmt(item('Heroic').mf)})</span>
           | <span class="c-set">{fmt(item('Set').total)}</span>
-          <span class="c-blue">({fmt(item('Set').mf)})</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Satanic">
         <span class="val">
           <span class="c-sat">{fmt(item('Satanic').total)}</span>
-          <span class="c-blue">({fmt(item('Satanic').mf)})</span>
           | <span class="c-sat">{fmt(item('Satanic').per_hour)}/h</span>
         </span>
       </div>
@@ -439,7 +434,10 @@
     white-space: nowrap;
   }
 
-  /* two paired counters per chip need the room; keep the row at 388px */
+  /* the row is 388px whatever it holds: 3 × 124 with two 8px gaps, or a wide
+     chip and a narrow one. The loot chips carried a second figure each and
+     needed 140 for the first of them; a plain count fits the same 124 as the
+     rest, and three of a size sit better than two and a half. */
   .chip.lg { width: 140px; }
   .chip.md { width: 124px; }
 

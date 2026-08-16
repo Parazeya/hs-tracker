@@ -59,18 +59,11 @@
     invoke('log_path').then((p) => (logAt = p)).catch(() => {});
   });
 
-  // the two addresses a streamer pastes into OBS, or nothing while it is off
-  let urls = $state(null);
-  let copied = $state('');
-  $effect(() => {
-    invoke('stream_urls').then((u) => (urls = u)).catch(() => {});
-    const t = setInterval(() => invoke('stream_urls').then((u) => (urls = u)).catch(() => {}), 2000);
-    return () => clearInterval(t);
-  });
+  let copied = $state(false);
   function copy(text) {
     invoke('copy_text', { text }).catch(() => {});
-    copied = text;
-    setTimeout(() => (copied = ''), 1500);
+    copied = true;
+    setTimeout(() => (copied = false), 1500);
   }
 </script>
 
@@ -98,50 +91,16 @@
     </div>
 
     <div class="card" style:border-image-source="url({art('chip_dark')})">
-      <div class="head">OBS</div>
-      <div class="note">
-        Add a <b>Window Capture</b>, pick <b>[hs-tracker.exe]: HS Tracker — Overlay</b>
-        and set the method to <b>Windows 10 (1903 and up)</b>. The overlay is
-        already transparent and comes across as it looks.
-      </div>
-      <div class="note">
-        Set <b>Window Match Priority</b> to <b>Window title must match</b>. On
-        anything else OBS falls back to another window of the same type, and
-        while the dashboard is up — the overlay being hidden — that is the
-        dashboard.
-      </div>
-      {#if urls}
-        <div class="note second">
-          Or a <b>Browser Source</b>, which is also the answer if you play with
-          the dashboard up: there is no overlay window to capture then. Size it
-          {#if info}<b>{info.overlay_w} × {info.overlay_h}</b>{/if} to match.
-        </div>
-        <div class="row obs">
-          <span class="k">Overlay</span>
-          <button class="link" onclick={() => copy(urls[0])}>{urls[0]}</button>
-        </div>
-        <div class="row obs">
-          <span class="k">Dashboard</span>
-          <button class="link" onclick={() => copy(urls[1])}>{urls[1]}</button>
-        </div>
-        <div class="row obs">
-          <span class="k">Announcement</span>
-          <button class="link" onclick={() => copy(urls[2])}>{urls[2]}</button>
-        </div>
-        {#if copied}<div class="ok">copied</div>{/if}
-      {/if}
-    </div>
-
-    <div class="card" style:border-image-source="url({art('chip_dark')})">
       <div class="head">If something goes wrong</div>
       <div class="note">
         Errors are written down as they happen — panics, and anything a panel
         throws. If you are asked for it, this is the file.
       </div>
-      <div class="row obs">
+      <div class="row path">
         <span class="k">Log</span>
-        <button class="link" onclick={() => copy(logAt)}>{logAt || '…'}</button>
+        <button class="link mono" onclick={() => copy(logAt)}>{logAt || '…'}</button>
       </div>
+      {#if copied}<div class="ok">copied</div>{/if}
       <div class="line">
         <button class="btn" onclick={() => invoke('show_log').catch((e) => (failed = String(e)))}>
           Show it in the folder
@@ -209,12 +168,22 @@
   .row { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; }
   .k { min-width: 74px; color: var(--bone-3); }
   .row b { color: var(--bone-11); font-weight: normal; }
-  .row.obs .link { font-size: 11px; }
+  .row.path { align-items: center; }
+
+  /* The game's face has no backslash of its own — the slot holds another
+     glyph entirely, and a Windows path came out as C:wUserswExpertVw… Paths
+     and addresses are read one character at a time and typed elsewhere, so
+     they are set in the system's monospace and not in the skin. */
+  .mono {
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: 11px;
+    text-align: left;
+    word-break: break-all;
+  }
 
   .head { font-size: 13px; color: var(--gold-2); }
   .note { font-size: 11px; color: var(--bone-3); line-height: 1.5; margin-top: 3px; }
   .note b { color: var(--bone-11); font-weight: normal; }
-  .note.second { margin-top: 8px; }
 
   .line { margin-top: 6px; }
   .btn {

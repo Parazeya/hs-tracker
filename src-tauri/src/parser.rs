@@ -83,6 +83,14 @@ pub enum GameEvent {
         hlevel: i64,
         satanic_here: bool,
     },
+    /// A find the server put in chat: "Ragnar just found [Azazel's Despair]".
+    /// The line goes to everybody on the shard, so who found it matters — it
+    /// is only ours when the name is ours. Answered in `GameStats`, which is
+    /// the side that knows the character.
+    Found {
+        finder: String,
+        name: String,
+    },
     ItemAdded {
         rarity: Value,
         mf: bool,
@@ -565,23 +573,9 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
     if message.contains("mail") || has(d, MAIL_FIELDS) {
         events.push(GameEvent::Mail(mail_is_present(d)));
     }
-    // server chat announcement: "... just found [Item Name]"
-    if let Some(name) = announced_item_name(&msg_text(d)) {
-        events.push(GameEvent::ItemAdded {
-            rarity: Value::Null,
-            mf: false,
-            tier: 0,
-            item_type: 0,
-            item_id: 0,
-            weapon_type: 0,
-            seed: 0,
-            name,
-            announced: true,
-            amount: 1,
-            fingerprint: String::new(),
-            hash: String::new(),
-            ground: false,
-        });
+    // server chat announcement: "Someone just found [Item Name]"
+    if let Some((finder, name)) = announced_item_name(&msg_text(d)) {
+        events.push(GameEvent::Found { finder, name });
     }
     events.extend(item_events(d));
     if has(d, SATANIC_ZONE_FIELDS) {
@@ -819,15 +813,46 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
         Some(Value::String(s)) => s.trim().to_string(),
         _ => String::new(),
     };
-    let name = if explicit_name.is_empty() {
-        crate::items::item_name(item_type, item_id, weapon_type)
-            .unwrap_or_default()
-            .to_string()
+    // Odyssey keeps its own item space, and its packet says so: it carries an
+    // `h` that no seasonal item sends, and an `e` of 0 where a seasonal item
+    // carries the season it belongs to. Its `d` is not a rarity on the scale
+    // the rest of the game uses — every Odyssey pickup arrives as 7, white
+    // ones included, and 7 is Angelic here, so a practice run filled up with
+    // Angelic finds. What the field does mean there is not known, so nothing
+    // is claimed about it: the drop is still seen, it simply has no rarity.
+    // A capture of 12 Odyssey and 38 seasonal pickups splits on `h` exactly.
+    let odyssey = has(obj, &["h"]);
+    let rarity = if odyssey {
+        Value::Null
     } else {
+        field(obj, ITEM_RARITY_FIELDS).unwrap_or(Value::Number(0.into()))
+    };
+    // A name read out of the tables is a guess about which item this is, and a
+    // guess must not become evidence about what it is worth. `resolve_rarity`
+    // trusts the name over a weak packet rarity, so an ordinary base whose
+    // id-in-category lands on a unique's slot was handed that unique's name
+    // and then promoted to its rarity — a white sword counted as Satanic, a
+    // potion as Angelic.
+    //
+    // The drop path already refuses this: it keeps only `c == 1`, the game's
+    // own flag for a named item, "while `c == 0` drops are ordinary bases
+    // numbered 0..20". The pickup path never learnt the rule, and a pickup is
+    // what the counters see. It cannot simply drop `c == 0` — an ordinary item
+    // going into the bag is still an item — so it stays uncounted-by-name
+    // instead: asked of the table only when the game has said this is a named
+    // item, or when the rarity on the packet is already one worth naming.
+    let named_flag = int_field(obj, &["c"]) == 1;
+    let worth_naming = crate::stats::rarity_from_packet(&rarity)
+        .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
+    let name = if !explicit_name.is_empty() {
         explicit_name
+    } else if named_flag || worth_naming {
+        crate::items::item_name(item_type, item_id, weapon_type).unwrap_or_default().to_string()
+    } else {
+        String::new()
     };
     GameEvent::ItemAdded {
-        rarity: field(obj, ITEM_RARITY_FIELDS).unwrap_or(Value::Number(0.into())),
+        rarity,
         mf: int_field(obj, &["mf_drop", "mfDrop", "m"]) == 1,
         tier: int_field(obj, &["tier", "n"]),
         item_type,
@@ -859,12 +884,19 @@ fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
         .find(|&i| h[i..i + n.len()].eq_ignore_ascii_case(n) && haystack.is_char_boundary(i))
 }
 
-fn announced_item_name(message: &str) -> Option<String> {
+/// The finder and what they found, out of "Ragnar just found [Azazel's Despair]".
+/// The finder can be empty — some lines are worded without one — and an empty
+/// finder is nobody, which is not us.
+fn announced_item_name(message: &str) -> Option<(String, String)> {
     const MARKER: &str = "just found [";
-    let start = find_ascii_ci(message, MARKER)? + MARKER.len();
+    let at = find_ascii_ci(message, MARKER)?;
+    let start = at + MARKER.len();
     let end = message[start..].find(']')? + start;
     let name = message[start..end].trim();
-    (!name.is_empty()).then(|| name.to_string())
+    // whatever the line opens with, up to the marker; the game puts a colour
+    // tag or a channel prefix in front of the name often enough
+    let finder = message[..at].trim().rsplit(&[':', '>', ']'][..]).next().unwrap_or("").trim();
+    (!name.is_empty()).then(|| (finder.to_string(), name.to_string()))
 }
 
 /// "No new mail", "You have no new mail." and "Mailbox empty" all mean empty.
@@ -1041,6 +1073,62 @@ mod tests {
     }
 
     #[test]
+    fn an_odyssey_pickup_claims_no_rarity() {
+        // straight out of a capture: every pickup on an Odyssey character, all
+        // of them ordinary, arrives with d = 7 — which on the seasonal scale
+        // is Angelic, and filled the session with Angelic finds
+        let odyssey = json!({
+            "status": 1,
+            "message": "Success on inventory update ext",
+            "operations": { "add": {
+                "7-4964607-6591f6c6d88770001-12": {"a": 395097030, "b": 1, "c": 0, "d": 7, "e": 0, "h": 1, "j": 0, "sh": "98f379b4da5b"}
+            }}
+        });
+        let events = events_from_messages(std::slice::from_ref(&odyssey));
+        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
+        assert_eq!(resolve_rarity(rarity, name), "Unknown", "its scale is not ours to read");
+
+        // the seasonal shape of the same capture keeps working
+        let seasonal = json!({
+            "status": 1,
+            "message": "Success on inventory update ext",
+            "operations": { "add": {
+                "7-4964607-64f8884a6cfbb000b-10": {"a": 42, "b": 0, "c": 0, "d": 2, "e": 10, "j": 0, "n": 1, "sh": "ab"}
+            }}
+        });
+        let events = events_from_messages(std::slice::from_ref(&seasonal));
+        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
+        assert_eq!(resolve_rarity(rarity, name), "Superior");
+    }
+
+    #[test]
+    fn an_ordinary_pickup_is_not_given_a_uniques_name() {
+        // `c: 0` and a low `b` is an ordinary base going into the bag. Slot
+        // 18:8 belongs to an Angelic potion, and reading this through the name
+        // table made every white potion an Angelic find.
+        let payload = json!({
+            "status": 1,
+            "message": "Success on inventory update ext",
+            "operations": { "add": { "8-18": {"e": 10, "a": 42, "j": 0, "b": 8, "d": 2, "c": 0} } }
+        });
+        let events = events_from_messages(std::slice::from_ref(&payload));
+        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
+        assert_eq!(name, "", "an ordinary base is nameless; the table knows only uniques");
+        assert_eq!(resolve_rarity(rarity, name), "Superior", "and it keeps the rarity it was sent with");
+
+        // the same slot, flagged by the game as a named item, still resolves
+        let named = json!({
+            "status": 1,
+            "message": "Success on inventory update ext",
+            "operations": { "add": { "8-18": {"e": 10, "a": 42, "j": 0, "b": 8, "d": 2, "c": 1} } }
+        });
+        let events = events_from_messages(std::slice::from_ref(&named));
+        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
+        assert_eq!(name, "Gold Inlaid Mysterious Potion");
+        assert_eq!(resolve_rarity(rarity, name), "Angelic");
+    }
+
+    #[test]
     fn currency_is_found_wrapped_bare_and_in_a_query_string() {
         let wrapped = json!({"currencyData": {"GSS": 700, "GSH": 0}});
         assert!(matches!(&events_from_messages(&[wrapped])[0], GameEvent::Gold(c) if c.gss == 700));
@@ -1064,7 +1152,10 @@ mod tests {
         // lowercased copy do not line up with the original
         let payload = json!({"message": "İSTANBUL just found [Doom Bringer]"});
         let events = events_from_messages(std::slice::from_ref(&payload));
-        assert!(matches!(&events[0], GameEvent::ItemAdded { name, .. } if name == "Doom Bringer"));
+        assert!(matches!(
+            &events[0],
+            GameEvent::Found { finder, name } if name == "Doom Bringer" && finder == "İSTANBUL"
+        ));
     }
 
     #[test]
@@ -1106,7 +1197,15 @@ mod tests {
         let events = events_from_messages(std::slice::from_ref(&payload));
         assert!(matches!(
             &events[0],
-            GameEvent::ItemAdded { name, announced: true, .. } if name == "Azazel's Despair"
+            GameEvent::Found { finder, name } if name == "Azazel's Despair" && finder == "Ragnar"
+        ));
+
+        // straight from a capture: the channel prefix is not part of the name
+        let server = json!({"message": "SERVER: Parahryushka Just found [Doctor's Potion]"});
+        let events = events_from_messages(std::slice::from_ref(&server));
+        assert!(matches!(
+            &events[0],
+            GameEvent::Found { finder, name } if name == "Doctor's Potion" && finder == "Parahryushka"
         ));
     }
 

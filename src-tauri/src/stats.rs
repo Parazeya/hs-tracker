@@ -254,30 +254,60 @@ pub struct GameStats {
     stale_save: bool,
     last_save: Option<Instant>,
     last_bank: Option<Instant>,
-    prefer_ground: bool,
-    alerts: Vec<String>,
-    min_tier: i64,
-    /// What the flourish window answers to. It is asked here rather than after
-    /// the fact because a drop that fails the alert rules never leaves this
-    /// function — which made the flourish's own settings look like they did
-    /// nothing at all.
-    fx_rarities: Vec<String>,
-    fx_tier: i64,
-    notable_defs: Vec<(String, Vec<String>)>,
-    /// (sound key, item names) — an item on one of these is announced by it
-    sound_lists: Vec<(String, Vec<String>)>,
+    prefs: Prefs,
     notable: HashMap<String, i64>,
     seen_fingerprints: std::collections::HashSet<String>,
     /// tier by item hash, so the pickup of an item knows what the drop said
     tier_seen: HashMap<String, i64>,
     /// items already added to the counters, by identity
     counted: std::collections::HashSet<String>,
+    /// items already announced, by identity — the roll on the ground and the
+    /// pickup that follows are two sightings of one item
+    told: std::collections::HashSet<String>,
     announced_at: HashMap<String, Instant>,
     character: Option<CharacterInfo>,
     drops: VecDeque<DropEntry>,
     series: Vec<SeriesPoint>,
     /// bumped by every change, so the pusher can skip unchanged snapshots
     revision: u64,
+}
+
+/// Everything the player chose, as against everything the session earned.
+///
+/// It is one struct so that a reset cannot mislay a piece of it. These were
+/// seven loose fields carried across `reset` by hand in a tuple, and the
+/// flourish's own filter was never added to that tuple: every finished run —
+/// including the one the game ends by closing — quietly disarmed the drop
+/// announcement until the settings were saved again.
+struct Prefs {
+    /// Whether notifications fire when an item hits the ground (true) or when
+    /// it is picked up (false).
+    prefer_ground: bool,
+    alerts: Vec<String>,
+    min_tier: i64,
+    /// What the flourish window answers to. It is asked here rather than after
+    /// the fact because a drop that fails the alert rules never leaves `apply`
+    /// — which made the flourish's own settings look like they did nothing at
+    /// all.
+    fx_rarities: Vec<String>,
+    fx_tier: i64,
+    notable_defs: Vec<(String, Vec<String>)>,
+    /// (sound key, item names) — an item on one of these is announced by it
+    sound_lists: Vec<(String, Vec<String>)>,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self {
+            prefer_ground: true,
+            alerts: JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
+            min_tier: 0,
+            fx_rarities: Vec::new(),
+            fx_tier: 6,
+            notable_defs: default_notable(),
+            sound_lists: Vec::new(),
+        }
+    }
 }
 
 impl Default for GameStats {
@@ -317,17 +347,12 @@ impl Default for GameStats {
             stale_save: false,
             last_save: None,
             last_bank: None,
-            prefer_ground: true,
-            alerts: JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
-            min_tier: 0,
-            fx_rarities: Vec::new(),
-            fx_tier: 6,
-            notable_defs: default_notable(),
-            sound_lists: Vec::new(),
+            prefs: Prefs::default(),
             notable: HashMap::new(),
             seen_fingerprints: std::collections::HashSet::new(),
             tier_seen: HashMap::new(),
             counted: std::collections::HashSet::new(),
+            told: std::collections::HashSet::new(),
             announced_at: HashMap::new(),
             character: None,
             drops: VecDeque::new(),
@@ -357,11 +382,8 @@ impl GameStats {
             self.xp_authoritative,
             self.stale_bank,
             self.stale_save,
-            self.prefer_ground,
-            std::mem::take(&mut self.alerts),
-            self.min_tier,
-            std::mem::take(&mut self.notable_defs),
-            std::mem::take(&mut self.sound_lists),
+            // every setting in one piece; see `Prefs` for why
+            std::mem::take(&mut self.prefs),
             // the marks the boss and chest counters are measured from: a reset
             // starts the tally again, it does not make the game recount
             std::mem::take(&mut self.tally_base),
@@ -382,11 +404,7 @@ impl GameStats {
             self.xp_authoritative,
             self.stale_bank,
             self.stale_save,
-            self.prefer_ground,
-            self.alerts,
-            self.min_tier,
-            self.notable_defs,
-            self.sound_lists,
+            self.prefs,
             self.tally_base,
         ) = carry;
         self.revision = revision + 1;
@@ -579,28 +597,28 @@ impl GameStats {
     /// it is picked up (false).
     pub fn set_prefer_ground(&mut self, prefer_ground: bool) {
         self.revision += 1;
-        self.prefer_ground = prefer_ground;
+        self.prefs.prefer_ground = prefer_ground;
     }
 
     /// Which drops are worth a sound and a ticker line. Counters ignore this —
     /// statistics should stay complete even when alerts are narrowed down.
     pub fn set_filter(&mut self, alerts: Vec<String>, min_tier: i64) {
         self.revision += 1;
-        self.alerts = alerts;
-        self.min_tier = min_tier;
+        self.prefs.alerts = alerts;
+        self.prefs.min_tier = min_tier;
     }
 
     /// The flourish has rules of its own, and they are not the alert rules.
     pub fn set_flourish_filter(&mut self, rarities: Vec<String>, tier: i64) {
-        self.fx_rarities = rarities;
-        self.fx_tier = tier;
+        self.prefs.fx_rarities = rarities;
+        self.prefs.fx_tier = tier;
     }
 
     /// Lists the user built by hand: their sound wins over the rarity alerts,
     /// and an item on one is announced even when the filter would hide it.
     pub fn set_sound_lists(&mut self, lists: Vec<(String, Vec<String>)>) {
         self.revision += 1;
-        self.sound_lists = lists
+        self.prefs.sound_lists = lists
             .into_iter()
             .map(|(key, names)| (key, names.into_iter().map(|n| n.trim().to_lowercase()).collect()))
             .collect();
@@ -611,7 +629,7 @@ impl GameStats {
             return None;
         }
         let lower = name.to_lowercase();
-        self.sound_lists
+        self.prefs.sound_lists
             .iter()
             .find(|(_, names)| names.contains(&lower))
             .map(|(key, _)| key.clone())
@@ -620,7 +638,7 @@ impl GameStats {
     pub fn set_notable(&mut self, defs: Vec<(String, Vec<String>)>) {
         self.revision += 1;
         if !defs.is_empty() {
-            self.notable_defs = defs;
+            self.prefs.notable_defs = defs;
         }
     }
 
@@ -632,6 +650,7 @@ impl GameStats {
         let lower = name.to_lowercase();
         let bare = lower.trim_end_matches(" rune").to_string();
         let label = self
+            .prefs
             .notable_defs
             .iter()
             .find(|(_, names)| {
@@ -647,17 +666,59 @@ impl GameStats {
     /// item whose grade cannot be established stays quiet too. The server's own
     /// announcements bypass this — they are rare finds by definition.
     fn passes_filter(&self, rarity: &str, tier: i64) -> bool {
-        self.alerts.iter().any(|r| r == rarity) && tier >= self.min_tier
+        self.prefs.alerts.iter().any(|r| r == rarity) && tier >= self.prefs.min_tier
     }
 
+    /// The flourish's slider starts at D, and there is no "any" below it — so D
+    /// has to mean any, an item the tables do not grade included. Read as a
+    /// plain minimum it excluded exactly those, and the setting that promised
+    /// everything announced the least.
     fn worth_a_flourish(&self, rarity: &str, tier: i64) -> bool {
-        self.fx_rarities.iter().any(|r| r == rarity) && tier >= self.fx_tier
+        let graded = tier >= self.prefs.fx_tier || self.prefs.fx_tier <= 1;
+        self.prefs.fx_rarities.iter().any(|r| r == rarity) && graded
+    }
+
+    /// Whether a name in chat is the character being tracked.
+    ///
+    /// Before the first save there is no character to compare against, and an
+    /// unattributed find is treated as somebody else's: a run that misses one
+    /// chime of its own in the first seconds is a smaller wrong than one that
+    /// announces the whole shard's luck.
+    fn is_us(&self, who: &str) -> bool {
+        let Some(me) = self.character.as_ref().map(|c| c.name.trim()) else { return false };
+        !me.is_empty() && me.eq_ignore_ascii_case(who.trim())
     }
 
     /// Returns the journal entry when this event produced a new tracked drop.
     pub fn apply(&mut self, event: &GameEvent) -> Option<DropEntry> {
         self.revision += 1;
         match event {
+            // A find the server put in chat. Everyone on the shard reads that
+            // line, so most of them are somebody else's — and somebody else's
+            // Angelic sounding the horn in the middle of your own run is noise
+            // wearing the costume of news. Ours is taken as though the client
+            // had reported it; anyone else's is dropped here and counts for
+            // nothing, sounds for nothing and lights nothing up.
+            GameEvent::Found { finder, name } => {
+                if !self.is_us(finder) {
+                    return None;
+                }
+                return self.apply(&GameEvent::ItemAdded {
+                    rarity: serde_json::Value::Null,
+                    mf: false,
+                    tier: 0,
+                    item_type: 0,
+                    item_id: 0,
+                    weapon_type: 0,
+                    seed: 0,
+                    name: name.clone(),
+                    announced: true,
+                    amount: 1,
+                    fingerprint: String::new(),
+                    hash: String::new(),
+                    ground: false,
+                });
+            }
             GameEvent::Gold(c) => self.apply_currency(c),
             // guild XP is 15% of character XP, so the reported gain scales back
             // up; account totals later correct any drift (their diff goes 0)
@@ -835,9 +896,10 @@ impl GameStats {
                     if self.seen_fingerprints.len() > 20_000 {
                         self.seen_fingerprints.clear();
                         self.counted.clear();
+                        self.told.clear();
                     }
                 }
-                let first = identity.is_empty() || self.counted.insert(identity);
+                let first = identity.is_empty() || self.counted.insert(identity.clone());
                 // A named item always drops at its own grade, which the packet
                 // never states — the wiki table does. Unnamed drops carry their
                 // grade themselves, and their pickup inherits it.
@@ -892,7 +954,7 @@ impl GameStats {
                 let listed_hit = listed.is_some();
                 let wanted = if *announced || listed.is_some() {
                     true
-                } else if self.prefer_ground {
+                } else if self.prefs.prefer_ground {
                     *ground
                 } else {
                     !*ground
@@ -902,6 +964,16 @@ impl GameStats {
                     || (!is_resource && self.passes_filter(&rarity_key, tier));
                 let flourish = !is_resource && self.worth_a_flourish(&rarity_key, tier);
                 if wanted && (announce || flourish) {
+                    // One item, one notification, whichever sighting got here
+                    // first. The rule above says as much, but a list was
+                    // exempt from it — `wanted` is true for a listed item
+                    // either way — so everything on a list chimed twice, once
+                    // as it hit the ground and again as it went in the bag.
+                    // The exemption was meant to outrank the rarity switches,
+                    // which is what `announce` already does.
+                    if !identity.is_empty() && !self.told.insert(identity.clone()) {
+                        return None;
+                    }
                     // The server announces a notable find in chat the moment
                     // it drops — the only signal that arrives before the item
                     // is picked up and says what it is. The local drop and the
@@ -915,11 +987,16 @@ impl GameStats {
                         self.announced_at.insert(lower, Instant::now());
                         self.announced_at.retain(|_, t| t.elapsed() < Duration::from_secs(120));
                     }
-                    let sound = if echo {
+                    // Only what the alert rules asked for chimes. A drop that
+                    // got this far on the flourish's rules alone is a picture,
+                    // not a sound: with the alerts set to SS and the flourish
+                    // to D, every D item was making a noise the player had
+                    // just finished switching off.
+                    let sound = if echo || !announce {
                         None
                     } else {
                         listed.or_else(|| {
-                            self.alerts.contains(&rarity_key).then(|| rarity_key.to_lowercase())
+                            self.prefs.alerts.contains(&rarity_key).then(|| rarity_key.to_lowercase())
                         })
                     };
                     let entry = DropEntry {
@@ -1092,6 +1169,7 @@ impl GameStats {
             carried_totals: self.stale_save,
             resources: self.resources.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
             notable: self
+                .prefs
                 .notable_defs
                 .iter()
                 .map(|(label, _)| NotableCount {
@@ -1492,6 +1570,18 @@ mod tests {
         assert_eq!(listed.sound.as_deref(), Some("list-chase"));
         // and an item that is on no list still obeys the switches
         assert!(s.apply(&drop("Eternity", "b")).is_none(), "unlisted items follow the filter");
+
+        // the same item picked up is the same item: it chimed on the way down
+        let picked = match drop("AK-47", "a") {
+            GameEvent::ItemAdded { rarity, mf, tier, item_type, item_id, weapon_type, seed, name, announced, amount, fingerprint, hash, .. } => {
+                GameEvent::ItemAdded {
+                    rarity, mf, tier, item_type, item_id, weapon_type, seed, name, announced,
+                    amount, fingerprint, hash, ground: false,
+                }
+            }
+            other => other,
+        };
+        assert!(s.apply(&picked).is_none(), "a list is not told twice about one item");
     }
 
     #[test]
@@ -1536,6 +1626,64 @@ mod tests {
         // switching the flourish off leaves the alerts as they were
         s.set_flourish_filter(Vec::new(), 6);
         assert!(s.apply(&tiered_satanic(5, "c")).is_none());
+    }
+
+    #[test]
+    fn only_our_own_finds_are_announced() {
+        let mut s = GameStats::default();
+        s.set_filter(vec!["Set".into()], 6);
+        s.set_flourish_filter(vec!["Set".into()], 1);
+        s.apply(&account_packet("Parahryushka", 0, 0));
+
+        let found = |who: &str| GameEvent::Found {
+            finder: who.into(),
+            name: "Doctor's Potion".into(),
+        };
+
+        // the whole shard reads this line; it is not our run
+        assert!(s.apply(&found("SomebodyElse")).is_none(), "another player's luck is theirs");
+        assert!(s.extra().drops.is_empty(), "and it does not reach the journal either");
+
+        let ours = s.apply(&found("parahryushka")).expect("our own find still counts");
+        assert_eq!(ours.sound.as_deref(), Some("set"));
+
+        // before the first save there is nobody to be, so nothing is claimed
+        let mut cold = GameStats::default();
+        assert!(cold.apply(&found("Parahryushka")).is_none());
+    }
+
+    #[test]
+    fn the_flourish_is_seen_and_not_heard() {
+        let mut s = GameStats::default();
+        // the alerts are set to the very top and the flourish to the bottom,
+        // which is the pair the settings panel invites
+        s.set_filter(vec!["Satanic".into()], 6);
+        s.set_flourish_filter(vec!["Satanic".into()], 1);
+        s.set_prefer_ground(false);
+
+        let drop = s.apply(&tiered_satanic(1, "a")).expect("the flourish wants it");
+        assert!(drop.flourish);
+        assert!(!drop.announce, "a D item is below the alerts");
+        assert_eq!(drop.sound, None, "so it must not make a sound either");
+
+        // the grade the tables cannot establish is still every bit of "any"
+        let unknown = s.apply(&tiered_satanic(0, "b")).expect("D means anything at all");
+        assert!(unknown.flourish);
+    }
+
+    #[test]
+    fn a_finished_run_leaves_the_settings_alone() {
+        let mut s = GameStats::default();
+        s.set_filter(vec!["Satanic".into()], 6);
+        s.set_flourish_filter(vec!["Satanic".into()], 1);
+        s.set_prefer_ground(false);
+
+        // the game closing files the run and starts another; every preference
+        // used to be copied across by hand, and this one was being dropped
+        s.reset();
+
+        let drop = s.apply(&tiered_satanic(1, "a")).expect("the flourish is still armed");
+        assert!(drop.flourish);
     }
 
     #[test]

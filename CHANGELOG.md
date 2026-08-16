@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.88 — 2026-08-16
+## 0.9.89 — 2026-08-16
 
 ### Added
 
@@ -26,12 +26,71 @@
 - An **About** section: the version, who made it, and a check for a newer
   release. It is the only request the app makes, and only on the button.
 
+### Changed
+
+- The overlay's loot chips show the count and nothing else. Each carried a
+  second figure in brackets — how many of those drops the game credited to
+  Magic Find — which cost more room than it was worth. The three chips are now
+  the same width as every other.
+- The scrollbars are the app's own rather than the system's.
+- The OBS addresses moved out of About and next to the switch that serves
+  them, in Settings. The capture instructions are in the README.
+- The README is for players now; the rest moved to `DEVELOPING.md`.
+
 ### Fixed
 
 - Linux with an NVIDIA card: the app came up as a tray icon and no window.
 - The overlay did not grow when a row was added to it; it measures itself now.
 - The overlay could lose always-on-top across a hide and show.
 - The minimize button was drawn by hand and did not follow the skin.
+- Ordinary items were counted as rare ones. An item going into the bag was
+  looked up in the item tables by its slot, and ordinary bases are numbered in
+  the same small range as the uniques — so a white sword came back as whatever
+  unique shares its number, and the counters believed it. In a capture of one
+  seasonal run, 35 of 38 ordinary pickups were being counted as Satanic. The
+  tables are now only asked about an item the game has flagged as named, or one
+  whose packet already says it is rare. The drop path had this rule and says
+  why in its own comment; the pickup path never learnt it.
+- **Odyssey** runs counted every pickup as Angelic. Odyssey keeps its own item
+  space and its own packet, and the field a seasonal item uses for rarity holds
+  something else there — the same 7 on everything, white items included, and 7
+  is Angelic on the seasonal scale. Its drops are counted without a rarity
+  rather than with the wrong one.
+- Everything on a custom list chimed twice — once as it hit the ground and
+  again as it went in the bag. One item, one alert, whichever sighting comes
+  first.
+- **Copy** made a filter whose lists were all mute: they were given new names
+  of their own on disk and nothing was put under them. It copies the sounds.
+- Choosing a new sound removed the old one before the new one was in place, so
+  anything that went wrong in between left the list with no sound at all.
+- The second click of a two-click delete went to whatever was selected then,
+  not to what had been armed. Picking another list between the clicks deleted
+  it outright.
+- **Test** played the file of the list that was selected when it was pressed at
+  the volume of the one selected when the file finished loading.
+- Another player's find set off your alerts. The server puts notable finds in
+  chat for the whole shard, and the app treated every one of them as its own —
+  a stranger's Angelic sounded the horn mid-run, past a minimum tier that was
+  set to silence exactly that. Only your character's finds count now.
+- The log path in About was unreadable: the game's typeface has another glyph
+  where the backslash should be, so `C:\Users\…` came out as `C:wUsersw…`.
+  Paths and addresses are set in a plain monospace now.
+- Browse, Import and Export froze the whole app until the file dialog was
+  answered — it could not even be closed. The dialog was opened from the thread
+  that draws the windows.
+- An imported filter said its lists had no sound while their files were on
+  disk and Test played them. Every list asked at once, and each reply threw
+  away the others.
+- Ending a run disarmed the drop announcement. Every setting is carried across
+  a reset by hand, and this one had been left out — so the moment the game was
+  closed, or the session reset, nothing was announced again until the settings
+  were saved. The settings now travel in one piece.
+- A drop that only the announcement wanted also played the alert sound: with
+  the alerts set to SS and the announcement to D, every D item made a noise.
+  Only the alert rules make a sound now.
+- **Least grade — D** did not mean D. An item the tables do not grade was read
+  as below it, and those are the ones with no grade to compare. The lowest
+  setting now means every drop of that rarity, graded or not.
 - The bank showed nothing until the game next saved. It is read from the one
   purse that has money in it now, and the save still has the last word.
 - Switching the drop announcement off and straight back on, then placing it,
@@ -42,10 +101,6 @@
   every click meant for what was underneath. It centres itself, is now plainly a
   box, takes the keyboard so its own button works, ends on Escape, and ends by
   itself after three minutes.
-
-### Changed
-
-- The README is for players now; the rest moved to `DEVELOPING.md`.
 
 ## 0.9.7 — 2026-08-14
 

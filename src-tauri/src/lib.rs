@@ -438,6 +438,7 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
                 };
                 format!("item  {label:?} rarity {rarity} tier {tier} {}", if *ground { "on the ground" } else { "picked up" })
             }
+            parser::GameEvent::Found { finder, name } => format!("chat  {finder:?} found {name:?}"),
             parser::GameEvent::SatanicZone { zone, .. } => format!("zone  {zone}"),
         };
         println!("[{src}] {line}");
@@ -1503,8 +1504,16 @@ struct ExportedFilter {
 }
 
 fn list_sound(id: &str) -> Option<ExportedSound> {
+    let key = format!("list-{id}");
+    // Every other route to a sound file asks this first; this one did not, and
+    // it is the one that builds a path out of an id and then reads whatever is
+    // there. An id is only ever minted by this app, but settings.json is a
+    // plain file on disk and a hand-edited one could name any path it liked.
+    if !sound_key(&key) {
+        return None;
+    }
     SOUND_EXTS.iter().find_map(|(ext, _)| {
-        let path = sounds_dir().join(format!("list-{id}.{ext}"));
+        let path = sounds_dir().join(format!("{key}.{ext}"));
         std::fs::read(&path).ok().map(|bytes| ExportedSound {
             ext: (*ext).to_string(),
             data: base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -1512,7 +1521,36 @@ fn list_sound(id: &str) -> Option<ExportedSound> {
     })
 }
 
+/// Give a new list the sound an old one has, for duplicating a filter.
+///
+/// A list's sound is a file named after its id, and a copy is given fresh ids
+/// so it cannot fight with the original — which left the copy mute while the
+/// button that made it promised "sounds and all". Silent when there is nothing
+/// to copy: most lists have no sound of their own.
 #[tauri::command]
+fn copy_sound(app: AppHandle, from: String, to: String) -> Result<(), String> {
+    if !sound_key(&from) || !sound_key(&to) || from == to {
+        return Err("bad list".into());
+    }
+    for (ext, _) in SOUND_EXTS {
+        let source = sounds_dir().join(format!("{from}.{ext}"));
+        if source.exists() {
+            std::fs::create_dir_all(sounds_dir()).map_err(|e| e.to_string())?;
+            std::fs::copy(&source, sounds_dir().join(format!("{to}.{ext}"))).map_err(|e| e.to_string())?;
+            let _ = app.emit("sounds-changed", &to);
+            break;
+        }
+    }
+    Ok(())
+}
+
+// `async` here is not about concurrency: a plain command runs on the main
+// thread, and a native file dialog opened from there stops the event loop
+// dead — the windows go grey and unclickable, and the app cannot even be
+// closed, until the dialog is answered. The plugin says as much of its own
+// blocking calls. Marked async, the command runs off the main thread, the
+// dialog is dispatched back to it, and the rest of the app keeps drawing.
+#[tauri::command(async)]
 fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let safe: String = filter.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '-' }).collect();
@@ -1547,7 +1585,8 @@ fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, 
     Ok(Some(path.file_name().unwrap_or_default().to_string_lossy().into_owned()))
 }
 
-#[tauri::command]
+/// Off the main thread; see `export_filter`.
+#[tauri::command(async)]
 fn import_filter(app: AppHandle) -> Result<Option<SoundFilter>, String> {
     use tauri_plugin_dialog::DialogExt;
     let picked = app
@@ -1706,8 +1745,9 @@ fn sound_status(rarity: String) -> Option<String> {
 }
 
 /// Native picker + copy into sounds\; the webview's own file input is
-/// unreliable in a frameless always-on-top window.
-#[tauri::command]
+/// unreliable in a frameless always-on-top window. Off the main thread; see
+/// `export_filter`.
+#[tauri::command(async)]
 fn pick_sound(app: AppHandle, rarity: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     if !sound_key(&rarity) {
@@ -1735,11 +1775,21 @@ fn pick_sound(app: AppHandle, rarity: String) -> Result<Option<String>, String> 
     }
     let dir = sounds_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // The new one is put down before the old one is taken away. The other way
+    // round — clear, then copy — a copy that fails for any reason at all
+    // leaves the key with nothing, and the player has lost a sound by trying
+    // to change it. Copied under a temporary name so a half-written file is
+    // never the one left behind.
+    let name = format!("{rarity}.{ext}");
+    let staged = dir.join(format!("{rarity}.{ext}.new"));
+    std::fs::copy(&path, &staged).map_err(|e| e.to_string())?;
     for (e, _) in SOUND_EXTS {
         let _ = std::fs::remove_file(dir.join(format!("{rarity}.{e}")));
     }
-    let name = format!("{rarity}.{ext}");
-    std::fs::copy(&path, dir.join(&name)).map_err(|e| e.to_string())?;
+    std::fs::rename(&staged, dir.join(&name)).map_err(|e| {
+        let _ = std::fs::remove_file(&staged);
+        e.to_string()
+    })?;
     let _ = app.emit("sounds-changed", &rarity);
     Ok(Some(name))
 }
@@ -1955,6 +2005,7 @@ pub fn run() {
             sound_path,
             sound_status,
             pick_sound,
+            copy_sound,
             clear_sound
         ])
         .setup(|app| {
