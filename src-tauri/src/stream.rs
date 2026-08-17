@@ -43,6 +43,11 @@ static ANNOUNCED: Mutex<Vec<(&'static str, String)>> = Mutex::new(Vec::new());
 /// A drop, for any page that is listening. `flourish` is the announcement the
 /// window plays; `drop` is the line the ticker adds.
 fn queue(kind: &'static str, drop: &crate::stats::DropEntry) {
+    // Nobody can be listening while the server is down, and a queue that
+    // nothing drains only ever discards its own oldest entry.
+    if SERVING.load(Ordering::Relaxed) == 0 {
+        return;
+    }
     let Ok(json) = serde_json::to_string(drop) else { return };
     if let Ok(mut waiting) = ANNOUNCED.lock() {
         // nobody may be listening at all; this is not a backlog to keep
@@ -81,8 +86,6 @@ pub fn spawn(app: AppHandle) {
         let viewers: Arc<Mutex<Vec<Viewer>>> = Arc::new(Mutex::new(Vec::new()));
         pump(app.clone(), viewers.clone());
         let mut bound: Option<(TcpListener, u16)> = None;
-        // the port we have already complained about, so we do not do it again
-        let mut complained: Option<u16> = None;
         loop {
             let wanted = WANTED.load(Ordering::Relaxed);
             let port = PORT.load(Ordering::Relaxed);
@@ -96,22 +99,20 @@ pub fn spawn(app: AppHandle) {
                     Some(server) => {
                         // the old listener goes only once a new one is standing
                         bound = Some((server, port));
-                        complained = None;
                         SERVING.store(port, Ordering::Relaxed);
                         viewers.lock().unwrap().clear();
                     }
                     None => {
                         // The port is taken; keep serving on the old one rather
-                        // than leaving the streamer with nothing. Said once per
-                        // port: repeated every five seconds it wrote 40 KB an
-                        // hour, rolled the log and took the older copy — and
-                        // any panic or capture diagnostic in it — with it.
-                        if complained != Some(port) {
-                            complained = Some(port);
-                            crate::log::warn(format!(
-                                "stream: port {port} is not free; nothing is being served"
-                            ));
-                        }
+                        // than leaving the streamer with nothing. Said through
+                        // `log::once`: repeated every five seconds it wrote
+                        // 40 KB an hour, rolled the log and took the older copy
+                        // — and any panic or capture diagnostic in it — away.
+                        crate::log::once(
+                            "stream-port",
+                            "warn",
+                            format!("stream: port {port} is not free; nothing is being served"),
+                        );
                         std::thread::sleep(Duration::from_secs(5));
                     }
                 }
@@ -146,17 +147,35 @@ fn listen(port: u16) -> Option<TcpListener> {
 fn pump(app: AppHandle, viewers: Arc<Mutex<Vec<Viewer>>>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(BEAT);
+        // Taken before the empty test: a drop announced while nobody is
+        // connected must not sit in the queue and play at whoever joins next.
+        let queued = match ANNOUNCED.lock() {
+            Ok(mut waiting) => std::mem::take(&mut *waiting),
+            Err(_) => Vec::new(),
+        };
         let mut list = viewers.lock().unwrap();
         if list.is_empty() {
             continue;
         }
-        let body = snapshot_json(&app);
-        let frame = format!("event: stats\ndata: {body}\n\n");
-        list.retain_mut(|v| match v.out.write_all(frame.as_bytes()) {
-            Ok(()) => true,
-            // a Browser Source that OBS has hidden stops reading; its buffer
-            // fills, and that is not the same as it having gone away
-            Err(e) => matches!(e.kind(), std::io::ErrorKind::WouldBlock),
+        // The drops are what makes ?view=flourish and ?view=ticker mean
+        // anything: the queue was written by every notable find and read by
+        // nothing at all, so a browser source showed the numbers moving and
+        // never once announced a single item.
+        let mut frames = vec![format!("event: stats\ndata: {}\n\n", snapshot_json(&app))];
+        frames.extend(
+            queued.iter().map(|(kind, json)| format!("event: {kind}\ndata: {json}\n\n")),
+        );
+        list.retain_mut(|v| {
+            for frame in &frames {
+                // A source OBS has hidden stops reading and its buffer fills;
+                // that is not the same as it having gone away. Several frames
+                // per beat widen the window in which one is torn — the real
+                // cost of sending drops, paid because a silent source is worse.
+                if let Err(e) = v.out.write_all(frame.as_bytes()) {
+                    return matches!(e.kind(), std::io::ErrorKind::WouldBlock);
+                }
+            }
+            true
         });
     });
 }
@@ -259,8 +278,13 @@ fn request_head(stream: &mut TcpStream) -> Option<(String, String)> {
 /// of the names below. An *absent* header used to pass too, which let any
 /// local process read the settings and the run history with two lines of nc.
 fn local_host(host: &str) -> bool {
-    let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
-    let name = name.trim_matches(['[', ']']);
+    // An IPv6 host is bracketed precisely so its own colons are not read as a
+    // port, and splitting on the last colon first did exactly that: `[::1]`
+    // came apart into `[:` and was refused. Brackets first, then the port.
+    let name = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+    };
     matches!(name, "127.0.0.1" | "localhost" | "::1")
 }
 
@@ -273,4 +297,23 @@ fn send(stream: &mut TcpStream, mime: &str, body: Vec<u8>) {
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(&body);
     let _ = stream.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard against a page on another site pointing a script at this
+    /// server. An absent header used to pass, which is recorded in the
+    /// function's own comment — so it is pinned here.
+    #[test]
+    fn only_this_machine_is_a_local_host() {
+        // a bare `::1` is not a valid Host header; bracketed is the real case
+        for good in ["127.0.0.1", "127.0.0.1:4600", "localhost", "localhost:4600", "[::1]", "[::1]:4600"] {
+            assert!(local_host(good), "{good} should be allowed");
+        }
+        for bad in ["", "evil.com", "localhost.evil.com", "127.0.0.1.evil.com", "0.0.0.0", "192.168.0.70"] {
+            assert!(!local_host(bad), "{bad:?} should be refused");
+        }
+    }
 }

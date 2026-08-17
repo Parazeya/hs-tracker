@@ -31,6 +31,8 @@ SKINNED = [
     "panel.png", "chip.png", "chip_dark.png", "header.png",
     "button.png", "button_hover.png", "button_down.png",
     "close.png", "close_hover.png", "minimize.png", "minimize_hover.png", "check_off.png", "check_on.png",
+    # drawn from the two above by tools/gen_plates.py, and skinned like them
+    "dashboard.png", "dashboard_hover.png", "reset.png", "reset_hover.png",
     "lock.png", "lock_pale.png", "lock_gold.png", "token.png",
 ]
 # and the ones it does not

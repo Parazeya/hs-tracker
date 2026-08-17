@@ -21,7 +21,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -96,9 +96,20 @@ if (git('tag', '--list', tag)) die(`${tag} already exists. Releases are not rewr
 
 // The workflow cuts the release notes from the first section of the changelog.
 // A version it does not mention would ship a release described as another one.
-const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+const changelogPath = join(root, 'CHANGELOG.md');
+const changelog = readFileSync(changelogPath, 'utf8');
 const heading = changelog.split('\n').find((l) => l.startsWith('## '));
-if (!heading?.includes(version) && !flag('--skip-notes')) {
+// A section written as "Unreleased" is this release, named before it had a
+// number. Renaming it here is the difference between a release whose notes are
+// its own and one titled "Unreleased" on GitHub — which is what --skip-notes
+// would have published, since the workflow cuts the body from this section too.
+const pending = heading?.trim() === '## Unreleased';
+if (pending && !dry) {
+  const today = new Date().toISOString().slice(0, 10);
+  writeFileSync(changelogPath, changelog.replace('## Unreleased', `## ${version} — ${today}`));
+  console.log(`  CHANGELOG.md: "Unreleased" is now ${version}`);
+}
+if (!pending && !heading?.includes(version) && !flag('--skip-notes')) {
   die(
     `CHANGELOG.md opens with "${heading?.trim() ?? 'nothing'}", which is not ${version}.\n` +
       `  The release notes are cut from that section. Write it first, or pass --skip-notes.`,
@@ -109,13 +120,20 @@ if (!heading?.includes(version) && !flag('--skip-notes')) {
 const dirty = git('status', '--porcelain');
 console.log(`\n  ${current} → ${version}   on ${branch}\n`);
 console.log(`    version   package.json, tauri.conf.json, Cargo.toml`);
-const changed = dirty ? `${dirty.split('\n').length} file(s)` : 'version files only';
-// the message is shown because it is the easiest thing to get wrong: npm eats
-// some of the ways of passing one, and a swallowed one is silent
-console.log(`    commit    ${changed}  —  "${note ?? version}"`);
+// This is the one command that makes something public, and it runs
+// `git add -A`. Naming the files is the difference between reviewing a commit
+// and trusting one.
+// The three version files are written by the step after this one, so they are
+// not dirty yet and were being left out of the count — "no file(s)" for a
+// commit that was about to carry three.
+const files = dirty ? dirty.split('\n').filter(Boolean) : [];
+console.log(`    commit    ${files.length + 3} file(s)  —  "${note ?? version}"`);
+for (const line of files.slice(0, 20)) console.log(`              ${line}`);
+if (files.length > 20) console.log(`              … and ${files.length - 20} more`);
+console.log(`               M the three version files above`);
 console.log(`    tag       ${tag}`);
 console.log(`    push      origin ${branch}, then ${tag}  →  the tag is what publishes`);
-console.log(`    notes     ${heading?.trim()}\n`);
+console.log(`    notes     ${pending ? `"Unreleased" → ${version}` : heading?.trim()}\n`);
 
 if (dry) {
   console.log('  --dry, so nothing was done.\n');
@@ -129,6 +147,11 @@ if (!yes) {
 }
 
 // ── do it ─────────────────────────────────────────────────────────────────────
+if (pending) {
+  const today = new Date().toISOString().slice(0, 10);
+  writeFileSync(changelogPath, changelog.replace('## Unreleased', `## ${version} — ${today}`));
+  console.log(`\n▸ notes\n  CHANGELOG.md: "Unreleased" is now ${version} — ${today}`);
+}
 console.log('\n▸ version');
 run('node', [join('scripts', 'set-version.mjs'), version]);
 

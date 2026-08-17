@@ -301,7 +301,7 @@
 
   .c-ang { color: #f6f794; }
   .c-her { color: #00ffae; }
-  .c-sat { color: #ca1717; }
+  .c-sat { color: var(--rar-satanic); }
   .c-set { color: #40d040; }
   .c-unh { color: #e04a7a; }
   .c-gold { color: var(--gold-2); }

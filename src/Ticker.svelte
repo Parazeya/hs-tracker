@@ -102,7 +102,13 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 0 8px;
+    /* The panel's own inset, not the gap between its chips. Both windows are
+       444 CSS px on the same x, so the numbers line up directly: the overlay's
+       chip columns run 20…424 (14px border-image + 6px padding), while 8px here
+       put these plates at 8…436 — 12px proud on each side, always. It showed
+       worst in ghost mode, where the frame art is gone and those chips ARE the
+       overlay's edge. See .panel in App.svelte. */
+    padding: 0 20px;
     font-family: 'CookieRun Bold', sans-serif;
     font-size: 12px;
     color: var(--bone-6);
@@ -142,8 +148,8 @@
 
   .c-ang { color: #f6f794; }
   .c-her { color: #00ffae; }
-  .c-sat { color: #ca1717; }
-  .c-blue { color: #5050ae; }
+  .c-sat { color: var(--rar-satanic); }
+  .c-blue { color: var(--mf); }
   .c-myt { color: #c060e0; }
   .c-unh { color: #e04a7a; }
   .c-set { color: #40d040; }

@@ -21,6 +21,7 @@
     zoneCode,
     zoneLabel,
   } from './items.js';
+  import { fmt, difficulty, RARITIES, RARITY_CLASS } from './format.js';
 
   let snap = $state(null);
   let extra = $state(null);
@@ -53,14 +54,6 @@
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
 
-  function fmt(n) {
-    const v = n ?? 0;
-    const abs = Math.abs(v);
-    if (abs >= 1e9) return `${(v / 1e9).toFixed(2)}kkk`;
-    if (abs >= 1e6) return `${(v / 1e6).toFixed(2)}kk`;
-    if (abs >= 10_000) return `${(v / 1e3).toFixed(1)}k`;
-    return v.toLocaleString('en-US');
-  }
 
   function dur(secs) {
     const h = Math.floor(secs / 3600);
@@ -74,7 +67,6 @@
   const time = (ms) =>
     new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-  const DIFFICULTIES = ['Normal', 'Nightmare', 'Hell'];
 
   const item = (name) => snap?.items?.[name] ?? { total: 0, mf: 0, per_hour: 0 };
 
@@ -87,7 +79,7 @@
     if (!c) return 'waiting for character…';
     const parts = [];
     if (c.name) parts.push(c.name);
-    parts.push(`Lv ${c.level}`, `HLv ${c.herolevel}`, DIFFICULTIES[c.difficulty] ?? `D${c.difficulty}`);
+    parts.push(`Lv ${c.level}`, `HLv ${c.herolevel}`, difficulty(c.difficulty, c.hell_sub));
     if (c.hardcore) parts.push('HC');
     return parts.join(' · ');
   });
@@ -189,10 +181,20 @@
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    // Canvas does not resolve var(): the assignment is dropped and whatever
+    // was set last stands, which for the empty-state line was black on a
+    // near-black panel — invisible on every fresh session. Read per draw, not
+    // once: the canvas is resized on every observer step, which resets the
+    // context, and a season remaps both tokens.
+    const skin = getComputedStyle(canvas);
+    const token = (name, fallback) => skin.getPropertyValue(name).trim() || fallback;
+    const GOLD = token('--gold-2', '#e8c860');
+    const FAINT = token('--edge-8', '#8a7a5a');
+    const FACE = "11px 'CookieRun Bold', sans-serif";
     const data = rates();
     if (data.length < 2) {
-      ctx.fillStyle = 'var(--edge-8)';
-      ctx.font = '11px sans-serif';
+      ctx.fillStyle = FAINT;
+      ctx.font = FACE;
       ctx.fillText('the graph appears after a couple of minutes of farming', 10, H / 2 + 4);
       return;
     }
@@ -213,12 +215,12 @@
       ctx.lineWidth = 1.5;
       ctx.stroke();
     };
-    line('gold', maxGold, 'var(--gold-2)');
+    line('gold', maxGold, GOLD);
     line('xp', maxXp, '#a06ae0');
     // the two captions sit side by side however wide the box gets
-    ctx.font = '11px sans-serif';
+    ctx.font = FACE;
     ctx.textBaseline = 'top';
-    ctx.fillStyle = 'var(--gold-2)';
+    ctx.fillStyle = GOLD;
     ctx.fillText(`gold/h peak ${fmt(Math.round(maxGold))}`, 8, 4);
     ctx.fillStyle = '#a06ae0';
     const xp = `xp/h peak ${fmt(Math.round(maxXp))}`;
@@ -350,12 +352,17 @@
             <div class="row colhead">
               <span class="rowname"></span>
               <span class="rowval">drops</span>
+              <!-- The game's own claim, not ours: it flags the drop as owed to
+                   magic find and we only count what it flagged. -->
+              <span class="rowmf" title="Of those, the ones the game itself credited to Magic Find">mf</span>
               <span class="rowrate">per hour</span>
             </div>
-            {#each [['Satanic', item('Satanic'), 'c-sat'], ['Set', item('Set'), 'c-set'], ['Heroic', item('Heroic'), 'c-her'], ['Angelic', item('Angelic'), 'c-ang'], ['Unholy', item('Unholy'), 'c-unh']] as [name, it, cls]}
+            {#each RARITIES as name}
+              {@const it = item(name)}
               <div class="row">
-                <span class="rowname {cls}">{name}</span>
-                <span class="rowval {cls}">{fmt(it.total)}</span>
+                <span class="rowname {RARITY_CLASS[name]}">{name}</span>
+                <span class="rowval {RARITY_CLASS[name]}">{fmt(it.total)}</span>
+                <span class="rowmf c-blue" title="credited to Magic Find by the game">{it.mf ? fmt(it.mf) : '—'}</span>
                 <span class="dim rowrate">{fmt(it.per_hour)}/h</span>
               </div>
             {/each}
@@ -739,6 +746,9 @@
   .rows .row:nth-child(even) { background: rgba(0, 0, 0, 0.1); }
   .rowname { flex: 1 1 auto; min-width: 0; }
   .rowval { min-width: 44px; text-align: right; font-size: 13px; }
+  /* narrow on purpose: it is a footnote to the count beside it, not a column
+     anyone reads down */
+  .rowmf { min-width: 32px; text-align: right; font-size: 10px; }
   .rowrate { min-width: 54px; text-align: right; font-size: 10px; }
 
   /* the numbers on their own said nothing; the header says what they are */
@@ -750,7 +760,8 @@
     text-transform: uppercase;
     padding-bottom: 1px;
   }
-  .row.colhead .rowval { font-size: 9px; }
+  .row.colhead .rowval,
+  .row.colhead .rowmf { font-size: 9px; }
 
   .subhead {
     color: var(--edge-2b);
@@ -865,8 +876,12 @@
 
   .c-ang { color: #f6f794; }
   .c-her { color: #00ffae; }
-  .c-sat { color: #ca1717; }
-  .c-blue { color: #5050ae; }
+  .c-sat { color: var(--rar-satanic); }
+  .c-blue { color: var(--mf); }
+  /* `.vitals b` is (0,1,1) and a bare class is (0,1,0), so the Magic Find figure
+     in "Drops in this area" — the flagship one — has been rendering bone all
+     along and no change to .c-blue could reach it. */
+  .vitals b.c-blue { color: var(--mf); }
   .c-myt { color: #c060e0; }
   .c-unh { color: #e04a7a; }
   .c-set { color: #40d040; }
@@ -882,7 +897,7 @@
   .vitals .dim + b { margin-right: 8px; }
   .szhere {
     font-size: 11px;
-    color: #ca1717;
+    color: var(--rar-satanic);
     margin-left: 8px;
   }
 

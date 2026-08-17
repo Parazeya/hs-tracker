@@ -67,6 +67,10 @@ pub enum GameEvent {
         level: i64,
         herolevel: i64,
         difficulty: i64,
+        /// Which grade of Hell, 1..5. Hell is not one difficulty but five, and
+        /// the game says which in its own field — so "Hell" alone was never the
+        /// whole answer to what a character is playing.
+        hell_sub: i64,
         kills: i64,
         /// every `statistic…` counter the save carries, by flattened name —
         /// bosses put down, chests opened, floors cleared, deaths
@@ -570,7 +574,11 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
             }
         }
     }
-    if message.contains("mail") || has(d, MAIL_FIELDS) {
+    // A whole word, not a substring. "Lost Master's Platemail" is a real Set
+    // item, the server announces Set finds to everybody on the shard, and the
+    // announcement of a stranger's drop was ringing our mail chime and latching
+    // the indicator until the next authoritative mail packet.
+    if says_mail(&message) || has(d, MAIL_FIELDS) {
         events.push(GameEvent::Mail(mail_is_present(d)));
     }
     // server chat announcement: "Someone just found [Item Name]"
@@ -605,6 +613,7 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
             level: int_field(d, &["level"]),
             herolevel: int_field(d, &["heroLevel", "herolevel"]),
             difficulty: int_field(d, &["difficulty"]),
+            hell_sub: int_field(d, &["hell_subdifficulty", "hellSubdifficulty"]),
             kills: int_field(
                 d,
                 &[
@@ -640,8 +649,16 @@ fn xp_gain(d: &Value) -> i64 {
     int_field(d, XP_GAIN_FIELDS)
 }
 
+/// The item types whose id is their identity rather than a slot in a base
+/// table: keys, collectibles, materials, socketables. `stats::RESOURCES` names
+/// the same four for the counters they feed.
+const RESOURCE_TYPES: [i64; 4] = [12, 13, 14, 15];
+
 const ITEM_DATA_FIELDS: &[&str] = &["itemData", "item_data"];
 const PICKUP_FIELDS: &[&str] = &["pickup_add_data", "pickupAddData"];
+/// The session credentials the client attaches to everything it asks for. Their
+/// presence means the packet is ours going out, not the server's coming back.
+const CLIENT_ENVELOPE_FIELDS: &[&str] = &["identifier", "checksum"];
 
 fn is_item_like(v: &Value) -> bool {
     v.is_object() && (has(v, ITEM_SIGNATURE_FIELDS) || has(v, ITEM_RARITY_FIELDS))
@@ -719,7 +736,19 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
             }
             return pickups(object_items(&item_data));
         }
-        // Unrouted itemData is the server answering "here is what dropped".
+        // Unrouted itemData is the server answering "here is what dropped" —
+        // which only holds while the server is the one talking. We put an item
+        // in the same field ourselves when we post it to the market, and every
+        // listing was read as a fresh drop at our feet: journalled, counted,
+        // announced and chimed, for an item we already owned and were selling.
+        //
+        // Our own requests are the ones carrying the session credentials, and
+        // in a full session's capture not one of the 7702 packets from a server
+        // carried them — the drop answers arrive with `itemGenHash` and nothing
+        // else that names us.
+        if has(d, CLIENT_ENVELOPE_FIELDS) {
+            return vec![];
+        }
         // Only `c == 1` items are named ones: their ids come from the unique
         // item space (5, 8, 30, 55 …), while `c == 0` drops are ordinary bases
         // numbered 0..20 — reading those through the name table turns every
@@ -764,22 +793,21 @@ fn fingerprint_type(fingerprint: Option<&str>) -> Option<i64> {
 /// Packet rarity is unreliable (inventory syncs report Common/Rare for
 /// Satanic gear); the wiki-sourced rarity of the resolved NAME wins over it.
 pub fn resolve_rarity(packet: &Value, name: &str) -> String {
-    let mapped = crate::stats::rarity_from_packet(packet);
     let known = if name.is_empty() { None } else { crate::items::rarity_by_name(name) };
-    let weak = matches!(mapped.as_deref(), None | Some("Common") | Some("Superior") | Some("Rare") | Some("Mythic"));
-    if let (Some(k), true) = (known, weak) {
+    // A named item's grade is a fact about that item, and the tables carry it
+    // from the game's own data. The packet does not: over the 6,617 rolls one
+    // session's capture recorded, its rarity field took two values, and one of
+    // them reads as "Angelic" here.
+    //
+    // This used to defer to the packet whenever its claim was not one of the
+    // four the code called weak — so a claim of Angelic outranked the tables,
+    // and a D-grade Satanic ring was announced, chimed and filed as an Angelic
+    // find. Where the name is known, the name is the answer; the packet is only
+    // consulted for items the tables have never heard of.
+    if let Some(k) = known {
         return k.to_string();
     }
-    if let Some(m) = mapped {
-        if m != "Common" {
-            return m;
-        }
-        if let Some(k) = known {
-            return k.to_string();
-        }
-        return m;
-    }
-    known.unwrap_or("Unknown").to_string()
+    crate::stats::rarity_from_packet(packet).unwrap_or_else(|| "Unknown".into())
 }
 
 fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent {
@@ -822,11 +850,26 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // is claimed about it: the drop is still seen, it simply has no rarity.
     // A capture of 12 Odyssey and 38 seasonal pickups splits on `h` exactly.
     let odyssey = has(obj, &["h"]);
-    let rarity = if odyssey {
-        Value::Null
-    } else {
-        field(obj, ITEM_RARITY_FIELDS).unwrap_or(Value::Number(0.into()))
-    };
+    let claimed = field(obj, ITEM_RARITY_FIELDS).unwrap_or(Value::Number(0.into()));
+    // An ordinary base cannot be Angelic or Unholy. Those two grades belong only
+    // to named items — the Discord line leans on the same fact, taking them back
+    // out of the SS count because every Angelic and Unholy item is SS-graded —
+    // and `c` is the game's own flag for which id space an item came from, the
+    // one the ground path already keeps only `c == 1` of.
+    //
+    // The `d == 7` that once filled a practice run with Angelic finds came back
+    // in packets without the `h` that used to mark them: of 42 such pickups in a
+    // capture, 17 carried `h` and 25 did not, and the 25 were indistinguishable
+    // from seasonal ones except by a `d` nothing should believe anyway. Across
+    // the 6,617 rolls the drop path saw in that session it took two values, 2
+    // and 7, and the pickup path a third, 1 — not the ten-point scale the table
+    // reads it as, and 7 is "Angelic" there.
+    // Refusing the claim where it is impossible rather than where it is
+    // recognised covers the keys, potions and white bases whatever mode made
+    // them, and leaves the grades an ordinary base really can carry alone.
+    let plain_base = has(obj, &["c"]) && int_field(obj, &["c"]) == 0;
+    let named_only = matches!(as_int(&claimed), Some(7) | Some(10));
+    let rarity = if odyssey || (plain_base && named_only) { Value::Null } else { claimed };
     // A name read out of the tables is a guess about which item this is, and a
     // guess must not become evidence about what it is worth. `resolve_rarity`
     // trusts the name over a weak packet rarity, so an ordinary base whose
@@ -841,12 +884,27 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // going into the bag is still an item — so it stays uncounted-by-name
     // instead: asked of the table only when the game has said this is a named
     // item, or when the rarity on the packet is already one worth naming.
+    //
+    // Keys, gems, runes and materials are the exception, and they have to be:
+    // for those types `c == 0` is simply what they are — 471 of them against 2
+    // in a capture — and the id IS the identity, so the table is right about
+    // them. Naming them is not a guess. Three counters read that name and go
+    // quiet without it: the two dull keys are filtered out by name, the notable
+    // list (Angelic Key, Satanic Dice, the rune grades) is matched by name, and
+    // a resource's grade comes from `tier_by_name`. Refusing the packet's rarity
+    // above had silently taken all three down with it, because `worth_naming`
+    // is read from the rarity this decides.
+    //
+    // Type 18 is NOT in the list, on purpose: slot 18:8 is an Angelic potion,
+    // and reading ordinary potions through it is the exact bug the rule above
+    // exists to stop.
     let named_flag = int_field(obj, &["c"]) == 1;
+    let resource = RESOURCE_TYPES.contains(&item_type);
     let worth_naming = crate::stats::rarity_from_packet(&rarity)
         .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
     let name = if !explicit_name.is_empty() {
         explicit_name
-    } else if named_flag || worth_naming {
+    } else if named_flag || worth_naming || resource {
         crate::items::item_name(item_type, item_id, weapon_type).unwrap_or_default().to_string()
     } else {
         String::new()
@@ -918,7 +976,19 @@ fn mail_is_present(d: &Value) -> bool {
     if t.contains("no new mail") || t.contains("no mail") || t.contains("mailbox empty") {
         return false;
     }
-    t.contains("mail") || t == "1" || t == "true" || t == "yes"
+    says_mail(&t) || t == "1" || t == "true" || t == "yes"
+}
+
+/// Whether a line is about mail, rather than merely containing the letters.
+fn says_mail(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.match_indices("mail").any(|(at, _)| {
+        let before = lower[..at].chars().next_back();
+        let after = lower[at + 4..].chars().next();
+        let edge = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
+        // "mailbox" and "mails" are still about mail; "platemail" is not
+        edge(before) && (edge(after) || lower[at..].starts_with("mailbox") || after == Some('s'))
+    })
 }
 
 fn effect_ids(raw: Option<Value>) -> Vec<u8> {
@@ -960,6 +1030,43 @@ fn satanic_event(d: &Value) -> GameEvent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_item_posted_to_the_market_is_not_a_drop() {
+        // the listing as captured, credentials replaced
+        let listing = serde_json::json!({
+            "account_id": "7-49646",
+            "beta": "0",
+            "bricked_status": "undefined",
+            "checksum": "0000",
+            "damage_types": "|",
+            "fingerprint": "7-4964607-65875ac569ff60006-3",
+            "hardcore": "0",
+            "identifier": "session-token",
+            "item_data": {"a": 998596353, "b": 14, "c": 1, "d": 2, "e": 10, "j": 3, "m": 1, "sh": "5d6053f71623", "w": 1},
+            "item_mask": "1086337038",
+            "item_name": "Pillar of Niflheim",
+        });
+        assert!(
+            super::events_from_messages(&[listing]).is_empty(),
+            "selling an item we already own is not finding one"
+        );
+
+        // and the server's answer for the very same item still is a drop
+        let dropped = serde_json::json!({
+            "itemData": {
+                "7-4964607-65875ac569ff60006-3": {"a": 998596353, "b": 14, "c": 1, "d": 2, "e": 10, "j": 3, "n": 3, "sh": "5d6053f71623"}
+            },
+            "itemGenHash": "1234",
+            "message": "Success on item generation",
+            "status": 1,
+        });
+        let found: Vec<_> = super::events_from_messages(&[dropped])
+            .into_iter()
+            .filter(|e| matches!(e, super::GameEvent::ItemAdded { ground: true, .. }))
+            .collect();
+        assert_eq!(found.len(), 1, "the generation answer is still read as a drop");
+    }
+
     /// A real generation answer: the white sword rolled from base id 8 must not
     /// be read as the unique that happens to sit at id 8, or every junk drop
     /// would chime as Satanic.
@@ -1070,6 +1177,79 @@ mod tests {
         // fingerprint suffix carries the item type; `b` is then the id-in-category
         assert!(parsed.contains(&("6".into(), true, 1, 71)));
         assert!(parsed.contains(&("9".into(), false, 6, 8)));
+    }
+
+    /// The same complaint as the Odyssey one, from packets that carry none of
+    /// the marks that caught it: `d = 7` on an ordinary base, with the season in
+    /// `e` and no `h` at all. Straight out of a capture — a shard, a key and a
+    /// potion, none of which can be Angelic.
+    /// A D-grade Satanic ring, announced and filed as an Angelic find. The
+    /// tables have it right; the packet's claim was outranking them.
+    #[test]
+    fn the_tables_outrank_the_packet_for_a_named_item() {
+        let ring = "Apex Striker's Ring";
+        assert_eq!(crate::items::rarity_by_name(ring), Some("Satanic"), "the table is right");
+        assert_eq!(crate::items::tier_by_name(ring), 1, "and grades it D");
+        // whatever the packet claims about it
+        assert_eq!(resolve_rarity(&json!(7), ring), "Satanic", "a packet claiming Angelic");
+        assert_eq!(resolve_rarity(&json!(2), ring), "Satanic", "and one claiming Superior");
+        assert_eq!(resolve_rarity(&Value::Null, ring), "Satanic", "and one claiming nothing");
+        // an item the tables have never heard of still keeps what it was sent
+        assert_eq!(resolve_rarity(&json!(7), "No Such Item"), "Angelic");
+    }
+
+    /// Refusing the packet's rarity must not cost a resource its name: the dull
+    /// keys are filtered by name, the notable list is matched by name, and a
+    /// resource's grade comes from the name. Suppressing all three was the price
+    /// of the rule above until the resource types were let through.
+    #[test]
+    fn a_resource_keeps_its_name_when_its_rarity_is_refused() {
+        let pickup = |fp: &str, item: serde_json::Value| {
+            let msg = json!({
+                "status": 1,
+                "message": "Success on inventory update ext",
+                "operations": { "add": { fp: item } }
+            });
+            events_from_messages(&[msg]).into_iter().find_map(|e| match e {
+                GameEvent::ItemAdded { name, rarity, tier, .. } => Some((name, rarity, tier)),
+                _ => None,
+            })
+        };
+        // a key: type 12, ordinary as every key is, arriving with the d = 7 the
+        // rule above refuses
+        let (name, rarity, _) = pickup("7-1-12", json!({"a": 1, "b": 0, "c": 0, "d": 7, "e": 10, "j": 0})).unwrap();
+        assert_eq!(name, "Basic Key", "a key is still a key");
+        assert_eq!(rarity, Value::Null, "and still claims no grade of its own");
+
+        // and an equipment base in the same shape stays nameless, which is the
+        // whole point of the rule
+        let (name, _, _) = pickup("7-1-3", json!({"a": 1, "b": 0, "c": 0, "d": 7, "e": 10, "j": 7})).unwrap();
+        assert_eq!(name, "", "an ordinary weapon is not read through the unique table");
+    }
+
+    #[test]
+    fn an_ordinary_base_is_never_angelic() {
+        let pickup = |item: serde_json::Value| {
+            let msg = json!({
+                "status": 1,
+                "message": "Success on inventory update ext",
+                "operations": { "add": { "7-4964607-6593db690c6090001-3": item } }
+            });
+            events_from_messages(&[msg]).into_iter().find_map(|e| match e {
+                GameEvent::ItemAdded { rarity, .. } => Some(rarity),
+                _ => None,
+            })
+        };
+        let plain = json!({"a": 116892350, "b": 0, "c": 0, "d": 7, "e": 10, "j": 7, "n": 2, "sh": "cb"});
+        assert_eq!(pickup(plain), Some(Value::Null), "an ordinary base claims no grade");
+
+        // the grades a base really can carry are still believed
+        let ordinary = json!({"a": 1, "b": 8, "c": 0, "d": 9, "e": 10, "j": 0, "sh": "cb"});
+        assert_eq!(pickup(ordinary), Some(json!(9)), "Heroic on a base is attested and kept");
+
+        // and a named item keeps its own claim, Angelic included
+        let named = json!({"a": 1, "b": 71, "c": 1, "d": 7, "e": 10, "j": 0, "sh": "cb"});
+        assert_eq!(pickup(named), Some(json!(7)), "a named item may be Angelic");
     }
 
     #[test]
@@ -1189,6 +1369,25 @@ mod tests {
         assert_eq!(mail("No new mail"), Some(false));
         assert_eq!(mail("You have no new mail."), Some(false));
         assert_eq!(mail("Mailbox empty"), Some(false));
+    }
+
+    #[test]
+    fn an_item_with_mail_in_its_name_is_not_mail() {
+        let mail = |text: &str| {
+            events_from_messages(&[json!({ "message": text })])
+                .into_iter()
+                .find_map(|e| match e {
+                    GameEvent::Mail(has) => Some(has),
+                    _ => None,
+                })
+        };
+        // a real Set item, announced to the whole shard
+        assert_eq!(mail("Ragnar just found [Lost Master's Platemail]"), None);
+        assert_eq!(mail("Chainmail Coif picked up"), None);
+        // and the lines that really are about mail
+        assert_eq!(mail("You have new mail"), Some(true));
+        assert_eq!(mail("Mailbox empty"), Some(false));
+        assert_eq!(mail("No new mail"), Some(false));
     }
 
     #[test]

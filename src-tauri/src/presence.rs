@@ -20,9 +20,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::sniffer::Shared;
 
-/// The top grade an item can carry, and the one number a farmer wants: how many
-/// chase items the run has produced, whatever colour they came out.
-const SS: i64 = 6;
+use crate::stats::SS_TIER as SS;
 /// The two rarities that get named instead of counted by grade. Every Angelic
 /// and Unholy item is SS-graded, so without taking them back out of the grade
 /// count one drop would appear twice on the line.
@@ -108,7 +106,10 @@ fn clip(mut text: String, limit: usize) -> String {
     text
 }
 
-const DIFFICULTIES: [&str; 3] = ["Normal", "Nightmare", "Hell"];
+/// The same list the panels draw, and for the same reason it is a list at all:
+/// a character on the fourth difficulty was shown as nothing here while the
+/// dashboard beside it read "Inferno".
+const DIFFICULTIES: [&str; 4] = ["Normal", "Nightmare", "Hell", "Inferno"];
 
 fn build(app: &AppHandle) -> Card {
     let shared = app.state::<Shared>();

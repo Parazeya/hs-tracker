@@ -40,17 +40,43 @@ const SOUND_EXTS: [(&str, &str); 4] = [
 // and the web side measures that itself (see `fit_overlay`). The figures here
 // are only the opening bid, so the window is about right before the first frame
 // rather than resizing in front of the player.
-const BASE_W: f64 = 444.0;
-const OVERLAY_ROWS: [&str; 6] = ["session", "gold", "xp", "items", "vitals", "zone"];
+/// The panel's own width — the art, and everything the OBS page shows.
+const PANEL_W: f64 = 444.0;
+/// The control strip beside it: the lock and four plates, each the height of a
+/// chip so the column keeps the panel's own rhythm, and flush against the frame
+/// rather than floating clear of it.
+///
+/// Twice the plates' native 21 would be exactly crisp and is too big — it
+/// dwarfed the panel it belongs to. At 28 one source pixel in three is doubled,
+/// which at this size costs less than a column nobody wants to look at.
+const STRIP_W: f64 = 28.0;
+const STRIP_GAP: f64 = 0.0;
+/// The window, which is wider than the panel so the strip can sit OUTSIDE it
+/// rather than on its frame. A webview cannot paint past its own window, so
+/// "beside the panel" and "inside the window" are the same requirement.
+const BASE_W: f64 = PANEL_W + STRIP_GAP + STRIP_W;
+/// The rows that add height to the overlay. "vitals" is no longer one of them —
+/// magic find moved into the session row and the two levels went away, so that
+/// setting hides a chip rather than a row. It keeps its id and its place in the
+/// Settings list, so no stored preference is orphaned; it just stops counting
+/// towards the guessed height, which `PANEL_H` corrects on the first frame
+/// anyway.
+const OVERLAY_ROWS: [&str; 5] = ["session", "gold", "xp", "items", "zone"];
 
 fn overlay_height(settings: &Settings) -> f64 {
     // what the overlay says it is, and only otherwise what its rows suggest
     let measured = PANEL_H.load(Ordering::Relaxed);
-    if measured > 0 {
-        return measured as f64;
-    }
-    let rows = OVERLAY_ROWS.iter().filter(|r| !settings.hidden.iter().any(|h| h == *r)).count();
-    34.0 + 33.0 * rows.max(1) as f64
+    let panel = if measured > 0 {
+        measured as f64
+    } else {
+        let rows = OVERLAY_ROWS.iter().filter(|r| !settings.hidden.iter().any(|h| h == *r)).count();
+        34.0 + 33.0 * rows.max(1) as f64
+    };
+    // The strip stands beside the panel and can be the taller of the two — a
+    // window cut to the panel would clip the last buttons off the bottom. The
+    // extra is transparent, so a tall strip costs a little dead space beside a
+    // short panel and nothing at all beside a full one.
+    panel.max(STRIP_H)
 }
 
 const HK_TOGGLE: &str = "ctrl+shift+o";
@@ -58,8 +84,40 @@ const HK_LOCK: &str = "ctrl+shift+l";
 const HK_RESET: &str = "ctrl+shift+r";
 const HK_PAUSE: &str = "ctrl+shift+p";
 
-// lock-button rect in overlay CSS px, with a small margin (see App.svelte .lock)
-const LOCK_RECT: (f64, f64, f64, f64) = (BASE_W - 32.0, 0.0, BASE_W, 34.0);
+// The icon strip's rect, in overlay CSS px. The strip stands beside the panel
+// rather than on it — see .strip in App.svelte — so this is simply everything
+// past the panel's right edge: x 444..472, y 0..147.
+//
+// It stood for the lock alone, and twice it stood in the wrong place. It once
+// reached x 412 and y 34, wider and taller than the button, and the corner it
+// left over lay on top of the Reset Stats button below — a locked overlay is
+// click-through everywhere but here, so that corner of the button quietly
+// belonged to the lock. Trimming it to a 24x24 corner then missed the button
+// the other way, because `.lock` was laid out against the panel's PADDING box
+// and sat at x 415..436, not 420..444. A strip fixed to the window has one
+// origin and one set of numbers, which is most of why it is one.
+const STRIP_RECT: (f64, f64, f64, f64) = (PANEL_W, 0.0, BASE_W, STRIP_H);
+
+/// What it takes to summon the strip: the lock's cell alone, at the top of it.
+///
+/// Click-through is a whole-window switch — `set_ignore_cursor_events` is one
+/// boolean and there is no partial input region in this stack — so every pixel
+/// the poller watches is a pixel where the overlay stops passing clicks to the
+/// game beneath it. Watching the whole column all the time would mean brushing
+/// the right-hand edge of the panel costs the player a click in a fight.
+///
+/// So the column is entered through the corner the lock has always occupied,
+/// and only then does the rest of it start being watched. Reaching for the
+/// buttons is deliberate; crossing the edge on the way somewhere else is not.
+///
+/// One cell and the gap under it — 31, not the 62 this was first given, which
+/// reached over the Dashboard button as well and made a one-click action live
+/// before the strip that carries it had appeared.
+const STRIP_REACH: (f64, f64, f64, f64) = (PANEL_W, 0.0, BASE_W, STRIP_W + 3.0);
+
+/// Five cells, 1px between them and 3 more under the lock — see .strip in
+/// App.svelte, which is the same arithmetic in the other language.
+const STRIP_H: f64 = 5.0 * STRIP_W + 4.0 + 3.0;
 
 static LOCKED: AtomicBool = AtomicBool::new(false);
 /// Whether there is a tray icon to hide into. Assumed until proved otherwise:
@@ -358,11 +416,41 @@ fn restart_backend(app: AppHandle, x11: bool) -> Result<(), String> {
         if x11 && !x11_reachable() {
             return Err("no X server to switch to — this session has no XWayland".into());
         }
+        // Hand the single-instance name over before spawning. The parent still
+        // holds it until it exits, and the child's own guard — registered
+        // first, so it runs before any window exists — sees the name taken and
+        // quietly exits: the button appeared to do nothing at all. Both
+        // directions took this path, into XWayland and back out of it.
+        //
+        // The cost, stated plainly: `destroy` does not re-acquire. If the
+        // relaunch below fails, this process carries on with no guard, and a
+        // second copy could be started until it is restarted.
+        tauri_plugin_single_instance::destroy(&app);
+        // A breadcrumb before the spawn, not after: if the replacement never
+        // paints, the next start finds this and drops the choice rather than
+        // repeating it forever. `ui_ready` clears it once a page is up.
+        //
+        // Only going *to* X11. Its one reader treats it as "the last XWayland
+        // start died", so leaving it behind on the way back to Wayland would
+        // have the next cold start discard a choice nobody made wrongly.
+        let breadcrumb = data_dir().join("x11-attempt");
+        if x11 {
+            let _ = std::fs::write(&breadcrumb, "");
+        }
         // Spawn first: the choice is only worth remembering once a replacement
         // is actually on its way. Written before, a launch that fails leaves an
         // app that relaunches into the same failure at every start, with no
         // window left to undo it in.
-        relaunch(x11)?;
+        if let Err(e) = relaunch(x11) {
+            // Nothing was replaced, so undo both preparations: the breadcrumb
+            // would report a failure that never happened, and this process is
+            // now running with no single-instance name and nothing to take it
+            // back — a second copy started from here on would be a second
+            // sniffer writing over the same files.
+            let _ = std::fs::remove_file(&breadcrumb);
+            log::error(format!("could not restart into the other backend: {e}"));
+            return Err(format!("{e} — restart HS Tracker by hand"));
+        }
         let mut settings = read_settings();
         settings.x11_backend = x11;
         save_settings(app.clone(), settings)?;
@@ -517,6 +605,64 @@ fn sounds_dir() -> PathBuf {
     data_dir().join("sounds")
 }
 
+/// Write a file so that a reader never sees half of one.
+///
+/// `fs::write` truncates in place: a crash, a power cut or a full disk between
+/// the truncate and the last byte leaves a file that parses as nothing, and
+/// every reader here falls back to a default. For runs.json that loss is made
+/// permanent by the next `end_run`, which reads the wreck, gets an empty list
+/// and writes a one-run history over two hundred.
+///
+/// The staging name carries the process id and a counter rather than a plain
+/// `.tmp`: settings.json has genuinely concurrent writers — the panel, the
+/// tray, the hotkey thread — and a shared staging file would turn a power-cut
+/// corruption into one reachable on an ordinary afternoon.
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::AtomicU64;
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let stem = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let staged = path.with_file_name(format!(
+        "{stem}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&staged, bytes)?;
+    // Windows hands out sharing violations when an antivirus or the indexer
+    // has the target open for a moment; a couple of retries covers it.
+    let mut last = None;
+    for attempt in 0..3 {
+        match std::fs::rename(&staged, path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                std::thread::sleep(Duration::from_millis(20 * (attempt + 1)));
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&staged);
+    Err(last.unwrap_or_else(|| std::io::Error::other("rename failed")))
+}
+
+/// The same, for anything that serialises — and it says so when it cannot.
+///
+/// Four of these writers used to discard their error entirely, so a read-only
+/// folder or a full disk looked exactly like a successful save until the next
+/// start, when the setting was simply gone.
+/// `pretty` is for the files a person opens and edits — settings above all.
+/// runs.json holds two hundred runs and is machine-only; pretty-printing it
+/// tripled a megabyte for nobody's benefit. The doc said as much while the code
+/// had stopped making the distinction, so settings.json went out on one line.
+fn write_json<T: Serialize>(path: &std::path::Path, value: &T, pretty: bool) {
+    let encode = if pretty { serde_json::to_vec_pretty } else { serde_json::to_vec };
+    let json = match encode(value) {
+        Ok(j) => j,
+        Err(e) => return log::error(format!("cannot encode {}: {e}", path.display())),
+    };
+    if let Err(e) = write_atomic(path, &json) {
+        log::once(&path.display().to_string(), "error", format!("cannot write {}: {e}", path.display()));
+    }
+}
+
 fn settings_path() -> PathBuf {
     data_dir().join("settings.json")
 }
@@ -545,9 +691,7 @@ fn read_carried() -> stats::Carried {
 
 fn save_carried(app: &AppHandle) {
     let carried = app.state::<Shared>().stats.lock().unwrap().carried();
-    if let Ok(json) = serde_json::to_string(&carried) {
-        let _ = std::fs::write(carried_path(), json);
-    }
+    write_json(&carried_path(), &carried, false);
 }
 
 // The flourish is here because the player puts it somewhere deliberately: it is
@@ -599,9 +743,7 @@ fn save_window_positions(app: &AppHandle) {
     if !can_place_windows() {
         return;
     }
-    if let Ok(json) = serde_json::to_string(&window_positions(app)) {
-        let _ = std::fs::write(positions_path(), json);
-    }
+    write_json(&positions_path(), &window_positions(app), false);
 }
 
 /// A clean exit is not guaranteed (task manager, crash), so positions are also
@@ -700,7 +842,14 @@ fn spawn_ticker_glue(app: AppHandle) {
                 // comes to rest across the middle of the overlay it was meant
                 // to hang below. An overlay parked near the bottom edge is the
                 // normal case, not an odd one.
-                let below = pos.y + size.height as i32 + 4;
+                // The PANEL's height, not the window's. The window has a floor
+                // under it now — the control strip beside the panel can be the
+                // taller of the two — so a short panel leaves transparent space
+                // below itself, and a ticker measured from the window bottom
+                // detached from the overlay by however much that was.
+                let panel = (PANEL_H.load(Ordering::Relaxed) as f64 * scale * dpi) as i32;
+                let tall = if panel > 0 { panel } else { size.height as i32 };
+                let below = pos.y + tall + 4;
                 let floor = main
                     .current_monitor()
                     .ok()
@@ -710,9 +859,13 @@ fn spawn_ticker_glue(app: AppHandle) {
                     Some(bottom) if below + height as i32 > bottom => pos.y - height as i32 - 4,
                     _ => below,
                 };
+                // The panel's width, not the window's: the window carries the
+                // control strip beside the panel now, and a ticker as wide as
+                // the window would hang past the overlay it belongs under.
+                let width = (PANEL_W * scale * dpi) as u32;
                 let want = (
                     tauri::PhysicalPosition::new(pos.x, y),
-                    tauri::PhysicalSize::new(size.width, height),
+                    tauri::PhysicalSize::new(width, height),
                 );
                 // Shown first, then placed — a position handed to an unmapped
                 // window is advice the window manager may ignore, which is why
@@ -869,43 +1022,48 @@ fn migrate_notable(settings: &mut Settings) {
 }
 
 fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
-    let shared = app.state::<Shared>();
-    let mut stats = shared.stats.lock().unwrap();
-    stats.set_prefer_ground(settings.sound_on_ground);
-    // a rarity dropped from the tracked list must stop alerting even if an
-    // older settings file still names it
-    let alerts = settings
-        .alerts
-        .iter()
-        .filter(|r| stats::JOURNAL_RARITIES.contains(&r.as_str()))
-        .cloned()
-        .collect();
-    stats.set_filter(alerts, settings.min_tier);
-    // the flourish asks a different question of the same drop
-    let fx = if settings.flourish { settings.flourish_rarities.clone() } else { Vec::new() };
-    stats.set_flourish_filter(fx, settings.flourish_tier.clamp(1, 6));
     let active = settings
         .use_filter
         .then(|| settings.filters.iter().find(|f| f.id == settings.filter))
         .flatten();
-    stats.set_sound_lists(
-        active
+    let mut notable: Vec<(String, Vec<String>)> = settings
+        .notable
+        .iter()
+        .map(|g| (g.label.clone(), g.names.iter().map(|n| n.to_lowercase()).collect()))
+        .collect();
+    if notable.is_empty() {
+        notable = stats::default_notable();
+    }
+    let prefs = stats::Prefs {
+        prefer_ground: settings.sound_on_ground,
+        // a rarity dropped from the tracked list must stop alerting even if an
+        // older settings file still names it
+        alerts: settings
+            .alerts
+            .iter()
+            .filter(|r| stats::JOURNAL_RARITIES.contains(&r.as_str()))
+            .cloned()
+            .collect(),
+        min_tier: settings.min_tier,
+        // the flourish asks a different question of the same drop
+        fx_rarities: if settings.flourish { settings.flourish_rarities.clone() } else { Vec::new() },
+        fx_tier: settings.flourish_tier.clamp(1, 6),
+        notable_defs: notable,
+        sound_lists: active
             .map(|f| {
                 f.lists
                     .iter()
                     .filter(|l| l.enabled && !l.id.is_empty() && !l.items.is_empty())
-                    .map(|l| (format!("list-{}", l.id), l.items.clone()))
+                    .map(|l| {
+                        let names =
+                            l.items.iter().map(|n| n.trim().to_lowercase()).collect::<Vec<_>>();
+                        (format!("list-{}", l.id), names)
+                    })
                     .collect()
             })
             .unwrap_or_default(),
-    );
-    stats.set_notable(
-        settings
-            .notable
-            .iter()
-            .map(|g| (g.label.clone(), g.names.iter().map(|n| n.to_lowercase()).collect()))
-            .collect(),
-    );
+    };
+    app.state::<Shared>().stats.lock().unwrap().set_prefs(prefs);
 }
 
 /// Everything a settings change touches outside the webviews.
@@ -921,8 +1079,20 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     FLOURISH_ALWAYS.store(settings.flourish_always, Ordering::Relaxed);
     ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
     if let Some(w) = app.get_webview_window("main") {
-        // the lock poller owns this once the overlay is up
-        set_click_through(&w, settings.locked);
+        // Click-through is NOT set here, though it used to be, and the comment
+        // that stood in its place claimed the poller owned it.
+        //
+        // Both wrote it and only one remembered. Locking from the strip is the
+        // case: the poller has settled on `ignoring = Some(false)` because the
+        // cursor is on the strip, this line then makes the window click-through
+        // behind its back, and on the next tick `want_ignore` is still false —
+        // the cursor is still inside the rect — so the guard sees no change and
+        // never puts it back. The strip is left fully lit with every click going
+        // through it into the game, which is a click-to-move ARPG, and it stays
+        // that way until the cursor leaves the rect and returns.
+        //
+        // The poller reads LOCKED, which is stored above, and converges within
+        // one 50ms tick. One writer.
         let _ = w.set_zoom(scale);
         let _ = w.set_size(LogicalSize::new(BASE_W * scale, overlay_height(settings) * scale));
     }
@@ -968,9 +1138,10 @@ fn set_click_through(w: &tauri::WebviewWindow, through: bool) {
     }
 }
 
-/// While locked the overlay is click-through EXCEPT the lock button: a poller
-/// re-enables mouse events whenever the cursor is over the button's corner.
-fn spawn_lock_poller(app: AppHandle) {
+/// While locked the overlay is click-through EXCEPT the strip of icons down its
+/// right-hand edge: a poller re-enables mouse events whenever the cursor is over
+/// it. The lock is that strip's top cell, so this is still one rectangle.
+fn spawn_strip_poller(app: AppHandle) {
     std::thread::spawn(move || {
         let mut ignoring: Option<bool> = None;
         let mut told: Option<bool> = None;
@@ -981,6 +1152,7 @@ fn spawn_lock_poller(app: AppHandle) {
             // window is click-through, and asking it to use :hover the rest of
             // the time gave the button two different truths and a moment
             // between them where it had neither.
+            let held = told == Some(true);
             let over = (|| {
                 let w = app.get_webview_window("main")?;
                 if !w.is_visible().ok()? {
@@ -990,7 +1162,8 @@ fn spawn_lock_poller(app: AppHandle) {
                 let dpi = w.scale_factor().ok()?;
                 let cur = app.cursor_position().ok()?;
                 let z = dpi * SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
-                let (x0, y0, x1, y1) = LOCK_RECT;
+                // The corner opens it; the whole column keeps it open.
+                let (x0, y0, x1, y1) = if held { STRIP_RECT } else { STRIP_REACH };
                 Some(
                     cur.x >= pos.x as f64 + x0 * z
                         && cur.x <= pos.x as f64 + x1 * z
@@ -1010,7 +1183,7 @@ fn spawn_lock_poller(app: AppHandle) {
             };
             if told != Some(over) {
                 told = Some(over);
-                let _ = app.emit_to("main", "lock-hover", over);
+                let _ = app.emit_to("main", "strip-hover", over);
             }
             // Only a locked overlay is masked, and then only away from the
             // button: that is the whole point of locking it.
@@ -1104,8 +1277,11 @@ fn save_settings(app: AppHandle, mut settings: Settings) -> Result<(), String> {
     // would turn it off.
     apply_stats_settings(&app, &settings);
     apply_settings_effects(&app, &settings);
-    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(settings_path(), json).map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?;
+    write_atomic(&settings_path(), &json).map_err(|e| {
+        log::error(format!("cannot save settings: {e}"));
+        e.to_string()
+    })?;
     let _ = app.emit("settings-changed", &settings);
     Ok(())
 }
@@ -1146,9 +1322,7 @@ pub(crate) fn end_run(app: &AppHandle) {
     let mut runs = read_runs();
     runs.insert(0, run);
     runs.truncate(RUNS_KEPT);
-    if let Ok(json) = serde_json::to_string(&runs) {
-        let _ = std::fs::write(runs_path(), json);
-    }
+    write_json(&runs_path(), &runs, false);
     let _ = app.emit("runs-changed", ());
 }
 
@@ -1370,14 +1544,13 @@ const REPO: &str = "https://github.com/Parazeya/hs-tracker";
 
 /// The addresses a streamer pastes into OBS, or nothing when it is switched off.
 #[tauri::command]
-fn stream_urls() -> Option<(String, String, String)> {
+fn stream_urls() -> Option<Vec<(&'static str, String)>> {
     let port = stream::port();
     (port != 0 && read_settings().stream).then(|| {
-        (
-            format!("http://127.0.0.1:{port}/?view=overlay"),
-            format!("http://127.0.0.1:{port}/?view=dashboard"),
-            format!("http://127.0.0.1:{port}/?view=flourish"),
-        )
+        ["overlay", "dashboard", "flourish", "ticker"]
+            .into_iter()
+            .map(|view| (view, format!("http://127.0.0.1:{port}/?view={view}")))
+            .collect()
     })
 }
 
@@ -1434,7 +1607,8 @@ fn about() -> About {
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: std::env::consts::OS,
         repo: REPO,
-        overlay_w: BASE_W as u32,
+        // what a browser source should be sized to: the page has no strip
+        overlay_w: PANEL_W as u32,
         overlay_h: {
             let measured = PANEL_H.load(Ordering::Relaxed);
             if measured > 0 { measured } else { 199 }
@@ -1473,7 +1647,7 @@ fn fit_overlay(app: AppHandle, height: f64) {
     PANEL_H.store(height.round() as u32, Ordering::Relaxed);
     let Some(w) = app.get_webview_window("main") else { return };
     let scale = SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
-    let wanted = LogicalSize::new(BASE_W * scale, height * scale);
+    let wanted = LogicalSize::new(BASE_W * scale, height.max(STRIP_H) * scale);
     // a resize that changes nothing still goes through the window manager, and
     // on X11 that can shift the window out from under the player
     if let (Ok(now), Ok(factor)) = (w.inner_size(), w.scale_factor()) {
@@ -1888,8 +2062,8 @@ fn get_shopping() -> Vec<String> {
 #[tauri::command]
 fn set_shopping(items: Vec<String>) -> Result<(), String> {
     let items: Vec<String> = items.into_iter().filter(|s| !s.trim().is_empty()).take(200).collect();
-    let json = serde_json::to_string_pretty(&items).map_err(|e| e.to_string())?;
-    std::fs::write(shopping_path(), json).map_err(|e| e.to_string())
+    let json = serde_json::to_vec_pretty(&items).map_err(|e| e.to_string())?;
+    write_atomic(&shopping_path(), &json).map_err(|e| e.to_string())
 }
 
 /// The clipboard handle is kept for the life of the process: on X11 the
@@ -2042,9 +2216,11 @@ fn clear_sound(app: AppHandle, rarity: String) -> Result<(), String> {
 /// Left-clicking the tray hides whatever is on screen, and brings back the
 /// face that was up last — usually the overlay while playing.
 fn toggle_window(app: &AppHandle) {
-    let visible = |label: &str| {
-        app.get_webview_window(label).and_then(|w| w.is_visible().ok()).unwrap_or(false)
-    };
+    // `is_visible` alone stays true for a minimised window on both toolkits,
+    // so clicking the tray icon to bring back a dashboard the player had just
+    // minimised hid it instead — and the second click had to undo that first.
+    let visible =
+        |label: &str| app.get_webview_window(label).is_some_and(|w| on_screen(&w));
     if visible("main") || visible("dashboard") {
         hide_aux(app, "main");
         hide_aux(app, "dashboard");
@@ -2112,9 +2288,7 @@ fn honour_backend_choice() {
         let _ = std::fs::remove_file(&breadcrumb);
         let mut settings = read_settings();
         settings.x11_backend = false;
-        if let Ok(json) = serde_json::to_string_pretty(&settings) {
-            let _ = std::fs::write(settings_path(), json);
-        }
+        write_json(&settings_path(), &settings, true);
         log::warn("the last start through XWayland failed; coming up on Wayland instead");
         return;
     }
@@ -2295,7 +2469,7 @@ pub fn run() {
             }
             // both of these only ever move or mask the overlay and the ticker
             if overlay {
-                spawn_lock_poller(app.handle().clone());
+                spawn_strip_poller(app.handle().clone());
                 spawn_ticker_glue(app.handle().clone());
             }
             log_environment();
@@ -2364,4 +2538,35 @@ pub fn run() {
             end_run(app);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Seven commands build a filesystem path out of an id that came from the
+    /// web side, and `list_sound` once skipped this check outright — its own
+    /// comment records it. This is defence against the app's own bad data
+    /// rather than a live exploit, and it is worth a test for exactly that
+    /// reason: nothing about a wrong answer here is loud.
+    #[test]
+    fn a_sound_key_cannot_walk_out_of_its_directory() {
+        for good in ["satanic", "set", "heroic", "angelic", "unholy", "mail", "list-9f3a2b", "list-a-b"] {
+            assert!(sound_key(good), "{good} should be allowed");
+        }
+        for bad in [
+            "list-../../etc/passwd",
+            "list-a/b",
+            "list-a\\b",
+            "../satanic",
+            "list-a.b",
+            "",
+            "satanic ",
+            "LIST-abc/..",
+        ] {
+            assert!(!sound_key(bad), "{bad:?} should be refused");
+        }
+        // and the length ceiling, which is what stops a very long id at all
+        assert!(!sound_key(&format!("list-{}", "a".repeat(60))));
+    }
 }

@@ -252,7 +252,7 @@
   .foot { padding-top: 4px; font-size: 11px; }
   .dim { color: var(--bone-3); }
 
-  .c-sat { color: #ca1717; }
+  .c-sat { color: var(--rar-satanic); }
   .c-set { color: #40d040; }
   .c-her { color: #00ffae; }
   .c-ang { color: #f6f794; }

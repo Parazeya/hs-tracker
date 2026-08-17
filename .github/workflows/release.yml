@@ -30,6 +30,8 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # No `npm run build` here: tauri.conf.json's beforeBuildCommand runs it,
+      # so every job was building the front end twice.
       - run: npm ci
 
       # package.json owns the version; fail the build if the tag disagrees
@@ -42,7 +44,6 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           [ "$pkg" = "$tag" ] || { echo "tag $tag != package.json $pkg"; exit 1; }
 
-      - run: npm run build
 
       # the Npcap SDK import libraries are vendored, and wpcap.dll is
       # delay-loaded, so no driver is needed on the runner
@@ -104,7 +105,6 @@ jobs:
       - run: npm ci
       # package.json owns the version; the Windows job syncs it the same way
       - run: node scripts/set-version.mjs
-      - run: npm run build
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npx tauri build --bundles deb,appimage
         env:
@@ -135,7 +135,6 @@ jobs:
 
       - run: npm ci
       - run: node scripts/set-version.mjs
-      - run: npm run build
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npx tauri build --bundles rpm
 
@@ -151,7 +150,17 @@ jobs:
   # Linux packages back for a release without touching this file.
   publish-linux:
     needs: [build, linux, rpm]
-    if: startsWith(github.ref, 'refs/tags/') && vars.PUBLISH_LINUX != 'false'
+    # `!cancelled()` rather than `always()`: a cancelled run should stop, but a
+    # failed rpm job should not hold back the .deb and the AppImage that built
+    # perfectly well beside it. The rpm image is Fedora and outlives its own
+    # support window; when it breaks it must break alone.
+    #
+    # Not `continue-on-error` on the rpm job — that would make the run read
+    # green and report `success` here, which is worse than the problem.
+    if: >-
+      !cancelled() && startsWith(github.ref, 'refs/tags/')
+      && vars.PUBLISH_LINUX != 'false'
+      && needs.build.result == 'success' && needs.linux.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -161,13 +170,20 @@ jobs:
           name: hs-tracker-linux
           path: linux
 
+      # download-artifact errors hard on an artifact that was never uploaded,
+      # so the guard belongs here as well as on the release step.
       - uses: actions/download-artifact@v4
+        if: needs.rpm.result == 'success'
         with:
           name: hs-tracker-rpm
           path: linux/rpm
 
+      # The .rpm may not be here at all — see the guard on its download above.
+      # A pattern that matches nothing is not an error to this action, but say
+      # so rather than leaving the release to a default.
       - uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: false
           files: |
             linux/deb/*.deb
             linux/rpm/*.rpm

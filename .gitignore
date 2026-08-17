@@ -19,7 +19,9 @@ shopping.json
 positions.json
 carried.json
 runs.json
-debug-capture.jsonl
+# every capture, however it was named on the way in: these carry the session
+# identifier and checksum a client signs its requests with
+debug-capture*.jsonl
 /sounds/
 
 # datamined item tables: input for tools/gen_items.py, not ours to ship

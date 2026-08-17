@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.9.91 — 2026-08-17
+
+### Fixed
+
+- A named item's grade now comes from the item tables in every case. The packet
+  was allowed to outrank them whenever its claim was not one of the four the
+  code treated as unreliable — so a D-grade Satanic ring arrived claiming
+  Angelic and was announced, chimed and filed as an Angelic find. The tables
+  carry the game's own per-item grade; the packet is consulted only for items
+  they have never heard of.
+- Ordinary pickups were counted as Angelic again — keys, potions and white
+  bases. The packets that do it carry none of the marks that caught this the
+  last time, so the claim is now refused where it is impossible instead: an
+  ordinary base cannot be Angelic or Unholy, those two grades being named items
+  by definition. Over a full session's capture it takes 52 false Angelics off
+  the board and leaves the one real one.
+- The Reset and Quit buttons could fire on an ordinary double-click: the
+  confirming click had a deadline but no settling time, and this is a game
+  where the left button is held down. They also stayed armed through a lock.
+- Locking the overlay from its own strip left the strip lit but dead, with the
+  clicks going into the game: two places set the click-through and only one of
+  them remembered doing it.
+- The game's own minimize plate had no hover frame — hovering it made the plate
+  vanish and left the dash floating. It is drawn from the same recipe as the
+  new plates now, and its resting frame comes out byte-identical to the one
+  that shipped.
+- On an adapter that does segmentation offload, no message longer than one
+  frame ever arrived: the capture is handed the whole buffer while the header
+  still describes a single segment, and the parser either dropped the frame or
+  kept a segment's worth. Drops and gold fit in one frame and were fine; the
+  character save is about 5 KB, and it is the only thing carrying experience and
+  kills — so those two counters sat at zero all session.
+- Magic Find was drawn in a blue that measured 2.4:1 against the plate it sits
+  on, under the 3:1 floor. It is a palette token now, measured on both skins —
+  and in the dashboard it was not blue at all: a rule one step more specific had
+  been repainting it bone since the box was written.
+- The Satanic counters measured 2.9:1, the least readable figures on the panel
+  and the rarest thing they count. They now use the red the overlay already had
+  for standing in the Satanic zone, so there is one red and not two.
+- The drop ticker's plates were 12px wider than the overlay on each side: they
+  were inset by the gap between chips rather than by the panel's own border.
+- The Reset button was 18px narrower than the column it stood in, which pushed
+  the top row's second boundary nine pixels right of every other row's.
+- The rectangle that reserves the lock corner from a click-through overlay was
+  17px wider and 13px taller than the lock, and its spare corner lay on top of
+  the button below it.
+- Putting an item on the auction house was counted, journalled and announced as
+  a fresh drop, chime and all — the listing travels in the same field the server
+  uses to report what dropped.
+- The OBS browser sources never announced anything. Every notable drop was
+  queued and nothing read the queue, so `?view=flourish` could not play; the
+  drop ticker had no address at all. Both now receive, and Settings lists four
+  addresses instead of three.
+- Deleting a filter or a list gave no sign that the first click had armed it —
+  the two controls that destroy the most.
+- The rates graph asked the canvas to resolve a CSS variable, which it cannot:
+  gold and experience were drawn in the same colour, and "the graph appears
+  after a couple of minutes" was black on a black panel.
+- Clicking the tray icon hid a minimised dashboard instead of bringing it back.
+- The session clock started when the app did, not when the game did. On
+  autostart every per-hour figure was divided by the idle hours before play,
+  and the run filed at the end carried them.
+- Placing the drop announcement showed one sample and then an empty box, so
+  size and shading could not be judged. Its dashed frame no longer paints over
+  the sample either.
+- "Restart through XWayland" killed the copy it started: the parent still held
+  the single-instance name, so the child saw it taken and exited.
+- State files were truncated in place. A crash or a full disk mid-write left a
+  file that parses as nothing — and for the run history the loss was made
+  permanent by the next save. Everything is staged and renamed now, and a
+  write that fails says so instead of passing for a save.
+- A request to the OBS server with a bracketed IPv6 host was refused.
+- A failing Fedora job withheld the .deb and the AppImage that had built.
+
+### Changed
+
+- The overlay is a row shorter. Character level, hero level and the two purse
+  totals are gone — the game's own HUD shows all four — and Magic Find keeps the
+  top row, being the one figure it never shows. The drop counters move up a row,
+  and the kill counter is now always on screen instead of appearing only when
+  the Reset button was switched off.
+- The right-click menu is gone. Its entries — Dashboard, Hide to tray, Reset,
+  Quit — are a column of buttons standing beside the overlay, clear of the panel
+  rather than on it, each the height of a chip. They sit there
+  dimmed while the overlay is unlocked, and appear on hover while it is locked,
+  the way the lock button always has. The lock is the column's top button.
+  Reset and Quit still ask twice, and walking away from the column takes the
+  question back.
+- The Reset Stats button has left the panel's rows, and the session's SS count
+  ends that row instead — the top grade, counted whatever rarity the drops came
+  out in. The grades were always tallied; this one had never been shown outside
+  the Discord line. The button was also the only cell that came and went, ghost
+  mode drawing none, so that row was a cell short exactly when the overlay was
+  pinned over the game. Resetting is on the new column, in the tray, and on
+  Ctrl+Shift+R.
+- New mail blinks the chip for twenty seconds and then stays gold until it is
+  collected. It used to read "Mail!" in the same colour as every other figure.
+- The capture probe opened and closed a device several times a second; it is
+  asked once a minute. The endpoint sweep — which on Linux reads every open
+  file of every process — moved onto the five-second beat it already had.
+- Repeated warnings are written once and then only on a change or after ten
+  minutes. A machine that cannot capture used to fill the log in twenty and
+  take the start line, the environment survey and any backtrace with it.
+
 ## 0.9.90 — 2026-08-16
 
 Linux, gone over properly. Windows is unchanged.

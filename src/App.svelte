@@ -1,20 +1,22 @@
 <script>
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
-  import { listen } from './bridge.js';
+  import { listen, native } from './bridge.js';
   import { buffInfo, defaultBuffIcon, zoneName, icon } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
+  import { fmt } from './format.js';
 
   let snap = $state(null);
 
   let cfg = $state(null);
   let locked = $derived(cfg?.locked ?? false);
-  /// Whether the cursor is over the lock's corner, as the backend sees it.
+  /// Whether the cursor is over the strip down the right-hand edge, as the
+  /// backend sees it.
   ///
   /// The only source: a locked overlay is sent no mouse events, so :hover can
   /// arrive and never leave, and an unlocked one has no way of knowing what
   /// happened while it was locked. One report, both states.
-  let nearLock = $state(false);
+  let nearStrip = $state(false);
   let drag = $derived(cfg?.locked ? null : '');
   const urls = {};
   const lastPlayed = {};
@@ -58,6 +60,12 @@
     clock = { secs: s.session_secs, at: Date.now() };
   }
 
+  // Whether the mail is news rather than a standing fact. Paired with has_mail
+  // in the markup rather than cleared by an effect, so collecting the mail stops
+  // the blink without this ever having to watch the snapshot.
+  let mailFresh = $state(false);
+  let mailTimer;
+
   $effect(() => {
     initSounds();
     invoke('snapshot').then(received).catch(() => {});
@@ -66,28 +74,36 @@
       // this window is the one that plays sounds, hidden or not — the backend
       // says when mail arrives rather than leaving it to be spotted in a
       // snapshot that only travels to windows on screen
-      listen('mail', () => playSound('mail')),
+      listen('mail', () => {
+        playSound('mail');
+        // The chime is easy to miss with the game's own sound up, and the chip
+        // said "Mail!" in the same bone as every other figure on the panel. It
+        // blinks while the news is new and then settles to a gold that stays
+        // until the mail is collected — mail waits as long as you leave it, and
+        // a blink that never stops is a blink you learn to ignore.
+        mailFresh = true;
+        clearTimeout(mailTimer);
+        mailTimer = setTimeout(() => (mailFresh = false), 20000);
+      }),
       listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
       listen('settings-changed', (e) => (cfg = e.payload)),
-      listen('lock-hover', (e) => (nearLock = !!e.payload)),
+      listen('strip-hover', (e) => {
+        nearStrip = !!e.payload;
+        // Walking away disarms Reset. The question used to be written on a wide
+        // button; on an icon it is a blink, and a blink you have walked away
+        // from is a control still holding a click you have forgotten giving it.
+        if (!nearStrip) disarm();
+      }),
       listen('sounds-changed', async (e) => (urls[e.payload] = await soundUrl(e.payload))),
     ];
     const timer = setInterval(() => (tick = Date.now()), 1000);
     return () => {
       clearInterval(timer);
+      clearTimeout(mailTimer);
       unsubs.forEach((u) => u.then((f) => f()));
     };
   });
 
-  // 1 234 567 -> 1.23kk; keeps the chips readable at any scale
-  function fmt(n) {
-    const v = n ?? 0;
-    const abs = Math.abs(v);
-    if (abs >= 1e9) return `${(v / 1e9).toFixed(2)}kkk`;
-    if (abs >= 1e6) return `${(v / 1e6).toFixed(2)}kk`;
-    if (abs >= 10_000) return `${(v / 1e3).toFixed(1)}k`;
-    return v.toLocaleString('en-US');
-  }
 
   function dur(secs) {
     const h = Math.floor(secs / 3600);
@@ -137,67 +153,67 @@
 
   const shown = (id) => !(cfg?.hidden ?? []).includes(id);
 
-  // pinned over a running game: drop the frame and the button, leave the
-  // numbers floating on top of the game
+  // pinned over a running game: drop the frame, leave the numbers floating on
+  // top of the game
   let live = $derived((snap?.status ?? '').startsWith('capturing'));
   // Ghost mode drops the frame so the numbers float over the game. It needs the
   // window to clear itself between frames, which this desktop does not — see
   // main.js — so the setting defaults off there and says why in Settings.
   let ghost = $derived(locked && live && (cfg?.ghost ?? true));
 
-  // anything that throws work away asks once; the second click does it
+  // Anything that throws work away asks once; the second click does it — but
+  // not the second half of a double-click. This is an ARPG: the left button
+  // moves and attacks, players click-spam, and two clicks 80ms apart are what
+  // the input device produces by itself. The arming blink is a 0.6s square wave
+  // and had not completed a cycle before the confirming click landed.
   let armed = $state(null);
+  let armedAt = 0;
   let armTimer;
+  const ARM_SETTLE_MS = 350;
   function danger(key, action) {
-    clearTimeout(armTimer);
     if (armed === key) {
+      if (Date.now() - armedAt < ARM_SETTLE_MS) return;
+      clearTimeout(armTimer);
       armed = null;
       action();
       return;
     }
+    clearTimeout(armTimer);
     armed = key;
+    armedAt = Date.now();
     armTimer = setTimeout(() => (armed = null), 4000);
   }
 
+  /// Nothing stays armed across a change of mind. The lock does not go through
+  /// `danger`, so arming Reset and then locking used to leave the question
+  /// standing behind a strip the poller never reported leaving.
+  const disarm = () => {
+    clearTimeout(armTimer);
+    armed = null;
+  };
+
   const reset = () => invoke('reset_stats');
 
-  let menu = $state(null);
+  // The strip, under the lock. These were the right-click menu, which was a menu
+  // nobody could find: nothing on the panel ever hinted it was there.
+  const ENTRIES = [
+    { key: 'dashboard', icon: 'dashboard', title: 'Dashboard', run: () => invoke('full_mode') },
+    { key: 'hide', icon: 'minimize', title: 'Hide to tray', run: () => invoke('hide_window') },
+    { key: 'reset', icon: 'reset', title: 'Reset stats', danger: true, run: reset },
+    { key: 'quit', icon: 'close', title: 'Quit', danger: true, run: () => invoke('quit') },
+  ];
 
-  let menuSize = $state({ w: 138, h: 96 });
 
-  function onContext(e) {
-    e.preventDefault();
-    menu = { x: e.clientX, y: e.clientY };
-  }
 
-  // the overlay is only a couple of rows tall and clips its content, so the
-  // menu is placed against the real window box and its measured size
-  let menuPos = $derived.by(() => {
-    if (!menu) return null;
-    const pad = 4;
-    return {
-      x: Math.max(pad, Math.min(menu.x, window.innerWidth - menuSize.w - pad)),
-      y: Math.max(pad, Math.min(menu.y, window.innerHeight - menuSize.h - pad)),
-    };
-  });
-
-  const closeMenu = () => (menu = null);
-
-  function menuAction(cmd) {
-    closeMenu();
-    invoke(cmd).catch(() => {});
-  }
 
   async function toggleLock() {
+    disarm();
     if (!cfg) cfg = await invoke('get_settings').catch(() => null);
     if (!cfg) return;
     cfg = { ...cfg, locked: !cfg.locked };
     invoke('save_settings', { settings: cfg }).catch(() => {});
   }
 </script>
-
-<!-- the window is nothing but the panel, so the menu belongs to the whole of it -->
-<svelte:window onclick={closeMenu} onblur={closeMenu} oncontextmenu={onContext} />
 
 <div
   bind:this={panelEl}
@@ -209,19 +225,6 @@
   style:opacity={cfg?.opacity ?? 1}
   data-tauri-drag-region={drag}
 >
-  <button
-    class="lock"
-    class:locked
-    class:near={nearLock}
-    onclick={toggleLock}
-    title={locked
-      ? 'Locked — click to unlock'
-      : 'Click to lock: the overlay becomes click-through except this button (Ctrl+Shift+L works too)'}
-    aria-label="lock"
-  >
-    <img src={locked ? art('lock_gold') : art('lock_pale')} alt="" />
-  </button>
-
   {#if shown('session')}
     <div class="row" data-tauri-drag-region={drag}>
       <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={status.tip}>
@@ -229,53 +232,31 @@
         <img src={snap?.paused ? art('frozen_icon') : icon('time')} alt="" class="ic" />
         <span class="val" class:frozen={snap?.paused}>{snap ? dur(sessionSecs) : '0:00:00'}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
-        <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
-        <span class="val">{snap?.has_mail ? 'Mail!' : 'No mail'}</span>
-      </div>
-      {#if shown('reset') && !ghost}
-        <button
-          class="btn md"
-          style:--btn="url({art('button')})"
-          style:--btn-hover="url({art('button_hover')})"
-          style:--btn-down="url({art('button_down')})"
-          onclick={() => danger('reset', reset)}>{armed === 'reset' ? 'Sure?' : 'Reset Stats'}</button
+      <!-- Magic find keeps the top row — it is the one figure the game's own HUD
+           never shows, which is why the two levels and the two purse totals left
+           this panel and this did not. No written tag in a 124px cell: the icon,
+           the size and the blue carry it, and the label would not fit beside a
+           five-digit percentage. Switching it off leaves the row a cell short,
+           the panel's own arithmetic being eleven chips into twelve slots. -->
+      {#if shown('vitals')}
+        <div
+          class="chip md"
+          style:border-image-source="url({art('chip_dark')})"
+          title="magic find, off the client's heartbeat rather than the character save"
         >
-      {:else}
-        <div class="chip md" style:border-image-source="url({art('chip_dark')})">
-          <span class="dot {status.cls}"></span>
-          <span class="val">{fmt(snap?.kills.earned)} kills</span>
+          <img src={icon('mf')} alt="" class="ic" />
+          <span class="val mf">{snap?.mf ? `${fmt(snap.mf)}%` : '—'}</span>
         </div>
       {/if}
-    </div>
-  {/if}
-
-  {#if shown('gold')}
-    <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})">
-        <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
-        <span class="val">{fmt(snap?.gold.total)}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
-        <span class="val">+{fmt(snap?.gold.earned)}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
-        <span class="val">{fmt(snap?.gold.per_hour)}/h</span>
-      </div>
-    </div>
-  {/if}
-
-  {#if shown('xp')}
-    <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})">
-        <img src={icon('xp')} alt="" class="ic" />
-        <span class="val">{fmt(snap?.xp.total)}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
-        <span class="val">+{fmt(snap?.xp.earned)}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
-        <span class="val">{fmt(snap?.xp.per_hour)}/h</span>
+      <div
+        class="chip md mail"
+        class:has={snap?.has_mail}
+        class:fresh={mailFresh && snap?.has_mail}
+        style:border-image-source="url({art('chip_dark')})"
+        title={snap?.has_mail ? 'there is mail waiting' : 'no mail'}
+      >
+        <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
+        <span class="val">{snap?.has_mail ? 'Mail!' : 'No mail'}</span>
       </div>
     </div>
   {/if}
@@ -289,36 +270,65 @@
           | <span class="c-unh">{fmt(item('Unholy').total)}</span>
         </span>
       </div>
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Satanic | per hour">
+        <span class="val">
+          <span class="c-sat">{fmt(item('Satanic').total)}</span>
+          | <span class="c-sat">{fmt(item('Satanic').per_hour)}/h</span>
+        </span>
+      </div>
       <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Heroic | Set">
         <span class="val">
           <span class="c-her">{fmt(item('Heroic').total)}</span>
           | <span class="c-set">{fmt(item('Set').total)}</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Satanic">
-        <span class="val">
-          <span class="c-sat">{fmt(item('Satanic').total)}</span>
-          | <span class="c-sat">{fmt(item('Satanic').per_hour)}/h</span>
-        </span>
+    </div>
+  {/if}
+
+  {#if shown('gold')}
+    <div class="row" data-tauri-drag-region={drag}>
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="gold earned this session">
+        <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
+        <span class="val">+{fmt(snap?.gold.earned)}</span>
+      </div>
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="gold per hour">
+        <span class="val">{fmt(snap?.gold.per_hour)}/h</span>
+      </div>
+      <!-- Kills is a statistic and has stopped standing in for the button. It
+           used to render only when the Reset button was switched off or the
+           overlay was ghosted, which made the panel's one combat figure a thing
+           you saw by accident. -->
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
+        <span class="dot {status.cls}"></span>
+        <span class="val">{fmt(snap?.kills.earned)} kills</span>
       </div>
     </div>
   {/if}
 
-  {#if shown('vitals')}
+  {#if shown('xp')}
     <div class="row" data-tauri-drag-region={drag}>
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="experience earned this session">
+        <img src={icon('xp')} alt="" class="ic" />
+        <span class="val">+{fmt(snap?.xp.earned)}</span>
+      </div>
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="experience per hour">
+        <span class="val">{fmt(snap?.xp.per_hour)}/h</span>
+      </div>
+      <!-- The cell the Reset button used to end the row with. The button was the
+           only one that came and went — ghost mode draws none — so the panel
+           finished on a gap exactly when it was pinned over the game.
+
+           SS is the top grade, and the number a run is judged by whatever colour
+           the drops came out in. The backend has counted every grade all along;
+           this is the one worth a chip. The label is written out because this is
+           also the OBS browser source, where there is no tooltip to hover. -->
       <div
-        class="chip lg"
+        class="chip md"
         style:border-image-source="url({art('chip_dark')})"
-        title="magic find, off the client's heartbeat rather than the character save"
+        title="SS-graded drops this session — the top grade, counted whatever the rarity"
       >
-        <img src={icon('mf')} alt="" class="ic" />
-        <span class="val c-blue">{snap?.mf ? `${fmt(snap.mf)}%` : '—'}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="character level">
-        <span class="val">Lv {snap?.character?.level || '—'}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="hero level">
-        <span class="val">HLv {snap?.character?.herolevel || '—'}</span>
+        <span class="grade">SS</span>
+        <span class="val">{fmt(snap?.ss)}</span>
       </div>
     </div>
   {/if}
@@ -343,25 +353,46 @@
     </div>
   {/if}
 
-  {#if menu}
-    <div
-      class="menu"
-      style:border-image-source="url({art('chip_dark')})"
-      style:left="{menuPos.x}px"
-      style:top="{menuPos.y}px"
-      bind:clientWidth={menuSize.w}
-      bind:clientHeight={menuSize.h}
-    >
-      <button onclick={() => menuAction('full_mode')}>Dashboard</button>
-      <button onclick={() => menuAction('hide_window')}>Hide to tray</button>
-      <button
-        onclick={() => danger('menu-reset', () => { closeMenu(); reset(); })}
-        >{armed === 'menu-reset' ? 'Reset — sure?' : 'Reset stats'}</button
-      >
-      <button class="danger" onclick={() => menuAction('quit')}>Quit</button>
-    </div>
-  {/if}
 </div>
+
+<!--
+  The controls, in the twenty pixels between the last chip and the window's edge.
+  The chip grid ends at x=424 and the window is 444 wide; everything in that band
+  is the panel's border art and its padding, so a column here covers no figure.
+
+  A sibling of the panel rather than a child, and fixed rather than absolute, for
+  three reasons that each stand on their own: an absolutely positioned child is
+  laid out against the panel's PADDING box, so its numbers and the backend's rect
+  would be measured from different origins; a child inherits the panel's opacity
+  slider, and a control faded to 0.3 is a control you cannot aim at; and a child
+  of .panel.ghost loses the frame art with it.
+-->
+{#if native}
+  <div class="strip" class:near={nearStrip} class:free={!locked}>
+    <button
+      class="cell lock"
+      style:--i="url({art(locked ? 'lock_gold' : 'lock_pale')})"
+      onclick={toggleLock}
+      title={locked
+        ? 'Locked — click to unlock (Ctrl+Shift+L)'
+        : 'Click to lock: the overlay becomes click-through except this strip (Ctrl+Shift+L)'}
+      aria-label={locked ? 'unlock the overlay' : 'lock the overlay'}
+    >
+    </button>
+    {#each ENTRIES as e}
+      <button
+        class="cell"
+        class:armed={armed === e.key}
+        style:--i="url({art(e.icon)})"
+        style:--i-hover="url({art(`${e.icon}_hover`)})"
+        onclick={() => (e.danger ? danger(e.key, e.run) : e.run())}
+        title={armed === e.key ? `${e.title} — click again` : e.title}
+        aria-label={e.title}
+      >
+      </button>
+    {/each}
+  </div>
+{/if}
 
 <style>
   @font-face {
@@ -427,7 +458,14 @@
   .row {
     display: flex;
     gap: 8px;
-    justify-content: space-between;
+    /* Packed from the left, not spread. 140 + 8 + 124 + 8 + 124 is 404, which is
+       the content box exactly, so a full row looks the same either way — but a
+       row that is one cell short does not. `space-between` sent the survivors to
+       the two edges and moved every column boundary with them; ghost mode drops
+       the Reset button, and switching magic find off drops a chip from the top
+       row, so short rows are ordinary here rather than exotic. The gap goes at
+       the end, where it reads as the panel running out rather than as a hole. */
+    justify-content: flex-start;
     align-items: center;
   }
 
@@ -480,50 +518,97 @@
 
   .val { margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
 
-  .btn {
-    box-sizing: border-box;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    height: 28px;
-    width: 106px;
-    font: inherit;
-    font-size: 12px;
-    color: var(--bone-12);
-    text-shadow: 0 1px 0 var(--ground-2);
-    background: var(--btn) no-repeat;
-    background-size: 100% 100%;
-    image-rendering: pixelated;
-    border: none;
-    cursor: pointer;
-    padding: 0 0 2px;
-  }
-  .btn:hover { background-image: var(--btn-hover); }
-  .btn:active { background-image: var(--btn-down); }
+  /* The grade, set the way the game sets it: full size and gold, with the count
+     beside it in ordinary bone — the game's own tooltip reads "Tier SS, Requires
+     Level 100" with exactly that split. Written out rather than left to a
+     tooltip because this component is also the OBS browser source, and nobody
+     hovers a video. Gold measures 10:1 on the plate. */
+  .grade { color: var(--gold-2); letter-spacing: 1px; }
 
-  .lock {
-    position: absolute;
-    top: -9px;
-    right: -6px;
-    width: 21px;
-    height: 30px;
-    padding: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    z-index: 1;
+  /* Magic find is the panel's headline now, so it is set a size larger. The
+     colour comes from --mf, which is defined per theme in theme.css — the old
+     #5050ae was a dark blue on a dark plate and measured 2.4:1 against the chip,
+     under the 3:1 floor for display text and well under the 4.5:1 for this size. */
+  .val.mf { font-size: 15px; color: var(--mf); }
+
+  /* Mail. Blinking while the news is new, gold for as long as it waits. The
+     blink is a square wave rather than a fade because everything else in this
+     skin is pixel art, and a filter carries the plate and the glyphs together. */
+  .chip.mail.has .val { color: var(--gold-2); }
+  .chip.mail.fresh { animation: mail-blink 0.8s infinite; }
+  @keyframes mail-blink {
+    0%, 49% { filter: none; }
+    50%, 100% { filter: brightness(1.6); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chip.mail.fresh { animation: none; filter: brightness(1.35); }
+  }
+
+  /* The strip stands BESIDE the panel, not on it. The window is 472 wide where
+     the panel is 444, and this column occupies the 28 past the panel's right
+     edge — a webview cannot paint outside its own window, so "beside the panel"
+     had to become "a wider window".
+
+     28 is the height of a chip, so the column keeps the panel's rhythm and reads
+     as part of it rather than as something parked next to it. Twice the plates'
+     native 21 would have been exactly crisp and was far too big. Five cells with
+     1px between them and 3 more under the lock is 147 tall; STRIP_H in lib.rs is
+     the same arithmetic and gives the window its floor. */
+  .strip {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    z-index: 2;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.15s;
+    /* Only on the way out. `pointer-events` cannot be animated, so it snaps to
+       `auto` the instant the strip is revealed while the opacity is still
+       climbing: for 120ms five buttons were live and half invisible, which is
+       how a click lands on something the eye has not seen yet. */
+    transition: opacity 0.12s;
   }
-  /* No :hover anywhere near this button — see `nearLock`. */
-  .lock.near { opacity: 1; pointer-events: auto; }
-  .lock img {
-    width: 21px;
-    height: 30px;
-    display: block;
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.9));
+  .strip.free,
+  .strip.near { transition: none; }
+  /* Unlocked, the strip simply is there — dimmed, always clickable. It can
+     afford to be, because it covers nothing. Locked, it waits for the backend to
+     say the cursor has arrived: a click-through window is sent no mouse events,
+     so :hover would never fire and could never end. */
+  .strip.free { opacity: 0.55; pointer-events: auto; }
+  .strip.near { opacity: 1; pointer-events: auto; }
+
+  .cell {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    padding: 0;
+    border: none;
+    cursor: pointer;
+    background: var(--i) no-repeat center / 100% 100%;
+    image-rendering: pixelated;
+  }
+  .cell:hover { background-image: var(--i-hover, var(--i)); }
+  /* The lock is a toggle rather than an action, and its sprite is 33x48 rather
+     than square: `contain` keeps it upright in the same 28 box instead of
+     stretching it, and the wider gap under it is what separates a toggle from
+     the four things that do something. */
+  .cell.lock { background-size: contain; margin-bottom: 3px; }
+
+  /* Armed: the second click does it. A square wave rather than a fade, for the
+     same reason the mail chip blinks that way. */
+  .cell.armed {
+    background-image: var(--i-hover, var(--i));
+    animation: cell-armed 0.6s infinite;
+  }
+  @keyframes cell-armed {
+    0%, 49% { filter: none; }
+    50%, 100% { filter: brightness(1.5) saturate(1.4); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cell.armed { animation: none; filter: brightness(1.35); }
   }
 
   /* See main.js. The panel's art is pixel art with soft edges, so the text
@@ -547,6 +632,11 @@
 
   .zone {
     box-sizing: border-box;
+    /* 140 + 240 is 380 in a 404 box, so this plate needs the 24px slack pushed
+       in front of it to keep its right edge on the same boundary as the chips
+       above. It used to come from `space-between` on the row, which the short
+       rows above can no longer afford. */
+    margin-left: auto;
     width: 240px;
     height: 29px;
     display: flex;
@@ -567,41 +657,10 @@
   .c-ang { color: #f6f794; }
   .c-her { color: #00ffae; }
   /* the game says outright when this is the room you are in */
-  .zone-name.here { color: #ff6a6a; }
+  .zone-name.here { color: var(--rar-satanic); }
 
-  .c-sat { color: #ca1717; }
-  .c-blue { color: #5050ae; }
+  .c-sat { color: var(--rar-satanic); }
   .c-set { color: #40d040; }
   .c-unh { color: #e04a7a; }
 
-  .menu {
-    position: fixed;
-    z-index: 10;
-    box-sizing: border-box;
-    width: 138px;
-    border: 6px solid transparent;
-    border-image-slice: 6 fill;
-    border-image-width: 6px;
-    image-rendering: pixelated;
-    padding: 3px;
-    display: flex;
-    flex-direction: column;
-  }
-  .menu button {
-    font: inherit;
-    font-size: 12px;
-    color: var(--bone-6);
-    text-align: left;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 4px 8px;
-  }
-  .menu button:hover {
-    background: rgba(150, 37, 56, 0.55);
-    color: var(--bone-13);
-  }
-  .menu button.danger:hover {
-    background: rgba(180, 30, 30, 0.7);
-  }
 </style>

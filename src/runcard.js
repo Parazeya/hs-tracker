@@ -9,6 +9,7 @@
 // them on the clipboard.
 
 import { zoneLabel } from './items.js';
+import { fmt, difficulty } from './format.js';
 
 const W = 760;
 const H = 430;
@@ -25,25 +26,22 @@ const GOLD = '#e8c860';
 const DIM = '#8c7668';
 
 const RARITIES = [
-  ['Satanic', '#ca1717'],
+  // Literals, not tokens: this is drawn on a canvas, and getComputedStyle is
+  // not consulted there. Kept in step with --rar-satanic by hand.
+  ['Satanic', '#ff6a6a'],
   ['Set', '#40d040'],
   ['Heroic', '#00ffae'],
   ['Angelic', '#f6f794'],
   ['Unholy', '#e04a7a'],
 ];
 
-const DIFFICULTIES = ['Normal', 'Nightmare', 'Hell'];
 
 const font = (size, weight = '') => `${weight} ${size}px "CookieRun Bold", sans-serif`.trim();
 
-function short(n) {
-  const v = n ?? 0;
-  const abs = Math.abs(v);
-  if (abs >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
-  if (abs >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
-  if (abs >= 1000) return `${(v / 1e3).toFixed(1)}k`;
-  return String(v);
-}
+// The card is the one thing that leaves the app, so it says the numbers the
+// way the panels do — it used to speak M and B and turn to k three digits
+// early, which read as a different program's screenshot.
+const short = fmt;
 
 function span(secs) {
   const h = Math.floor(secs / 3600);
@@ -113,7 +111,7 @@ export function drawRunCard(run, art = {}) {
   ctx.font = font(15);
   const who = [
     run.level ? `Lv ${run.level}` : null,
-    DIFFICULTIES[run.difficulty] ?? null,
+    difficulty(run.difficulty, run.hell_sub),
     new Date(run.started_ms).toLocaleString('en-GB', {
       day: '2-digit',
       month: 'short',
@@ -181,7 +179,7 @@ export function drawRunCard(run, art = {}) {
       ctx.font = font(15);
       ctx.fillText(t.label, 42, y);
       ctx.textAlign = 'right';
-      ctx.fillStyle = t.group === 'chest' ? GOLD : '#ca1717';
+      ctx.fillStyle = t.group === 'chest' ? GOLD : '#ff6a6a';
       ctx.fillText(String(t.total), 26 + half - 16, y);
       ctx.textAlign = 'left';
       y += 22;

@@ -1,5 +1,6 @@
 <script>
   import { invoke } from './bridge.js';
+  import { fmt, RARITIES, RARITY_CLASS, difficulty } from './format.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { tierLabel, zoneLabel } from './items.js';
@@ -18,23 +19,7 @@
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
 
-  const RARITIES = [
-    ['Satanic', 'c-sat'],
-    ['Set', 'c-set'],
-    ['Heroic', 'c-her'],
-    ['Angelic', 'c-ang'],
-    ['Unholy', 'c-unh'],
-  ];
-  const DIFFICULTIES = ['Normal', 'Nightmare', 'Hell'];
 
-  function fmt(n) {
-    const v = n ?? 0;
-    const abs = Math.abs(v);
-    if (abs >= 1e9) return `${(v / 1e9).toFixed(2)}kkk`;
-    if (abs >= 1e6) return `${(v / 1e6).toFixed(2)}kk`;
-    if (abs >= 10_000) return `${(v / 1e3).toFixed(1)}k`;
-    return v.toLocaleString('en-US');
-  }
 
   function dur(secs) {
     const h = Math.floor(secs / 3600);
@@ -52,7 +37,15 @@
   // what a run is worth in one line, for the list
   const headline = (r) => `${fmt(r.gold)} gold · ${fmt(r.kills)} kills`;
 
-  const drops = (r) => RARITIES.reduce((sum, [name]) => sum + (r.items?.[name] ?? 0), 0);
+  const drops = (r) => RARITIES.reduce((sum, name) => sum + (r.items?.[name] ?? 0), 0);
+
+  // The bosses and chests a run put down. They are filed with every run and
+  // drawn on the card you can copy from here, and were the one thing on that
+  // picture the panel behind it could not show you. Runs filed before 0.9.8
+  // carry none, which is what the empty guard is for.
+  const tallies = (r, group) => (r.tallies ?? []).filter((t) => t.group === group && t.total > 0);
+  const bosses = (r) => tallies(r, 'boss');
+  const chests = (r) => tallies(r, 'chest');
 
   let armed = $state(false);
 
@@ -138,7 +131,9 @@
             <div class="sub">
               {run.character ?? 'unknown character'}
               {#if run.level}· Lv {run.level}{/if}
-              {#if DIFFICULTIES[run.difficulty]}· {DIFFICULTIES[run.difficulty]}{/if}
+              {#if run.herolevel}· HLv {run.herolevel}{/if}
+              {#if run.mf}· MF {fmt(run.mf)}%{/if}
+              {#if run.difficulty != null}· {difficulty(run.difficulty, run.hell_sub)}{/if}
             </div>
             <div class="rates">
               <div class="rate">
@@ -167,14 +162,36 @@
           <div class="box" style:border-image-source="url({art('chip_dark')})">
             <div class="head"><span class="accent">Loot</span></div>
             <div class="tally">
-              {#each RARITIES as [name, cls]}
+              {#each RARITIES as name}
                 <div class="tallyrow">
-                  <span class={cls}>{name}</span>
+                  <span class={RARITY_CLASS[name]}>{name}</span>
                   <b>{fmt(run.items?.[name] ?? 0)}</b>
                 </div>
               {/each}
             </div>
           </div>
+
+          {#if bosses(run).length || chests(run).length}
+            <div class="box" style:border-image-source="url({art('chip_dark')})">
+              <div class="head"><span class="accent">Killed &amp; opened</span></div>
+              {#if bosses(run).length}
+                <div class="subhead">Bosses</div>
+                <div class="tally">
+                  {#each bosses(run) as t}
+                    <div class="tallyrow"><span class="dim">{t.label}</span><b class="c-sat">{fmt(t.total)}</b></div>
+                  {/each}
+                </div>
+              {/if}
+              {#if chests(run).length}
+                <div class="subhead">Chests</div>
+                <div class="tally">
+                  {#each chests(run) as t}
+                    <div class="tallyrow"><span class="dim">{t.label}</span><b class="c-gold">{fmt(t.total)}</b></div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
 
           {#if run.zones?.length}
             <div class="box" style:border-image-source="url({art('chip_dark')})">
@@ -198,7 +215,7 @@
               <div class="scroll">
                 {#each run.notable as item}
                   <div class="find">
-                    <span class="name {RARITIES.find(([r]) => r === item.rarity)?.[1] ?? ''}">{item.name}</span>
+                    <span class="name {RARITY_CLASS[item.rarity] ?? ''}">{item.name}</span>
                     <span class="dim tier">{tierLabel(item.tier)}</span>
                   </div>
                 {/each}
@@ -348,9 +365,21 @@
   .value { font-size: 16px; line-height: 20px; }
   .sub { font-size: 10px; color: var(--edge-8); }
 
+  /* the same small caption Stats uses over its own tallies */
+  .subhead {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--bone-4);
+    margin: 6px 0 2px;
+  }
   .tally { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 14px; }
   .tallyrow { display: flex; justify-content: space-between; gap: 8px; }
   .tallyrow b { font-weight: normal; color: var(--bone-9); }
+  /* `.tallyrow b` is (0,1,1) and a bare class is (0,1,0), so the colours on
+     the bosses and chests rows lost to it and every figure came out bone. */
+  .tallyrow b.c-sat { color: var(--rar-satanic); }
+  .tallyrow b.c-gold { color: var(--gold-2); }
 
   .zone { display: flex; align-items: center; gap: 6px; }
   .zone .name { flex: none; width: 116px; font-size: 11px; }
@@ -413,7 +442,7 @@
   }
   .card-btn:hover { color: var(--gold-2); border-color: var(--edge-3); }
 
-  .c-sat { color: #ca1717; }
+  .c-sat { color: var(--rar-satanic); }
   .c-set { color: #40d040; }
   .c-her { color: #00ffae; }
   .c-ang { color: #f6f794; }

@@ -56,6 +56,13 @@
   // in the box above — it may have been taken. Polled while the panel is open,
   // because switching the server on is what makes them exist.
   let urls = $state(null);
+  // the backend names each view; these are what a streamer would call them
+  const LABELS = {
+    overlay: 'Overlay',
+    dashboard: 'Dashboard',
+    flourish: 'Announcement',
+    ticker: 'Drop ticker',
+  };
   let copied = $state(false);
   $effect(() => {
     const ask = () => invoke('stream_urls').then((u) => (urls = u)).catch(() => {});
@@ -98,9 +105,8 @@
     ['gold', 'Gold'],
     ['xp', 'Experience'],
     ['items', 'Item counters'],
-    ['vitals', 'Magic find & levels'],
+    ['vitals', 'Magic find'],
     ['zone', 'Satanic zone'],
-    ['reset', 'Reset Stats button'],
   ];
 
   const TIERS = ['D', 'C', 'B', 'A', 'S', 'SS'];
@@ -321,9 +327,9 @@
              no use anywhere else, and looking for them in another panel is a
              step nobody should have to be told about -->
         {#if urls}
-          {#each [['Overlay', urls[0]], ['Dashboard', urls[1]], ['Announcement', urls[2]]] as [what, url]}
+          {#each urls as [what, url]}
             <div class="line" data-tauri-drag-region>
-              <span class="name">{what}</span>
+              <span class="name">{LABELS[what] ?? what}</span>
               <button class="addr" onclick={() => copy(url)}>{url}</button>
             </div>
           {/each}

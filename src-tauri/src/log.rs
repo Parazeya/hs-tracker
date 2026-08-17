@@ -9,11 +9,12 @@
 //! separate thing and stays that way — this one is small enough to paste into a
 //! chat, and is kept that way on purpose.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Rolled at half a megabyte, one older copy kept. A log nobody can send is a
 /// log nobody reads.
@@ -73,6 +74,31 @@ pub fn say(level: &str, message: &str) {
     if let Ok(mut out) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
         let _ = out.write_all(line.as_bytes());
     }
+}
+
+/// A line worth having once, not once a second.
+///
+/// The capture probe runs several times a second, and a machine that cannot
+/// capture fails it every time: unthrottled that is upwards of ten thousand
+/// lines an hour, which rolls this file inside twenty minutes and takes the
+/// start line, the environment survey and any backtrace with it — on exactly
+/// the machine whose log you were going to ask for.
+///
+/// Repeated on a change of message or after ten minutes, never on neither: a
+/// fault that comes and goes would otherwise be written once and then look
+/// like it had been fixed for the rest of the session.
+pub fn once(key: &str, level: &str, message: impl AsRef<str>) {
+    static SAID: Mutex<Option<HashMap<String, (String, Instant)>>> = Mutex::new(None);
+    const AGAIN: Duration = Duration::from_secs(600);
+    let message = message.as_ref();
+    let Ok(mut said) = SAID.lock() else { return };
+    let said = said.get_or_insert_with(HashMap::new);
+    match said.get(key) {
+        Some((was, at)) if was == message && at.elapsed() < AGAIN => return,
+        _ => {}
+    }
+    said.insert(key.to_string(), (message.to_string(), Instant::now()));
+    say(level, message);
 }
 
 pub fn warn(message: impl AsRef<str>) {

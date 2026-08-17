@@ -92,6 +92,13 @@
   /// with the search as well as with the list. Both belong in the key that
   /// arms it, or the confirmation is for one set and the deletion for another.
   let clearKey = $derived(`clear:${current?.id}:${query.trim().toLowerCase()}`);
+  // The key names what is armed, and the template has to compare against the
+  // same key it armed with. Comparing against a bare 'filter' or 'list' while
+  // arming with `filter:<id>` was always false: the button never turned red,
+  // never read "delete?", and the first click looked like nothing had
+  // happened — on the two controls that destroy a whole filter or list.
+  let filterKey = $derived(`filter:${filter?.id}`);
+  let listKey = $derived(`list:${current?.id}`);
 
   // sorted by name, and narrowed by the same query that searches for new ones
   let shown = $derived.by(() => {
@@ -413,10 +420,10 @@
         {#if filter}
           <button
             class="del"
-            class:armed={armed === 'filter'}
-            onclick={() => danger(`filter:${filter?.id}`, removeFilter)}
+            class:armed={armed === filterKey}
+            onclick={() => danger(filterKey, removeFilter)}
             title="Delete this filter with all its lists and sounds"
-          >{armed === 'filter' ? 'delete?' : '×'}</button>
+          >{armed === filterKey ? 'delete?' : '×'}</button>
         {/if}
       </div>
 
@@ -470,10 +477,10 @@
       <button class="move" disabled={selected === lists.length - 1} onclick={() => moveList(1)} title="Later">▶</button>
       <button
         class="del"
-        class:armed={armed === 'list'}
-        onclick={() => danger(`list:${current?.id}`, () => removeList(selected))}
+        class:armed={armed === listKey}
+        onclick={() => danger(listKey, () => removeList(selected))}
         title="Delete this list and its sound"
-      >{armed === 'list' ? 'delete?' : '×'}</button>
+      >{armed === listKey ? 'delete?' : '×'}</button>
     </div>
 
     <div class="sound" style:border-image-source="url({art('chip_dark')})">
@@ -524,7 +531,7 @@
       <span>Items in {current.name}</span>
       {#if shown.length}
         <button class="link" class:armed={armed === clearKey} onclick={() => danger(clearKey, removeShown)}>
-          {#if armed === 'clear'}
+          {#if armed === clearKey}
             {query.trim() ? `remove ${shown.length}?` : 'clear the list?'}
           {:else}
             {query.trim() ? `remove ${shown.length} shown` : 'clear'}

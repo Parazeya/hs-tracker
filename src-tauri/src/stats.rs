@@ -26,6 +26,11 @@ pub const RARITIES: &[(&str, &str)] = &[
 
 pub const JOURNAL_RARITIES: &[&str] = &["Satanic", "Set", "Heroic", "Angelic", "Unholy"];
 
+/// The top grade an item can carry, and the one number a farmer judges a run by:
+/// how many chase items it produced, whatever colour they came out. Grades run
+/// 1..6 and the interface writes them D, C, B, A, S, SS.
+pub const SS_TIER: i64 = 6;
+
 // stack resources by item type
 const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "materials"), (15, "socketables")];
 
@@ -129,6 +134,8 @@ pub struct CharacterInfo {
     pub level: i64,
     pub herolevel: i64,
     pub difficulty: i64,
+    /// Which grade of Hell, 1..5, and 0 when the character is not on Hell.
+    pub hell_sub: i64,
     pub hardcore: bool,
     pub season: i64,
 }
@@ -172,6 +179,21 @@ pub struct Run {
     pub character: Option<String>,
     pub level: i64,
     pub difficulty: i64,
+    /// Which grade of Hell it was played on, 1..5, and 0 when it was not Hell.
+    /// Absent from runs filed before this was read at all.
+    #[serde(default)]
+    pub hell_sub: i64,
+    /// The character's hero level and magic find as the run ended — not an
+    /// average. Two runs whose drop counts differ threefold look identical
+    /// without them, so any comparison built on this history needs them.
+    #[serde(default)]
+    pub herolevel: i64,
+    #[serde(default)]
+    pub mf: i64,
+    #[serde(default)]
+    pub hardcore: bool,
+    #[serde(default)]
+    pub season: i64,
     pub gold: i64,
     pub xp: i64,
     pub kills: i64,
@@ -279,21 +301,21 @@ pub struct GameStats {
 /// flourish's own filter was never added to that tuple: every finished run —
 /// including the one the game ends by closing — quietly disarmed the drop
 /// announcement until the settings were saved again.
-struct Prefs {
+pub struct Prefs {
     /// Whether notifications fire when an item hits the ground (true) or when
     /// it is picked up (false).
-    prefer_ground: bool,
-    alerts: Vec<String>,
-    min_tier: i64,
+    pub prefer_ground: bool,
+    pub alerts: Vec<String>,
+    pub min_tier: i64,
     /// What the flourish window answers to. It is asked here rather than after
     /// the fact because a drop that fails the alert rules never leaves `apply`
     /// — which made the flourish's own settings look like they did nothing at
     /// all.
-    fx_rarities: Vec<String>,
-    fx_tier: i64,
-    notable_defs: Vec<(String, Vec<String>)>,
+    pub fx_rarities: Vec<String>,
+    pub fx_tier: i64,
+    pub notable_defs: Vec<(String, Vec<String>)>,
     /// (sound key, item names) — an item on one of these is announced by it
-    sound_lists: Vec<(String, Vec<String>)>,
+    pub sound_lists: Vec<(String, Vec<String>)>,
 }
 
 impl Default for Prefs {
@@ -494,6 +516,12 @@ impl GameStats {
             character: self.character.as_ref().map(|c| c.name.clone()),
             level: self.character.as_ref().map_or(0, |c| c.level),
             difficulty: self.character.as_ref().map_or(0, |c| c.difficulty),
+            hell_sub: self.character.as_ref().map_or(0, |c| c.hell_sub),
+            herolevel: self.character.as_ref().map_or(0, |c| c.herolevel),
+            // the last heartbeat's figure, which is what "at the end" means
+            mf: self.mf,
+            hardcore: self.character.as_ref().is_some_and(|c| c.hardcore),
+            season: self.character.as_ref().map_or(0, |c| c.season),
             gold: self.gold_earned,
             xp: self.xp_earned,
             kills: self.kills_earned,
@@ -560,7 +588,8 @@ impl GameStats {
         }
     }
 
-    /// How many items of one grade this session has produced.
+    /// How many items of one grade this session has produced. Grades run 1..6,
+    /// which the interface writes as D through SS.
     pub fn graded(&self, tier: i64) -> i64 {
         self.graded.get(&tier).copied().unwrap_or(0)
     }
@@ -575,53 +604,65 @@ impl GameStats {
         self.revision
     }
 
-    /// Whether notifications fire when an item hits the ground (true) or when
-    /// it is picked up (false).
+    fn listed_sound(&self, name: &str) -> Option<String> {
+        if name.is_empty() {
+            return None;
+        }
+        let lower = name.to_lowercase();
+        self.prefs
+            .sound_lists
+            .iter()
+            .find(|(_, names)| names.contains(&lower))
+            .map(|(key, _)| key.clone())
+    }
+
+    /// Every setting at once.
+    ///
+    /// This was five setters called in a row from `apply_stats_settings`, which
+    /// is the very hazard `Prefs` was introduced to end: they had already
+    /// drifted — four bumped `revision` and the flourish one did not — and a
+    /// setting added to `Settings` and forgotten here was a silent no-op. One
+    /// struct literal means the compiler notices instead.
+    pub fn set_prefs(&mut self, prefs: Prefs) {
+        self.revision += 1;
+        self.prefs = prefs;
+    }
+
+    /// The old verbs, kept for the tests alone.
+    ///
+    /// Production goes through `set_prefs` so that a setting added to
+    /// `Settings` and forgotten in `apply_stats_settings` is a compile error.
+    /// The tests want to change one thing and say so, which is a different
+    /// job, and behind `cfg(test)` they cannot drift back into the app.
+    #[cfg(test)]
     pub fn set_prefer_ground(&mut self, prefer_ground: bool) {
         self.revision += 1;
         self.prefs.prefer_ground = prefer_ground;
     }
 
-    /// Which drops are worth a sound and a ticker line. Counters ignore this —
-    /// statistics should stay complete even when alerts are narrowed down.
+    #[cfg(test)]
     pub fn set_filter(&mut self, alerts: Vec<String>, min_tier: i64) {
         self.revision += 1;
         self.prefs.alerts = alerts;
         self.prefs.min_tier = min_tier;
     }
 
-    /// The flourish has rules of its own, and they are not the alert rules.
+    #[cfg(test)]
     pub fn set_flourish_filter(&mut self, rarities: Vec<String>, tier: i64) {
+        self.revision += 1;
         self.prefs.fx_rarities = rarities;
         self.prefs.fx_tier = tier;
     }
 
-    /// Lists the user built by hand: their sound wins over the rarity alerts,
-    /// and an item on one is announced even when the filter would hide it.
+    #[cfg(test)]
     pub fn set_sound_lists(&mut self, lists: Vec<(String, Vec<String>)>) {
         self.revision += 1;
         self.prefs.sound_lists = lists
             .into_iter()
-            .map(|(key, names)| (key, names.into_iter().map(|n| n.trim().to_lowercase()).collect()))
+            .map(|(key, names)| {
+                (key, names.into_iter().map(|n| n.trim().to_lowercase()).collect())
+            })
             .collect();
-    }
-
-    fn listed_sound(&self, name: &str) -> Option<String> {
-        if name.is_empty() {
-            return None;
-        }
-        let lower = name.to_lowercase();
-        self.prefs.sound_lists
-            .iter()
-            .find(|(_, names)| names.contains(&lower))
-            .map(|(key, _)| key.clone())
-    }
-
-    pub fn set_notable(&mut self, defs: Vec<(String, Vec<String>)>) {
-        self.revision += 1;
-        if !defs.is_empty() {
-            self.prefs.notable_defs = defs;
-        }
     }
 
     fn count_notable(&mut self, name: &str, amount: i64) {
@@ -696,7 +737,14 @@ impl GameStats {
                     name: name.clone(),
                     announced: true,
                     amount: 1,
-                    fingerprint: String::new(),
+                    // An identity of its own, and a different one each time.
+                    // Sharing one per name collapsed every later find of the
+                    // same item into the first for the whole run: farm two
+                    // Doctor's Potions and the second was silently nothing.
+                    // Pairing this with the client's own sighting is done by
+                    // name and a clock, above, not by pretending to an identity
+                    // the two could never share.
+                    fingerprint: format!("chat:{}:{}", name.to_lowercase(), now_ms()),
                     hash: String::new(),
                     ground: false,
                 });
@@ -722,6 +770,7 @@ impl GameStats {
                 level,
                 herolevel,
                 difficulty,
+                hell_sub,
                 kills,
                 tallies,
             } => {
@@ -804,13 +853,22 @@ impl GameStats {
                         level: *level,
                         herolevel: *herolevel,
                         difficulty: *difficulty,
+                        hell_sub: *hell_sub,
                         hardcore: *hardcore == 1,
                         season: *season,
                     });
                 }
-                // currency usually arrives before the mode is known
+                // Currency usually arrives before the purse is known, so the
+                // last packet is read again now that the save has named one.
+                //
+                // Without its delta. `apply_currency` counts a deposit the
+                // moment it sees one, and replaying the packet whole counted
+                // it again on every save for the rest of the session: bank
+                // 2600 and it read 2600, then 5200 after the next save, then
+                // 7800 — and the inflated `banked` then swallowed the next
+                // real deposit whole. It is the balance this replay is for.
                 if let Some(c) = self.last_currency.clone() {
-                    self.apply_currency(&c);
+                    self.apply_currency(&crate::parser::Currency { delta: 0, ..c });
                 }
             }
             GameEvent::Mail(has) => self.has_mail = *has,
@@ -968,6 +1026,15 @@ impl GameStats {
                     if *announced {
                         self.announced_at.insert(lower, Instant::now());
                         self.announced_at.retain(|_, t| t.elapsed() < Duration::from_secs(120));
+                    } else if echo {
+                        // The server's chat line and the client's own sighting
+                        // of the same drop are one find. Only the chime was
+                        // being suppressed, so the item still got a second
+                        // journal line, a second ticker row and a second entry
+                        // in the run's finds — which is what a fingerprint on
+                        // the chat event was supposed to prevent and could not,
+                        // the two sightings having no identity in common.
+                        return None;
                     }
                     // Only what the alert rules asked for chimes. A drop that
                     // got this far on the flourish's rules alone is a picture,
@@ -1166,6 +1233,7 @@ impl GameStats {
             satanic_here: self.satanic_here,
             character: self.character.clone(),
             tallies: self.tallies(),
+            ss: self.graded(SS_TIER),
         }
     }
 
@@ -1267,6 +1335,9 @@ pub struct Snapshot {
     pub character: Option<CharacterInfo>,
     /// bosses put down and chests opened this session
     pub tallies: Vec<TallyCount>,
+    /// SS-graded drops this session. The grades already exist per tier; this is
+    /// the top one, pulled out because it is the one a run is judged on.
+    pub ss: i64,
 }
 
 #[derive(Serialize)]
@@ -1368,6 +1439,7 @@ mod tests {
             level: 10,
             herolevel: 20,
             difficulty: 2,
+            hell_sub: 0,
             kills: 0,
             tallies: HashMap::new(),
         }
@@ -1446,9 +1518,33 @@ mod tests {
             level: 100,
             herolevel: 112,
             difficulty: 2,
+            hell_sub: 0,
             kills,
             tallies: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn a_save_does_not_bank_the_same_deposit_again() {
+        let mut s = GameStats::default();
+        s.apply(&account_packet("x", 0, 0)); // names the purse, calibrates
+        s.apply(&GameEvent::Gold(Currency { gss: 10_000, delta: 2_600, ..Default::default() }));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 2_600);
+
+        // the save replays the last currency packet to re-read the balance now
+        // that the purse is known; it must not count the deposit a second time
+        for _ in 0..3 {
+            s.apply(&account_packet("x", 0, 0));
+        }
+        assert_eq!(
+            s.snapshot(String::new()).gold.earned,
+            2_600,
+            "three saves must not turn one deposit into four"
+        );
+
+        // and a genuine later deposit is still counted in full
+        s.apply(&GameEvent::Gold(Currency { gss: 12_161, delta: 2_161, ..Default::default() }));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 4_761);
     }
 
     #[test]
@@ -1671,10 +1767,10 @@ mod tests {
     #[test]
     fn bosses_and_chests_count_from_the_first_save_on() {
         let save = |satan: i64, odin: i64, ruby: i64| match account_packet("x", 1, 1) {
-            GameEvent::Account { experience, season, hardcore, blood_pact, name, level, herolevel, difficulty, kills, .. } => {
+            GameEvent::Account { experience, season, hardcore, blood_pact, name, level, herolevel, difficulty, hell_sub, kills, .. } => {
                 GameEvent::Account {
                     experience, has_experience: true, season, hardcore, blood_pact, name, level,
-                    herolevel, difficulty, kills,
+                    herolevel, difficulty, hell_sub, kills,
                     tallies: HashMap::from([
                         ("statisticsatankills".to_string(), satan),
                         ("statisticodinkills".to_string(), odin),
@@ -1719,6 +1815,8 @@ mod tests {
         s.apply(&notable_item("Mystery Blade", 3, 1));
         assert_eq!(s.graded(3), 1);
         assert_eq!(s.graded(6), 2, "an item the table cannot grade is not an SS");
+        // and the overlay's chip reads the top grade, not some other one
+        assert_eq!(s.snapshot(String::new()).ss, 2);
         s.reset();
         assert_eq!(s.graded(6), 0, "the tally belongs to the session");
     }
@@ -1949,8 +2047,11 @@ mod tests {
 
     #[test]
     fn a_drop_and_its_pickup_are_one_item() {
-        // the server rolls the item (tier included, hash "abc"), then the same
-        // hash turns up in the bag with no tier of its own
+        // The server rolls the item (tier included, hash "abc"), then the same
+        // hash turns up in the bag with no tier of its own. The name is one the
+        // tables call Satanic, because they are what decides the grade now — a
+        // packet claiming 6 over a name the tables call Heroic would be counted
+        // as the Heroic it is.
         let mut s = GameStats::default();
         s.set_prefer_ground(true);
         let sighting = |ground: bool, tier: i64| GameEvent::ItemAdded {
@@ -1961,7 +2062,7 @@ mod tests {
             item_id: 1,
             weapon_type: 0,
             seed: 123,
-            name: "Azazel's Despair".into(),
+            name: "Abomination's Gut Ripper".into(),
             announced: false,
             amount: 1,
             fingerprint: "8-1-1".into(),
@@ -1988,7 +2089,7 @@ mod tests {
             item_id: 1,
             weapon_type: 0,
             seed: 7,
-            name: "Azazel's Despair".into(),
+            name: "Abomination's Gut Ripper".into(),
             announced: false,
             amount: 1,
             fingerprint: "8-1-2".into(),

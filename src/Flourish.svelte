@@ -96,9 +96,12 @@
     playing = true;
     run += 1;
     timer = setTimeout(() => {
-      // while it is being placed the sample loops, so the size and the shading
-      // can be judged without farming for an hour
-      if (placing) return enqueue(SAMPLE);
+      // While it is being placed the sample loops, so the size and the shading
+      // can be judged without farming for an hour. Through the queue and then
+      // `advance` directly: `enqueue` only starts anything when nothing is
+      // playing, and nothing ever cleared `playing` here — so the promised
+      // loop played once and the box sat empty for the rest of the session.
+      if (placing) waiting.push(SAMPLE);
       advance();
     }, runMs);
   }
@@ -314,6 +317,9 @@
   /* only while it is being parked */
   /* It has to be unmistakable. Transparent and outlined in a thin dash, it was
      a window nobody could see grabbing clicks nobody could explain. */
+  /* No fill: it is drawn after .fx with no z-index, so a full-bleed scrim
+     painted over the very sample the player is here to judge. The dashed
+     border and the button are enough to say what this box is. */
   .place {
     position: absolute;
     inset: 0;
@@ -322,7 +328,6 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    background: rgba(12, 8, 14, 0.72);
     border: 2px dashed rgba(232, 216, 168, 0.75);
     box-sizing: border-box;
     cursor: move;

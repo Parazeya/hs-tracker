@@ -8,8 +8,10 @@ Only hues move. Lightness is carried over exactly, because every contrast the
 layout relies on — a label against its slab, a value against its chip — was
 chosen at those lightnesses and would have to be re-tuned by hand otherwise.
 
-The rarities, the frozen tint and the reds that mean danger are not tokens: they
-mean the same thing in any skin and stay literal in the components.
+The frozen tint and the reds that mean danger are not tokens: they mean the same
+thing in any skin and stay literal in the components. Two colours that also mean
+the same thing in any skin ARE tokens, because too many files were spelling them
+out: see FIXED, written into every block unchanged rather than hue-shifted.
 
     python tools/gen_theme.py            # rewrites src/theme.css
     python tools/gen_theme.py --preview  # also a swatch sheet to look at
@@ -42,6 +44,21 @@ DEFAULT = {
     "--ground-7": "#241a1c", "--ground-8": "#2c1a1d", "--ground-9": "#3b2126",
     "--ground-10": "#3a2b2b", "--ground-11": "#3d2a2c",
 }
+
+# Written into every block as they stand. A season moves hues; these two carry a
+# meaning rather than a mood, so they must not move — magic find is blue and a
+# Satanic drop is red whatever the skin is. They are outside DEFAULT because
+# `shift` is applied per family and neither has one.
+#
+# Both were lifted out of the dark: #5050ae measured 2.4:1 against the chip plate
+# and #ca1717 2.9:1, under the 3:1 floor for display text, on a plate that
+# composites to #2a1c1c. The red is the one the overlay already used to say "you
+# are standing in the Satanic zone", so no second near-identical red appears.
+FIXED = {
+    "--mf": "#7fb2ff",
+    "--rar-satanic": "#ff6a6a",
+}
+
 
 def family(token: str) -> str:
     return token.lstrip("-").split("-")[0]
@@ -83,9 +100,11 @@ def main() -> None:
     lines = [
         "/* The palette, in one place.",
         " *",
-        " * Every chrome colour the app draws with is a token here; the rarities, the",
-        " * frozen tint and the reds that mean danger stay literal in the components,",
-        " * because those mean the same thing whatever the skin is.",
+        " * Every chrome colour the app draws with is a token here. The frozen tint and",
+        " * the reds that mean danger stay literal in the components, because those mean",
+        " * the same thing whatever the skin is — and the last two tokens in each block",
+        " * are the same for that reason: they carry a meaning, so a season leaves them",
+        " * where they are.",
         " *",
         " * Written by tools/gen_theme.py — edit there, not here.",
         " */",
@@ -143,6 +162,7 @@ def main() -> None:
     ]
     for name, colour in tokens():
         lines.append(f"  {name}: {colour};")
+    lines += [f"  {n}: {c};" for n, c in FIXED.items()]
     lines.append("}")
 
     for season, rule in SEASONS.items():
@@ -157,10 +177,11 @@ def main() -> None:
             fam = family(name)
             hue, keep, floor, lift = rule[fam]
             lines.append(f"  {name}: {shift(colour, hue, keep, floor, lift, CEILING[fam])};")
+        lines += [f"  {n}: {c};" for n, c in FIXED.items()]
         lines.append("}")
 
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"{len(DEFAULT)} tokens -> {OUT}")
+    print(f"{len(DEFAULT) + len(FIXED)} tokens -> {OUT}")
 
     if "--preview" in sys.argv:
         from PIL import Image, ImageDraw

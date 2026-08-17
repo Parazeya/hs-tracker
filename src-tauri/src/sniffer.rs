@@ -114,10 +114,14 @@ pub fn capture_available() -> bool {
         Ok(_) => true,
         Err(e) => {
             let refused = denied_open(&e);
-            crate::log::warn(format!(
-                "cannot open {name} for capture: {e}{}",
-                if refused { " - the binary needs cap_net_raw" } else { "" }
-            ));
+            crate::log::once(
+                "capture-probe",
+                "warn",
+                format!(
+                    "cannot open {name} for capture: {e}{}",
+                    if refused { " - the binary needs cap_net_raw" } else { "" }
+                ),
+            );
             !refused
         }
     }
@@ -228,6 +232,77 @@ fn capture_devices() -> Vec<pcap::Device> {
         .collect()
 }
 
+/// Where the IP header starts in a captured frame. Ethernet can carry one or
+/// two VLAN tags before the ethertype that matters.
+fn ip_offset(data: &[u8], framing: i32) -> Option<usize> {
+    match framing {
+        1 => {
+            let mut at = 12;
+            for _ in 0..3 {
+                let ty = u16::from_be_bytes([*data.get(at)?, *data.get(at + 1)?]);
+                match ty {
+                    0x8100 | 0x88a8 | 0x9100 => at += 4,
+                    0x0800 | 0x86dd => return Some(at + 2),
+                    _ => return None,
+                }
+            }
+            None
+        }
+        0 | 108 => Some(4),
+        _ => Some(0),
+    }
+}
+
+/// A frame the adapter has not cut up yet, with its length field rewritten to
+/// describe what was actually captured.
+///
+/// With Large Send Offload the stack hands the adapter one buffer — up to 64 KB
+/// — and the adapter segments it on the way out. A capture sits above that, so
+/// it sees the whole buffer while the length field still describes a single
+/// segment, or nothing at all. Measured against etherparse 0.16 with the two
+/// shapes that occur: a total length of 0 fails the parse outright and the frame
+/// is dropped on the floor, and a total length of one MSS returns that many
+/// bytes and silently discards the rest.
+///
+/// Either way no message longer than one segment survives. The character save
+/// is about 5 KB and is the only carrier of experience and kills, which is why
+/// those were the two counters stuck at zero — but every message over one MSS
+/// is affected, and a fair share of a session's inventory syncs are.
+///
+/// `None` when nothing needs doing, which is almost always.
+fn unoffload(data: &[u8], ip_start: usize) -> Option<Vec<u8>> {
+    let here = data.len().checked_sub(ip_start)?;
+    let version = data.get(ip_start)? >> 4;
+    // Where the length lives, and what it would have to say to describe this
+    // frame. IPv6 counts from the end of its fixed 40-byte header; IPv4 counts
+    // the header in.
+    let (at, declared, want) = match version {
+        4 => {
+            let d = u16::from_be_bytes([*data.get(ip_start + 2)?, *data.get(ip_start + 3)?]) as usize;
+            (ip_start + 2, d, here)
+        }
+        6 => {
+            let d = u16::from_be_bytes([*data.get(ip_start + 4)?, *data.get(ip_start + 5)?]) as usize;
+            (ip_start + 4, d + 40, here.checked_sub(40)?)
+        }
+        _ => return None,
+    };
+    // A short frame is padded out to the 60 bytes ethernet insists on, so bytes
+    // past the declared end are ordinary there and must NOT be taken for
+    // payload. That is the only case, and it can only happen in a frame of 60
+    // bytes or fewer — so the test is the frame's size, not how far it
+    // overshoots. Allowing 64 bytes of overshoot anywhere, as this did, left a
+    // band in which a genuinely offloaded buffer was still quietly truncated.
+    let padded = data.len() <= 60;
+    let offloaded = declared == 0 || (here > declared && !padded);
+    if !offloaded || want > u16::MAX as usize {
+        return None;
+    }
+    let mut patched = data.to_vec();
+    patched[at..at + 2].copy_from_slice(&(want as u16).to_be_bytes());
+    Some(patched)
+}
+
 /// The filter every capture shares: the addresses the game is actually using,
 /// or everything while it has not connected yet.
 fn scope_for(local: &BTreeSet<IpAddr>) -> String {
@@ -275,13 +350,30 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
     // adapter -> when it went quiet, and how long to leave it alone
     let mut barren: HashMap<String, (std::time::Instant, Duration)> = HashMap::new();
     let mut looked = std::time::Instant::now() - Duration::from_secs(10);
+    // The capture probe opens a device and closes it again — a socket and a
+    // ring buffer each time — and this loop runs at 3.3 Hz while the game is
+    // down. Rights do not change on that timescale; a minute is plenty.
+    let mut probed = std::time::Instant::now() - Duration::from_secs(120);
+    let mut can_capture = true;
+    // the hosts the game is talking to, kept between the slow endpoint sweeps
+    let mut hosts = 0usize;
 
     loop {
         tick += 1;
         if tick.is_multiple_of(30) {
             stats.lock().unwrap().sample();
         }
-        if !capture_available() {
+        // `!can_capture ||` here re-probed on every pass through exactly the
+        // case the cache exists for — a machine with no rights, which fails the
+        // probe every time. A failing probe is re-tried sooner than a working
+        // one so that granting the capability is noticed within a quarter of a
+        // minute rather than a whole one, but it is still a window, not a loop.
+        let window = if can_capture { 60 } else { 15 };
+        if probed.elapsed() >= Duration::from_secs(window) {
+            probed = std::time::Instant::now();
+            can_capture = capture_available();
+        }
+        if !can_capture {
             set_status(&status, Status::NoCapture);
             std::thread::sleep(Duration::from_secs(3));
             continue;
@@ -301,6 +393,13 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             // back where the player left it rather than where the window
             // manager fancies
             if running {
+                // The clock starts when the game does. Left alone it ran from
+                // whenever the app was started — so an app on autostart at
+                // nine and a game at eight in the evening divided every
+                // per-hour figure by eleven idle hours, and filed that as the
+                // run's length when the game closed. Outside `if auto` on
+                // purpose: the same is true with the overlay switched off.
+                stats.lock().unwrap().reset();
                 if auto {
                     crate::show_overlay(&app);
                 }
@@ -313,20 +412,21 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             }
         }
 
-        let (local, remote) = if running {
-            game_endpoints(&pids)
-        } else {
-            (BTreeSet::new(), BTreeSet::new())
-        };
-        // adapters are re-checked on a slow beat: a VPN comes and goes, and the
-        // game opens its connections a moment after the process appears
+        // Adapters and endpoints are re-checked on a slow beat: a VPN comes
+        // and goes, and the game opens its connections a moment after the
+        // process appears. The sweep is inside the beat because on Linux it
+        // walks /proc/<pid>/fd for every process on the machine to build an
+        // inode-to-pid map — four calls in five were thrown away.
         if running && looked.elapsed() >= Duration::from_secs(5) {
             looked = std::time::Instant::now();
+            let (local, remote) = game_endpoints(&pids);
+            hosts = remote.len();
             wanted = capture_devices();
             scope = scope_for(&local);
         }
         if !running {
             wanted.clear();
+            hosts = 0;
         }
 
         // An adapter is only judged against one that is working: with the game
@@ -428,7 +528,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let dropped = alive.iter().map(|c| c.dropped.load(Ordering::Relaxed)).sum();
             let mut ifaces: Vec<&str> = alive.iter().map(|c| c.iface.as_str()).collect();
             ifaces.sort_unstable();
-            set_status(&status, Status::Capturing { iface: ifaces.join(" + "), hosts: remote.len(), dropped });
+            set_status(&status, Status::Capturing { iface: ifaces.join(" + "), hosts, dropped });
         } else if !captures.is_empty() {
             // every capture died: whatever they stored stands
         } else if !running {
@@ -479,7 +579,12 @@ fn capture_loop(
             }
         }
         let packet = match cap.next_packet() {
-            Ok(p) => Some(p.data),
+            // `whole` is false when the capture kept less of the frame than the
+            // wire carried. Only a complete frame may have its length rewritten
+            // below: on a truncated one the bytes we hold really are fewer than
+            // the header says, and telling the parser otherwise would hand the
+            // reassembler half a segment as if it were a message.
+            Ok(p) => Some((p.data, p.header.caplen >= p.header.len)),
             Err(pcap::Error::TimeoutExpired) => None,
             Err(e) => return Err(e),
         };
@@ -489,7 +594,13 @@ fn capture_loop(
                 handle_flush(&flushed, src, &stats, &hits, app);
             }
         }
-        let Some(data) = packet else { continue };
+        let Some((data, whole)) = packet else { continue };
+        // A segmentation-offloading adapter hands us the whole buffer with a
+        // length field describing one segment of it; `unoffload` puts the two
+        // back in agreement, and returns nothing at all in the ordinary case.
+        let patched =
+            whole.then(|| ip_offset(data, framing).and_then(|at| unoffload(data, at))).flatten();
+        let data: &[u8] = patched.as_deref().unwrap_or(data);
         let sliced = match framing {
             1 => SlicedPacket::from_ethernet(data), // DLT_EN10MB
             0 | 108 => {
@@ -586,5 +697,128 @@ fn handle_flush(
         if drop.flourish {
             crate::maybe_flourish(app, &drop);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv6Addr;
+
+    /// `::ffff:10.8.1.8` and `10.8.1.8` are one address, and only one of them
+    /// can be written into a filter that will ever match. A Linux build of the
+    /// game hands us the first; leaving it that way kept the capture up and
+    /// the counters at zero, with nothing anywhere saying why.
+    #[test]
+    fn a_mapped_address_comes_back_as_the_address_it_is() {
+        let mapped = IpAddr::V6("::ffff:10.8.1.8".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(unmap(mapped), "10.8.1.8".parse::<IpAddr>().unwrap());
+        // a real IPv6 address is left alone
+        let real = IpAddr::V6("2a01:4f8::1".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(unmap(real), real);
+        // and IPv4 passes through untouched
+        let plain: IpAddr = "192.168.0.70".parse().unwrap();
+        assert_eq!(unmap(plain), plain);
+    }
+
+    /// The filter decides whether anything is captured at all. With no known
+    /// address it must stay wide, or a session is deaf until the game happens
+    /// to open a socket we can attribute.
+    #[test]
+    fn the_filter_is_wide_until_the_game_names_itself() {
+        assert_eq!(scope_for(&BTreeSet::new()), "tcp");
+
+        let one: BTreeSet<IpAddr> = ["10.8.1.8".parse().unwrap()].into_iter().collect();
+        assert_eq!(scope_for(&one), "host 10.8.1.8");
+
+        let two: BTreeSet<IpAddr> =
+            ["10.8.1.8".parse().unwrap(), "192.168.0.70".parse().unwrap()].into_iter().collect();
+        let filter = scope_for(&two);
+        assert!(filter.contains("host 10.8.1.8"), "{filter}");
+        assert!(filter.contains("host 192.168.0.70"), "{filter}");
+        assert!(filter.contains(" or "), "{filter}");
+    }
+}
+
+
+#[cfg(test)]
+mod offload_tests {
+    use super::*;
+    use etherparse::{SlicedPacket, TransportSlice};
+
+    /// An ethernet + IPv4 + TCP frame carrying `payload` bytes, with `total_len`
+    /// written into the header's total-length field whatever the truth is.
+    fn frame(payload: usize, total_len: u16) -> Vec<u8> {
+        let mut v = vec![0u8; 12];
+        v.extend_from_slice(&[0x08, 0x00]);
+        v.push(0x45);
+        v.push(0);
+        v.extend_from_slice(&total_len.to_be_bytes());
+        v.extend_from_slice(&[0, 0, 0, 0, 64, 6, 0, 0]);
+        v.extend_from_slice(&[10, 0, 0, 1]);
+        v.extend_from_slice(&[10, 0, 0, 2]);
+        v.extend_from_slice(&[0x1f, 0x90, 0x1f, 0x91]);
+        v.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 2]);
+        v.push(0x50);
+        v.push(0x18);
+        v.extend_from_slice(&[0xff, 0xff, 0, 0, 0, 0]);
+        v.extend(std::iter::repeat(b'x').take(payload));
+        v
+    }
+
+    /// What the capture loop would end up with for this frame.
+    fn payload_seen(f: &[u8]) -> Option<usize> {
+        let patched = ip_offset(f, 1).and_then(|at| unoffload(f, at));
+        let data: &[u8] = patched.as_deref().unwrap_or(f);
+        match &SlicedPacket::from_ethernet(data).ok()?.transport {
+            Some(TransportSlice::Tcp(t)) => Some(t.payload().len()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn an_offloaded_frame_keeps_all_of_its_payload() {
+        // The two shapes a segmentation-offloading adapter produces. Before this
+        // was handled, the first was dropped by the parser and the second came
+        // back one segment long, which is why a 5 KB character save — the only
+        // carrier of experience and kills — never arrived on such a machine.
+        assert_eq!(payload_seen(&frame(5000, 0)), Some(5000), "a header claiming nothing");
+        assert_eq!(payload_seen(&frame(5000, 1500)), Some(5000), "a header claiming one segment");
+    }
+
+    #[test]
+    fn an_ordinary_frame_is_left_exactly_as_it_was() {
+        assert_eq!(payload_seen(&frame(1000, 1040)), Some(1000));
+        assert_eq!(payload_seen(&frame(5000, 5040)), Some(5000));
+        // and nothing is copied when nothing is wrong
+        assert!(unoffload(&frame(1000, 1040), 14).is_none());
+    }
+
+    #[test]
+    fn ethernet_padding_is_not_mistaken_for_payload() {
+        // A frame this short only reaches 60 bytes because the adapter pads it.
+        // The header declares 40 bytes of IP and the buffer holds 46 — six real
+        // bytes of padding past the declared end, which reading to the end of
+        // the buffer would hand the parser as payload.
+        let mut f = frame(0, 40);
+        f.resize(60, 0);
+        assert_eq!(f.len(), 60);
+        assert!(unoffload(&f, 14).is_none(), "padding is not an offloaded buffer");
+        assert_eq!(payload_seen(&f), Some(0));
+
+        // one byte past the ceiling there is no padding to excuse the overshoot
+        let mut big = frame(0, 40);
+        big.resize(61, 0);
+        assert!(unoffload(&big, 14).is_some(), "and it is read as offloaded again");
+    }
+
+    #[test]
+    fn a_vlan_tag_does_not_hide_the_header() {
+        let plain = frame(5000, 0);
+        let mut tagged = plain[..12].to_vec();
+        tagged.extend_from_slice(&[0x81, 0x00, 0x00, 0x64]); // one tag, vid 100
+        tagged.extend_from_slice(&plain[12..]);
+        assert_eq!(ip_offset(&tagged, 1), Some(18));
+        assert_eq!(payload_seen(&tagged), Some(5000));
     }
 }

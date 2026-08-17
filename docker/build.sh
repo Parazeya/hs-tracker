@@ -20,9 +20,6 @@ cd /build
 echo "==> npm ci"
 npm ci --no-audit --no-fund
 
-echo "==> front end"
-npm run build
-
 echo "==> cargo test"
 cargo test --manifest-path src-tauri/Cargo.toml
 

@@ -1,8 +1,10 @@
 /* The palette, in one place.
  *
- * Every chrome colour the app draws with is a token here; the rarities, the
- * frozen tint and the reds that mean danger stay literal in the components,
- * because those mean the same thing whatever the skin is.
+ * Every chrome colour the app draws with is a token here. The frozen tint and
+ * the reds that mean danger stay literal in the components, because those mean
+ * the same thing whatever the skin is — and the last two tokens in each block
+ * are the same for that reason: they carry a meaning, so a season leaves them
+ * where they are.
  *
  * Written by tools/gen_theme.py — edit there, not here.
  */
@@ -96,6 +98,8 @@ body {
   --ground-9: #3b2126;
   --ground-10: #3a2b2b;
   --ground-11: #3d2a2c;
+  --mf: #7fb2ff;
+  --rar-satanic: #ff6a6a;
 }
 
 /* Ebontharn: the season's own colours. Only the hues move — every
@@ -141,4 +145,6 @@ body {
   --ground-9: #2c213b;
   --ground-10: #31273e;
   --ground-11: #31283f;
+  --mf: #7fb2ff;
+  --rar-satanic: #ff6a6a;
 }
