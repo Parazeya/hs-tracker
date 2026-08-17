@@ -106,10 +106,36 @@ jobs:
       # package.json owns the version; the Windows job syncs it the same way
       - run: node scripts/set-version.mjs
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npx tauri build --bundles deb,appimage
+      # The .deb is the artifact that matters and it is built on its own, so
+      # nothing that happens to the AppImage can withhold it.
+      - run: npx tauri build --bundles deb
+
+      # The AppImage bundler fetches AppRun, linuxdeploy and the GTK plugin from
+      # github.com and raw.githubusercontent.com at bundle time. Those are
+      # unauthenticated requests from a shared runner IP, and they come back 429
+      # often enough to have taken a whole release down: the .deb above had
+      # already been built, and the job failing meant it was never uploaded.
+      #
+      # Rate limiting passes, so it is retried rather than given up on, and the
+      # step cannot fail the job — a release with a .deb and no AppImage is a
+      # release; a release with neither is not.
+      - name: Bundle the AppImage
+        continue-on-error: true
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          for attempt in 1 2 3; do
+            if npx tauri build --bundles appimage; then
+              exit 0
+            fi
+            echo "::warning::AppImage bundling failed (attempt $attempt/3), waiting"
+            sleep $((attempt * 45))
+          done
+          echo "::warning::no AppImage this time; the .deb is unaffected"
+          exit 1
 
+      # The AppImage glob may match nothing — see the step above. The .deb never
+      # does, so the artifact is always uploaded.
       - uses: actions/upload-artifact@v4
         with:
           name: hs-tracker-linux
