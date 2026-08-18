@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.9.93 — 2026-08-18
+
+### Changed
+
+- **The item tables come out of the game now.** Drop rates, names, rarities,
+  grades and the identity triple are read from `Hero_Siege.exe` and
+  `translationsItem.csv` instead of a datamining site, so a season can be
+  tracked the day it arrives rather than the day someone else datamines it.
+  `npm run items` does the whole job. Measured against the old source: every
+  rate it can read agrees, rarity on 1552 items of 1577, grades on all 955
+  named items, and the identity triple on 1861 of 1862 — the one disagreement
+  is the old source's mistake. It also brings 12 items that source never had.
+- The **Items** page has a card view beside the table and remembers which you
+  used. A card gives the name, the kind and grade, both drop chances and where
+  the item is tied, in words rather than as a fifth column.
+- Machine paths moved out of the build scripts into `.env`; `.env.example`
+  documents them. Nobody's drive letters travel with the repository now.
+
+### Added
+
+- **A chime when the Satanic Zone rotates**, with a sweep across the zone chip
+  in the overlay. On by default, with its own row on the Alerts page. It fires
+  only on a real rotation — not at startup, not after a reset, and not when the
+  app first learns which zone is satanic. Coming back to the game an hour later
+  was the case that needed the care.
+- `npm run all` builds every artifact on this machine: the installer, the
+  `.deb`, the `.rpm` and the AppImage.
+
+### Fixed
+
+- **A buffer of open braces could stall the capture.** Finding the end of a
+  JSON message was quadratic — 64 KB of `{` took 2.2 seconds and a megabyte
+  would have taken minutes. It now costs a fixed multiple of its own length and
+  reads real traffic byte for byte the same.
+- A ground drop and its pickup were counted twice when they shared an inventory
+  fingerprint. A reset between a deposit and the balance that confirmed it made
+  the new session claim gold it had not earned. Time in a zone kept accruing
+  while the session was paused.
+- A settings file that would not parse was answered with defaults, and the next
+  save wrote those defaults over the only copy. It is set aside as
+  `settings.json.bad` now, and what the app writes survives a power cut: the
+  staged file is flushed before the rename that names it.
+- A single left click on the tray icon toggled the window twice, because the
+  click is reported going down and coming up. It appeared and vanished again;
+  only a double click looked like it worked.
+- The SS chip counted anything carrying an SS grade, keys and socketables
+  included, and read 2 before a piece of gear had dropped. The grade columns
+  count gear.
+- Essence Vaults no longer sound a rarity alert: seven of them share one
+  display name, so it fired constantly and said nothing about what was found.
+- With the game not running, the "waiting for Hero Siege" banner pushed every
+  page past the bottom of its box, where it was clipped with no way to scroll
+  to it. The Alerts page could draw its own controls on top of one another in a
+  short window. Both were the same fault, and every flex container was swept
+  for it.
+- The heavy statistics payload was pushed to the front end every second whether
+  anything had changed or not, and the journal formatted its timestamps one at
+  a time — 10 ms of every redraw.
+
 ## 0.9.92 — 2026-08-18
 
 ### Changed
@@ -24,6 +83,13 @@
 
 ### Added
 
+- The satanic zone rotating says so: a chime, and the zone chip sweeps and
+  pulses for a few seconds. The rotation is why anyone watches that chip, and
+  watching it means not watching the fight. One row on **Alerts** — *Zone
+  change* — carries both, on out of the box, with its own volume and its own
+  file if the satanic chime it borrows is not to taste. It fires on a rotation
+  and nothing else: starting the tracker between rotations, or resetting the
+  session, is this app finding out where the zone is, not the game moving it.
 - Export every setting to one file and read it back — rarities, grades, the
   announcement, every filter and list, and the sound files themselves, which
   live outside settings.json and would otherwise arrive as silence.

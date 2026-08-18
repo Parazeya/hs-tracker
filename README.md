@@ -11,15 +11,11 @@
   <a href="../../releases"><b>➡️ Download for Windows &amp; Linux ⬅️</b></a>
 </p>
 
-> [!WARNING]
-> **Still in development.** It is usable and in daily use, but it is not
-> finished: expect bugs, expect settings to move between versions, and expect
-> the occasional drop to be counted oddly after a game patch. Nothing it does
-> can harm your account or your saves — it only reads — but do not treat its
-> numbers as authoritative until a version says it is out of beta.
+> [!NOTE]
+> **How soon does it work when a new season starts?**
 >
-> Found something wrong? [Open an issue](../../issues) with what you were
-> doing and, if you can, the log from `%LOCALAPPDATA%\HS Tracker\`.
+> About an hour, an hour and a half. That is how long it takes to rebuild the
+> item tables and cut a release.
 
 ![The overlay over a running game](screenshots/overlay.png)
 
@@ -44,34 +40,37 @@ injects anything, and sends nothing anywhere — everything stays on your machin
 The one exception is the **About** section's update check, which asks GitHub for
 the newest release and only when you press the button.
 
-## Where it stands
-
-Roughly **80% of the way to 1.0**. What is left is mostly the last stretch of one
-job: making the app's knowledge of the game come from the game.
-
-| | |
-| --- | --- |
-| ✅ **Capture** | Reads the traffic without touching the game. Survives adapters that do segmentation offload, which used to hide every message longer than one frame. |
-| ✅ **Statistics & runs** | Rates, drops by rarity and grade, magic find, bosses, chests, the Satanic Zone, and every finished session kept with a shareable card. |
-| ✅ **Alerts** | Per-rarity sounds, minimum grade, custom filters with their own lists and sounds, and the loot-pillar announcement — on one page. |
-| ✅ **Overlay** | Click-through when locked, its own placement, hotkeys, tray, compact and dashboard faces. |
-| ✅ **Linux** | Builds and runs; on Wayland it runs as the dashboard, and says so instead of pretending the overlay works. |
-| ✅ **Backup** | Every setting, filter, list and sound in one file. |
-| 🚧 **Item data from the game** | Drop rates, names, rarity, grade and drop zones are now read out of the game's own files instead of a datamining site. Drop rates agree with the game's journal exactly; rarity matches the old source on 1552 items of 1577, grades on every named item. |
-| 🚧 **The last field** | One piece of item identity still comes from that outside source. Until it is derived locally, an item added by a game patch is known by rarity and grade but cannot yet be named from a packet. |
-| 🔜 **Polish** | Layout on small windows, Linux packaging, and the long tail of things that only show up in someone else's session. |
-
-Nothing here is a promise of a date. It is where the work actually is.
-
 ## Showcase
+
+The app is a small set of pages behind the overlay: what happened this session,
+what to shout about when it drops, what you are hunting, and the switches.
 
 | Statistics | Alerts |
 | --- | --- |
+| Rates per hour, drops by rarity and grade, magic find, bosses and chests, and the Satanic Zone with its countdown. | One page in two columns: each rarity's sound and volume on the left with the announcement under it, the custom filter and its lists on the right. |
 | ![Statistics](screenshots/statistics.png) | ![Alerts](screenshots/sound-filter.png) |
 
-| Sounds — now part of Alerts | Shopping List |
+| Items | Shopping List |
 | --- | --- |
-| ![Sounds](screenshots/sounds.png) | ![Shopping list](screenshots/shopping-list.png) |
+| Every named item, what it takes to get one, and where it is worth farming. Cards or a table, whichever reads better. | The items you are actually after, so a drop you have been waiting weeks for is not one line among forty. |
+| ![Items](screenshots/items.png) | ![Shopping list](screenshots/shopping-list.png) |
+
+### The overlay, locked and not
+
+Locked, it is click-through: the mouse goes to the game and only the numbers are
+drawn. Unlocked, it grows a frame, a grip to drag it by and the buttons that
+reset or hide it — and that is the one state in which it can take a click the
+game was meant to have.
+
+| Locked | Unlocked |
+| --- | --- |
+| ![Overlay, locked](screenshots/overlay-locked.png) | ![Overlay, unlocked](screenshots/overlay-unlocked.png) |
+
+Settings is the last page, and the least interesting: the four or five things
+people change, with the rest a click away under **More settings**.
+
+![Settings](screenshots/settings.png)
+
 
 ## Install
 
