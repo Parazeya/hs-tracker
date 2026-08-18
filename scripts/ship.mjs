@@ -169,7 +169,15 @@ if (!skipTests) {
 
 console.log('\n▸ commit and tag');
 run('git', ['add', '-A']);
-run('git', ['commit', '-m', note ?? version]);
+// A release whose version is already committed is an ordinary thing — the
+// changelog was written and the bump made in the same sitting as the work. Then
+// there is nothing left to stage, and `git commit` fails on it, which stopped
+// the release for the one reason that is not a problem.
+if (git('status', '--porcelain', '--untracked-files=no')) {
+  run('git', ['commit', '-m', note ?? version]);
+} else {
+  console.log(`  nothing to commit — ${version} is already in ${git('rev-parse', '--short', 'HEAD')}`);
+}
 
 // The tag goes on the commit just made, named outright rather than left to
 // mean "wherever HEAD is" — and only once that commit has been read back and
