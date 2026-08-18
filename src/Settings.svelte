@@ -428,45 +428,11 @@
     color: var(--bone-9);
   }
 
-  .tabs {
-    flex: none;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
 
-  .port {
-    width: 78px;
-    box-sizing: border-box;
-    font: inherit;
-    font-size: 11px;
-    color: var(--bone-13);
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid var(--ground-10);
-    padding: 3px 6px;
-    height: 24px;
-  }
-  .port:focus { outline: none; border-color: var(--edge-4); }
 
   /* An address is read character by character and typed into another program,
      so it is set in the system's monospace rather than the game's face — which
      has no glyph of its own for a good half of ASCII. */
-  .addr {
-    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-    font-size: 11px;
-    color: var(--gold-2);
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    text-decoration: underline;
-  }
-  .addr:hover { color: var(--bone-13); }
-  .hint {
-    font-size: 10px;
-    color: var(--edge-8);
-    padding: 2px 0 0 116px;
-  }
 
   .hotkeys {
     font-size: 10px;

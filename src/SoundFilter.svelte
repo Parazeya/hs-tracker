@@ -423,7 +423,8 @@
 
 </script>
 
-<div class="panel">
+<div class="panel two">
+  <div class="col rules">
   {#if settings}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>Rarity alerts — what makes a sound at all</div>
@@ -587,6 +588,11 @@
       </div>
     {/if}
 
+  {/if}
+  </div>
+
+  <div class="col detail">
+  {#if settings}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>Custom filter — lists that outrank the above</div>
 
@@ -766,9 +772,26 @@
       the chase pieces, each ready for a sound of its own.
     </div>
   {/if}
+  </div>
 </div>
 
 <style>
+  /* Two columns: what alerts on the left, the filter and its lists on the
+     right. One screen, because it is one decision — and the page had grown
+     long enough that a rarity's sound and the list that overrides it could
+     not be seen at the same time. A narrow window falls back to one column,
+     where side by side would leave neither half readable. */
+  .panel.two {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+  }
+  @media (min-width: 900px) {
+    .panel.two { grid-template-columns: minmax(360px, 1fr) minmax(380px, 1.1fr); }
+  }
+  .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
 
   @font-face {
     font-family: 'CookieRun Bold';
