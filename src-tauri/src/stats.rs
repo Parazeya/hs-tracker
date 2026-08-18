@@ -34,6 +34,16 @@ pub const SS_TIER: i64 = 6;
 // stack resources by item type
 const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "materials"), (15, "socketables")];
 
+/// Containers, which carry a real rarity and are worth keeping in the tables —
+/// the game shows an Angelic Vault in gold and a Superior one in blue — but
+/// which nobody wants a chime for. They come in seven rarities under one
+/// display name, so a rarity alert on them fires constantly and says nothing
+/// about what was actually found. Matched by name because that is what reaches
+/// here; the seven share it exactly.
+fn is_container(name: &str) -> bool {
+    name.to_lowercase().contains("essence vault")
+}
+
 /// Keys that drop by the handful and open nothing worth counting: they would
 /// bury the Angelic and Satanic keys the counter exists for.
 const DULL_KEYS: [&str; 2] = ["basic key", "crystal key"];
@@ -313,6 +323,8 @@ pub struct Prefs {
     /// all.
     pub fx_rarities: Vec<String>,
     pub fx_tier: i64,
+    /// announce anything the custom filter's lists match, whatever its rarity
+    pub fx_listed: bool,
     pub notable_defs: Vec<(String, Vec<String>)>,
     /// (sound key, item names) — an item on one of these is announced by it
     pub sound_lists: Vec<(String, Vec<String>)>,
@@ -326,6 +338,7 @@ impl Default for Prefs {
             min_tier: 0,
             fx_rarities: Vec::new(),
             fx_tier: 6,
+            fx_listed: false,
             notable_defs: default_notable(),
             sound_lists: Vec::new(),
         }
@@ -696,7 +709,16 @@ impl GameStats {
     /// has to mean any, an item the tables do not grade included. Read as a
     /// plain minimum it excluded exactly those, and the setting that promised
     /// everything announced the least.
-    fn worth_a_flourish(&self, rarity: &str, tier: i64) -> bool {
+    ///
+    /// `listed` says the item is on a list of the custom filter. When the
+    /// announcement is set to follow that filter, being on a list is enough on
+    /// its own: the point of putting an item on a list is that it matters, and
+    /// having to describe it a second time in rarity and grade switches is the
+    /// kind of duplication that makes a filter look broken.
+    fn worth_a_flourish(&self, rarity: &str, tier: i64, listed: bool) -> bool {
+        if self.prefs.fx_listed && listed {
+            return true;
+        }
         let graded = tier >= self.prefs.fx_tier || self.prefs.fx_tier <= 1;
         self.prefs.fx_rarities.iter().any(|r| r == rarity) && graded
     }
@@ -958,7 +980,8 @@ impl GameStats {
                     }
                 }
                 let rarity_key = crate::parser::resolve_rarity(rarity, name);
-                let is_resource = RESOURCES.iter().any(|(t, _)| t == item_type);
+                let is_resource =
+                    RESOURCES.iter().any(|(t, _)| t == item_type) || is_container(name);
                 // ground rolls are the drop moment, not an acquisition: they
                 // drive the ticker and sounds, never the counters
                 if !announced && first {
@@ -1002,7 +1025,7 @@ impl GameStats {
                 let announce = *announced
                     || listed_hit
                     || (!is_resource && self.passes_filter(&rarity_key, tier));
-                let flourish = !is_resource && self.worth_a_flourish(&rarity_key, tier);
+                let flourish = !is_resource && self.worth_a_flourish(&rarity_key, tier, listed_hit);
                 if wanted && (announce || flourish) {
                     // One item, one notification, whichever sighting got here
                     // first. The rule above says as much, but a list was

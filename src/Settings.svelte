@@ -8,13 +8,15 @@
   // Where no overlay can exist, the settings that only steer it say so instead
   // of pretending to work. Nothing is drawn until the backend answers: guessing
   // would flash a row of controls that then vanish.
+  // Most of these are set once and never touched again. Keeping them all on
+  // screen made the page long enough that the four people actually look for —
+  // theme, scale, autostart, the OBS port — were lost among them. Nothing is
+  // removed; the rest is one click away and stays open once opened.
+  let advanced = $state(localStorage.getItem('settings-advanced') === '1');
+  $effect(() => localStorage.setItem('settings-advanced', advanced ? '1' : '0'));
+
   let session = $state(null);
   let overlay = $derived(session?.overlay ?? false);
-  // The drop announcement is a window on the desktop AND a page OBS can take.
-  // Gating the whole block on the overlay meant a Wayland session could never
-  // switch it on, so `stream::announce` never fired and the address handed out
-  // for it was dead.
-  let canAnnounce = $derived(overlay || (settings?.stream ?? false));
   // The frameless look is only worth offering where it can be judged, and only
   // worth warning about where it costs something — see App.svelte.
   const smears = typeof document !== 'undefined' && document.documentElement.dataset.os === 'linux';
@@ -52,36 +54,6 @@
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
 
-  // The addresses the server is actually bound to, which is not always the port
-  // in the box above — it may have been taken. Polled while the panel is open,
-  // because switching the server on is what makes them exist.
-  let urls = $state(null);
-  // the backend names each view; these are what a streamer would call them
-  const LABELS = {
-    overlay: 'Overlay',
-    dashboard: 'Dashboard',
-    flourish: 'Announcement',
-    ticker: 'Drop ticker',
-  };
-  let copied = $state(false);
-  $effect(() => {
-    const ask = () => invoke('stream_urls').then((u) => (urls = u)).catch(() => {});
-    ask();
-    const t = setInterval(ask, 2000);
-    return () => clearInterval(t);
-  });
-  let copyFailed = $state('');
-  async function copy(text) {
-    try {
-      await invoke('copy_text', { text });
-      copyFailed = '';
-      copied = true;
-      setTimeout(() => (copied = false), 1500);
-    } catch (e) {
-      copyFailed = String(e);
-    }
-  }
-
   let saveTimer = null;
   function save() {
     clearTimeout(saveTimer);
@@ -109,24 +81,6 @@
     ['zone', 'Satanic zone'],
   ];
 
-  const TIERS = ['D', 'C', 'B', 'A', 'S', 'SS'];
-
-  // the two that are stored as a fraction but shown as a percentage
-  let scalePct = $state(100);
-  let shadePct = $state(55);
-  $effect(() => {
-    if (!settings) return;
-    scalePct = Math.round((settings.flourish_scale ?? 1) * 100);
-    shadePct = Math.round((settings.flourish_shade ?? 0.55) * 100);
-  });
-
-  function toggleFlourish(name) {
-    const on = new Set(settings.flourish_rarities ?? []);
-    on.has(name) ? on.delete(name) : on.add(name);
-    settings.flourish_rarities = [...on];
-    save();
-  }
-
   function toggleSection(id) {
     const hidden = new Set(settings.hidden ?? []);
     hidden.has(id) ? hidden.delete(id) : hidden.add(id);
@@ -141,7 +95,7 @@
   <div class="body">
   {#if settings && session}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
-      {#if overlay}
+      {#if overlay && advanced}
         <div class="line" data-tauri-drag-region>
           <span class="name">Opacity</span>
           <input
@@ -209,91 +163,9 @@
           Show the run in Discord while the game is open
         </span>
       </div>
-      {#if canAnnounce}
-        <div class="line" data-tauri-drag-region>
-          <button class="check" onclick={() => { settings.flourish = !settings.flourish; save(); }} aria-label="flourish">
-            <img src={settings.flourish ? art('check_on') : art('check_off')} alt="" />
-          </button>
-          <span class="opt" title="The game's own loot pillar, played over the screen where you put it">
-            Announce the best drops with the game's loot pillar
-          </span>
-        </div>
-        {#if settings.flourish}
-          <div class="line" data-tauri-drag-region>
-            <span class="name">Size</span>
-            <input
-              type="range" min="50" max="200"
-              bind:value={scalePct}
-              oninput={() => setNumber('flourish_scale', scalePct / 100)}
-            />
-            <span class="pct">{Math.round((settings.flourish_scale ?? 1) * 100)}%</span>
-          </div>
-          <div class="line" data-tauri-drag-region>
-            <span class="name">On screen</span>
-            <input
-              type="range" min="2" max="12" step="0.5"
-              bind:value={settings.flourish_secs}
-              oninput={() => save()}
-            />
-            <span class="pct">{(settings.flourish_secs ?? 6).toFixed(1)}s</span>
-          </div>
-          <div class="line" data-tauri-drag-region>
-            <span class="name">Shading</span>
-            <input
-              type="range" min="0" max="90"
-              bind:value={shadePct}
-              oninput={() => setNumber('flourish_shade', shadePct / 100)}
-            />
-            <span class="pct">{Math.round((settings.flourish_shade ?? 0.55) * 100)}%</span>
-          </div>
-          <div class="grid">
-            {#each ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'] as name}
-              <button class="secopt" onclick={() => toggleFlourish(name)}>
-                <img src={(settings.flourish_rarities ?? []).includes(name) ? art('check_on') : art('check_off')} alt="" />
-                <span>{name}</span>
-              </button>
-            {/each}
-          </div>
-          <div class="line" data-tauri-drag-region>
-            <span class="name">Least grade</span>
-            <input
-              type="range" min="1" max="6"
-              bind:value={settings.flourish_tier}
-              oninput={() => save()}
-            />
-            <span class="pct">{TIERS[(settings.flourish_tier ?? 6) - 1]}</span>
-          </div>
-          {#if overlay}
-          <div class="line" data-tauri-drag-region>
-            <button class="check" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }} aria-label="flourish always">
-              <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
-            </button>
-            <span class="opt" title="It draws nothing between drops, but OBS can only capture a window that is there">
-              Keep its window on screen so OBS can capture it
-            </span>
-          </div>
-          <div class="line">
-            <button
-              class="btn wide"
-              style:--btn="url({art('button')})"
-              style:--btn-hover="url({art('button_hover')})"
-              style:--btn-down="url({art('button_down')})"
-              onclick={() => invoke('place_flourish', { placing: true })}
-            >
-              Place it on the screen…
-            </button>
-          </div>
-          {/if}
-        {/if}
-      {/if}
-      {#if overlay}
-        <div class="line" data-tauri-drag-region>
-          <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label="ticker">
-            <img src={settings.ticker ? art('check_on') : art('check_off')} alt="" />
-          </button>
-          <span class="opt">Drop ticker under the overlay</span>
-        </div>
-      {/if}
+      <!-- The announcement moved to the Alerts page: what is worth telling
+           you about and how you are told are one decision, and asking them on
+           two different tabs is what made the announcement look inert. -->
       <div class="line" data-tauri-drag-region>
         <button
           class="check"
@@ -304,46 +176,29 @@
         </button>
         <span class="opt">Alert when the item drops (off = when picked up)</span>
       </div>
-      <div class="line" data-tauri-drag-region>
-        <button class="check" onclick={() => { settings.stream = !settings.stream; save(); }} aria-label="stream">
-          <img src={settings.stream ? art('check_on') : art('check_off')} alt="" />
-        </button>
-        <span class="opt" title="Serves the overlay as a page on this machine so OBS can add it as a Browser Source.">
-          Serve the overlay to OBS
-        </span>
-      </div>
-      {#if settings.stream}
+      <!-- The OBS browser sources are gone: one route into OBS, and it is the
+           one that needs no address, no port and no local server — capture the
+           announcement window, which stays on screen for exactly that. -->
+      <button class="more" onclick={() => (advanced = !advanced)}>
+        {advanced ? '▾' : '▸'} More settings
+      </button>
+
+      {#if advanced && overlay}
         <div class="line" data-tauri-drag-region>
-          <span class="name">Port</span>
-          <input
-            class="port"
-            type="number" min="1024" max="65535"
-            value={settings.stream_port ?? 4600}
-            onchange={(e) => setNumber('stream_port', Math.trunc(Number(e.target.value)))}
-          />
-          <span class="pct">127.0.0.1 only</span>
+          <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label="ticker">
+            <img src={settings.ticker ? art('check_on') : art('check_off')} alt="" />
+          </button>
+          <span class="opt">Drop ticker under the overlay</span>
         </div>
-        <!-- the addresses belong with the switch that serves them: they are of
-             no use anywhere else, and looking for them in another panel is a
-             step nobody should have to be told about -->
-        {#if urls}
-          {#each urls as [what, url]}
-            <div class="line" data-tauri-drag-region>
-              <span class="name">{LABELS[what] ?? what}</span>
-              <button class="addr" onclick={() => copy(url)}>{url}</button>
-            </div>
-          {/each}
-          <div class="hint">
-            {copyFailed ? `could not copy: ${copyFailed}` : copied ? 'copied' : 'Click one to copy it, then add a Browser Source in OBS.'}
-          </div>
-        {/if}
       {/if}
+      {#if advanced}
       <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.debug_log = !settings.debug_log; save(); }} aria-label="debug">
           <img src={settings.debug_log ? art('check_on') : art('check_off')} alt="" />
         </button>
         <span class="opt">Log parsed packets to debug-capture.jsonl</span>
       </div>
+      {/if}
       {#if overlay}
         <div class="hotkeys" data-tauri-drag-region>
           Ctrl+Shift+O — show/hide · Ctrl+Shift+L — lock · Ctrl+Shift+R — reset stats ·
@@ -393,7 +248,7 @@
       {#if notice}<div class="notice">{notice}</div>{/if}
     </div>
 
-    {#if overlay}
+    {#if overlay && advanced}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
         <div class="sechead" data-tauri-drag-region>Overlay sections</div>
         <div class="grid">
@@ -495,6 +350,21 @@
 
   .name { width: 108px; flex: none; }
   .opt { font-size: 12px; }
+
+  /* the seam between what people set and what they set once */
+  .more {
+    align-self: flex-start;
+    margin: 4px 0 2px;
+    padding: 2px 0;
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+    color: var(--edge-2b);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+  .more:hover { color: var(--edge-1); }
 
   .sechead {
     font-size: 10px;

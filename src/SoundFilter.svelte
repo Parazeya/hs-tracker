@@ -3,7 +3,7 @@
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
-  import { soundUrl, play } from './audio.js';
+  import { RARITIES, soundUrl, play } from './audio.js';
 
   // only named items can be listed: an ordinary base has no identity of its own
   const NAMED = [
@@ -46,6 +46,66 @@
   let query = $state('');
   let status = $state({});
   let saveTimer;
+
+  // The same five rarities used to be configured in two places — whether they
+  // alert at all here, and how loud and with which file one tab away. They are
+  // one question and are now asked once, on one row each.
+  const SOUND_KEY = { Satanic: 'satanic', Set: 'set', Heroic: 'heroic', Angelic: 'angelic', Unholy: 'unholy' };
+  let custom = $state({});
+
+  async function refreshSounds() {
+    const next = {};
+    for (const r of RARITIES) next[r] = await invoke('sound_status', { rarity: r }).catch(() => null);
+    custom = next;
+  }
+
+  const testRarity = async (key) => play(await soundUrl(key), settings?.[key]?.volume ?? 0.7);
+
+  async function pickRaritySound(key) {
+    try {
+      await invoke('pick_sound', { rarity: key });
+      refreshSounds();
+    } catch {}
+  }
+
+  let mailVolume = $derived(Math.round((settings?.mail?.volume ?? 0.7) * 100));
+
+  // The announcement lives here rather than in Settings: it answers the same
+  // question the rest of this page answers — what is worth telling you about —
+  // and asking it two tabs away is what made it look as though it did nothing.
+  let session = $state(null);
+  let overlay = $derived(session?.overlay ?? false);
+  // With the browser sources gone the announcement is a window and nothing
+  // else, so it is offered exactly where a window can be put on top of the
+  // game — and a Wayland session, which cannot, is told so rather than shown
+  // switches that do nothing.
+  let canAnnounce = $derived(overlay);
+  const FX_TIERS = ['D', 'C', 'B', 'A', 'S', 'SS'];
+  let scalePct = $state(100);
+  let shadePct = $state(55);
+  $effect(() => {
+    invoke('session_info')
+      .then((s) => (session = s))
+      .catch(() => (session = { overlay: true, wayland: false, through_x11: false, can_switch: false }));
+  });
+  $effect(() => {
+    if (!settings) return;
+    scalePct = Math.round((settings.flourish_scale ?? 1) * 100);
+    shadePct = Math.round((settings.flourish_shade ?? 0.55) * 100);
+  });
+
+  function toggleFlourish(name) {
+    const on = new Set(settings.flourish_rarities ?? []);
+    on.has(name) ? on.delete(name) : on.add(name);
+    settings.flourish_rarities = [...on];
+    save();
+  }
+
+  function setVolume(key, v) {
+    if (!settings?.[key] || settings[key].volume === v) return;
+    settings[key].volume = v;
+    save();
+  }
 
   let filters = $derived(settings?.filters ?? []);
   let filter = $derived(filters.find((f) => f.id === settings?.filter) ?? filters[0] ?? null);
@@ -109,9 +169,13 @@
 
   $effect(() => {
     invoke('get_settings').then((s) => (settings = s));
+    refreshSounds();
     const unsubs = [
       listen('settings-changed', (e) => (settings = e.payload)),
-      listen('sounds-changed', (e) => refreshStatus(e.payload)),
+      listen('sounds-changed', (e) => {
+        refreshStatus(e.payload);
+        refreshSounds();
+      }),
     ];
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
@@ -363,13 +427,68 @@
   {#if settings}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>Rarity alerts — what makes a sound at all</div>
-      <div class="grid">
-        {#each ALERT_RARITIES as rarity}
-          <button class="secopt" onclick={() => toggleAlert(rarity)}>
-            <img src={(settings.alerts ?? []).includes(rarity) ? art('check_on') : art('check_off')} alt="" />
-            <span class={rarityCls[rarity]}>{rarity}</span>
+      {#each ALERT_RARITIES as rarity}
+        {@const key = SOUND_KEY[rarity]}
+        {@const on = (settings.alerts ?? []).includes(rarity)}
+        {@const vol = Math.round((settings[key]?.volume ?? 0.7) * 100)}
+        <div class="rrow" class:off={!on}>
+          <button class="check" onclick={() => toggleAlert(rarity)} aria-label={rarity}>
+            <img src={on ? art('check_on') : art('check_off')} alt="" />
           </button>
-        {/each}
+          <span class="rname {rarityCls[rarity]}">{rarity}</span>
+          <input
+            class="vol"
+            type="range"
+            min="0"
+            max="100"
+            disabled={!on}
+            value={vol}
+            oninput={(e) => setVolume(key, e.currentTarget.value / 100)}
+          />
+          <span class="pct">{vol}%</span>
+          <span class="src" title={custom[key] ? `sounds/${custom[key]}` : 'built-in sound'}>
+            {custom[key] ?? 'built-in'}
+          </span>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity(key)}>Test</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound(key)}>Browse…</button>
+          <button
+            class="btn sm"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
+            disabled={!custom[key]}
+            onclick={() => danger(`snd-${key}`, () => invoke('clear_sound', { rarity: key }).catch(() => {}))}
+          >{armed === `snd-${key}` ? 'Sure?' : 'Default'}</button>
+        </div>
+      {/each}
+
+      <!-- not a drop, but it is a sound and it lived on the tab that went away -->
+      <div class="rrow" class:off={!settings.mail?.enabled}>
+        <button class="check" onclick={() => { settings.mail.enabled = !settings.mail.enabled; save(); }} aria-label="mail">
+          <img src={settings.mail?.enabled ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="rname c-gold">Mail</span>
+        <input
+          class="vol"
+          type="range"
+          min="0"
+          max="100"
+          disabled={!settings.mail?.enabled}
+          value={mailVolume}
+          oninput={(e) => setVolume('mail', e.currentTarget.value / 100)}
+        />
+        <span class="pct">{mailVolume}%</span>
+        <span class="src" title={custom.mail ? `sounds/${custom.mail}` : 'built-in sound'}>{custom.mail ?? 'built-in'}</span>
+        <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('mail')}>Test</button>
+        <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('mail')}>Browse…</button>
+        <button
+          class="btn sm"
+          style:--btn="url({art('button')})"
+          style:--btn-hover="url({art('button_hover')})"
+          style:--btn-down="url({art('button_down')})"
+          disabled={!custom.mail}
+          onclick={() => danger('snd-mail', () => invoke('clear_sound', { rarity: 'mail' }).catch(() => {}))}
+        >{armed === 'snd-mail' ? 'Sure?' : 'Default'}</button>
       </div>
       <div class="line">
         <span class="name">Min tier</span>
@@ -381,14 +500,92 @@
           {/each}
         </div>
       </div>
-      <div class="note">
-        Counters still record everything — this only silences the alerts. Grades come
-        from the item tables, so an item they do not list stays quiet while a minimum
-        tier is set. A find of your own that the server puts in chat skips the minimum
-        tier, but still needs its rarity ticked here or a list of its own. Another
-        player's find is never yours and never sounds.
-      </div>
     </div>
+
+    {#if canAnnounce}
+      <div class="section" style:border-image-source="url({art('chip_dark')})">
+        <div class="sechead" data-tauri-drag-region>Announcement — the loot pillar over the screen</div>
+        <div class="line">
+          <button class="check" onclick={() => { settings.flourish = !settings.flourish; save(); }} aria-label="flourish">
+            <img src={settings.flourish ? art('check_on') : art('check_off')} alt="" />
+          </button>
+          <span class="opt" title="The game's own loot pillar, played over the screen where you put it">
+            Announce a drop with the game's loot pillar
+          </span>
+        </div>
+
+        {#if settings.flourish}
+          <div class="line">
+            <button
+              class="check"
+              onclick={() => { settings.flourish_listed = !settings.flourish_listed; save(); }}
+              aria-label="follow the filter"
+            >
+              <img src={settings.flourish_listed ? art('check_on') : art('check_off')} alt="" />
+            </button>
+            <span class="opt" title="Anything on a list of the selected filter is announced, whatever its rarity or grade">
+              Announce everything the custom filter lists
+            </span>
+          </div>
+          {#if settings.flourish_listed && !settings.use_filter}
+            <div class="note warn">
+              The custom filter is switched off below, so this does nothing yet.
+            </div>
+          {/if}
+
+          <div class="grid">
+            {#each ALERT_RARITIES as name}
+              <button class="secopt" onclick={() => toggleFlourish(name)}>
+                <img src={(settings.flourish_rarities ?? []).includes(name) ? art('check_on') : art('check_off')} alt="" />
+                <span class={rarityCls[name]}>{name}</span>
+              </button>
+            {/each}
+          </div>
+          <div class="line">
+            <span class="name">Min Tier</span>
+            <input type="range" min="1" max="6" bind:value={settings.flourish_tier} oninput={() => save()} />
+            <span class="pct">{FX_TIERS[(settings.flourish_tier ?? 6) - 1]}</span>
+          </div>
+          <div class="line">
+            <span class="name">Size</span>
+            <input type="range" min="50" max="200" bind:value={scalePct} oninput={() => setNumber('flourish_scale', scalePct / 100)} />
+            <span class="pct">{Math.round((settings.flourish_scale ?? 1) * 100)}%</span>
+          </div>
+          <div class="line">
+            <span class="name">Duration</span>
+            <input type="range" min="2" max="12" step="0.5" bind:value={settings.flourish_secs} oninput={() => save()} />
+            <span class="pct">{(settings.flourish_secs ?? 6).toFixed(1)}s</span>
+          </div>
+          <div class="line">
+            <span class="name">Shading</span>
+            <input type="range" min="0" max="90" bind:value={shadePct} oninput={() => setNumber('flourish_shade', shadePct / 100)} />
+            <span class="pct">{Math.round((settings.flourish_shade ?? 0.55) * 100)}%</span>
+          </div>
+
+          {#if overlay}
+            <div class="line">
+              <button class="check" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }} aria-label="flourish always">
+                <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
+              </button>
+              <span class="opt" title="It draws nothing between drops, but OBS can only capture a window that is there">
+                Keep its window on screen so OBS can capture it
+              </span>
+            </div>
+            <div class="line">
+              <button
+                class="btn wide"
+                style:--btn="url({art('button')})"
+                style:--btn-hover="url({art('button_hover')})"
+                style:--btn-down="url({art('button_down')})"
+                onclick={() => invoke('place_flourish', { placing: true })}
+              >
+                Place it on the screen…
+              </button>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    {/if}
 
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>Custom filter — lists that outrank the above</div>
@@ -572,6 +769,7 @@
 </div>
 
 <style>
+
   @font-face {
     font-family: 'CookieRun Bold';
     src: url('./assets/fonts/cookierunbold.ttf') format('truetype');
@@ -635,10 +833,84 @@
     text-transform: uppercase;
   }
 
+  /* One rarity, one row: whether it alerts, how loud, and which file. The
+     name column is fixed so the sliders line up — figures that do not share a
+     left edge cannot be compared at a glance. */
+  .rrow {
+    display: grid;
+    grid-template-columns: 18px 62px 1fr 34px minmax(0, 1.4fr) auto auto auto;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 0;
+  }
+  .rrow.off .vol,
+  .rrow.off .pct,
+  .rrow.off .src { opacity: 0.45; }
+  .rname { font-size: 12px; }
+
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 2px 10px;
+  }
+  .secopt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font: inherit;
+    font-size: 11px;
+    color: var(--bone-6);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 1px 0;
+    text-align: left;
+  }
+  .secopt img { width: 19px; height: 19px; flex: none; }
+  .secopt:hover { color: var(--bone-13); }
+
+  input[type='range'] {
+    flex: 1 1 auto;
+    max-width: 260px;
+    height: 14px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: none;
+    cursor: pointer;
+  }
+  input[type='range']::-webkit-slider-runnable-track {
+    height: 4px;
+    background: var(--ground-7);
+    border: 1px solid var(--ground-11);
+  }
+  input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    margin-top: -5px;
+    background: var(--bone-6);
+    border: 1px solid var(--ground-7);
+  }
+  input[type='range']:hover:not(:disabled)::-webkit-slider-thumb { background: var(--bone-13); }
+  input[type='range']:disabled { opacity: 0.4; cursor: default; }
+
+  .btn.wide { width: 100%; max-width: 380px; }
+
+  /* a setting that is on but cannot act yet says so where it is set */
+  .note.warn { color: var(--gold, #e8c860); }
+  .vol { width: 100%; min-width: 60px; }
+  .pct {
+    font-size: 11px;
+    color: var(--edge-2b);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .src {
+    font-size: 11px;
+    color: var(--edge-2b);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .secopt,

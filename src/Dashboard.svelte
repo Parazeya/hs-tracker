@@ -6,7 +6,6 @@
   import Runs from './Runs.svelte';
   import Shop from './Shop.svelte';
   import SoundFilter from './SoundFilter.svelte';
-  import Sounds from './Sounds.svelte';
   import Settings from './Settings.svelte';
   import About from './About.svelte';
   import Codex from './Codex.svelte';
@@ -25,8 +24,7 @@
   const SECTIONS = [
     { id: 'stats', label: 'Statistics', component: Stats },
     { id: 'runs', label: 'Runs', component: Runs },
-    { id: 'filter', label: 'Sound Filter', component: SoundFilter },
-    { id: 'sounds', label: 'Sounds', component: Sounds },
+    { id: 'filter', label: 'Alerts', component: SoundFilter },
     { id: 'codex', label: 'Items', component: Codex },
     { id: 'shop', label: 'Shopping List', component: Shop },
     { id: 'settings', label: 'Settings', component: Settings },

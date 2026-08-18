@@ -692,7 +692,6 @@ fn handle_flush(
         // its own, and a drop can satisfy either, both or only one
         if drop.announce {
             let _ = app.emit("drop-entry", &drop);
-            crate::stream::ticked(&drop);
         }
         if drop.flourish {
             crate::maybe_flourish(app, &drop);

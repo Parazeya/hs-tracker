@@ -4,7 +4,6 @@ mod parser;
 mod presence;
 mod sniffer;
 mod stats;
-mod stream;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -14,7 +13,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sniffer::Shared;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -156,7 +155,7 @@ pub struct SoundCfg {
 
 impl Default for SoundCfg {
     fn default() -> Self {
-        Self { enabled: true, volume: 0.7 }
+        Self { enabled: true, volume: 0.5 }
     }
 }
 
@@ -175,7 +174,7 @@ pub struct SoundList {
 
 impl Default for SoundList {
     fn default() -> Self {
-        Self { id: String::new(), name: String::new(), enabled: true, volume: 0.7, items: Vec::new() }
+        Self { id: String::new(), name: String::new(), enabled: true, volume: 0.5, items: Vec::new() }
     }
 }
 
@@ -244,6 +243,11 @@ pub struct Settings {
     /// which rarities are worth it, and the grade a drop must reach
     pub flourish_rarities: Vec<String>,
     pub flourish_tier: i64,
+    /// Announce whatever the custom filter's lists match, whatever its rarity
+    /// or grade. A list is already a statement that those items matter; saying
+    /// it again in the announcement's own switches is how a filter comes to
+    /// look as though it does nothing.
+    pub flourish_listed: bool,
     /// Keep the announcement window on screen between drops, drawing nothing.
     /// OBS can only capture a window that exists, and this one otherwise
     /// appears for a few seconds and is gone again. Off by default: a window
@@ -299,12 +303,20 @@ impl Default for Settings {
             theme: "default".into(),
             stream: false,
             stream_port: 4600,
-            flourish: false,
+            // On out of the box. Off, with the narrowest band it has, it
+            // announced nothing at all — which reads as a broken feature
+            // rather than an unset one, and cost a bug report saying so.
+            flourish: true,
             flourish_scale: 1.0,
             flourish_shade: 0.55,
             flourish_secs: 6.0,
-            flourish_rarities: ["Heroic", "Angelic", "Unholy"].iter().map(|r| r.to_string()).collect(),
-            flourish_tier: 6,
+            flourish_rarities: ["Satanic", "Set", "Heroic", "Angelic", "Unholy"]
+                .iter()
+                .map(|r| r.to_string())
+                .collect(),
+            // grade 1 is D, which this slider reads as "any"
+            flourish_tier: 1,
+            flourish_listed: false,
             flourish_always: false,
             discord: false,
             compact: false,
@@ -1048,6 +1060,7 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         // the flourish asks a different question of the same drop
         fx_rarities: if settings.flourish { settings.flourish_rarities.clone() } else { Vec::new() },
         fx_tier: settings.flourish_tier.clamp(1, 6),
+        fx_listed: settings.flourish && settings.flourish_listed && settings.use_filter,
         notable_defs: notable,
         sound_lists: active
             .map(|f| {
@@ -1074,7 +1087,6 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     DEBUG_LOG.store(settings.debug_log, Ordering::Relaxed);
     SCALE_MILLI.store((scale * 1000.0) as u32, Ordering::Relaxed);
     presence::set_enabled(settings.discord);
-    stream::configure(settings.stream, settings.stream_port.clamp(1024, 65535));
     FLOURISH.store(settings.flourish, Ordering::Relaxed);
     FLOURISH_ALWAYS.store(settings.flourish_always, Ordering::Relaxed);
     ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
@@ -1443,7 +1455,6 @@ pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
             seen.push((drop.name.clone(), Instant::now()));
         }
     }
-    stream::announce(drop);
     let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", drop);
     show_flourish(app, &w);
@@ -1455,6 +1466,11 @@ pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
 fn show_flourish(app: &AppHandle, w: &tauri::WebviewWindow) {
     if w.is_visible().unwrap_or(false) {
         return;
+    }
+    // A first announcement used to appear wherever the window manager felt
+    // like putting it, which on one machine was over the dashboard.
+    if parked("flourish").is_none() {
+        park_below_centre(app, w);
     }
     reveal(app, "flourish", false);
     set_click_through(w, true);
@@ -1480,6 +1496,23 @@ static PLACING_GEN: AtomicU32 = AtomicU32::new(0);
 /// long enough to drag a box somewhere, short enough not to be stuck with it
 const PLACING_LIMIT: Duration = Duration::from_secs(180);
 
+/// Where the announcement goes before anyone has moved it.
+///
+/// Dead centre is where the fight is: the pillar lands on the character and on
+/// whatever is being killed. A fifth of the screen lower clears the action and
+/// still reads as the middle — and it is what a stream frames.
+fn park_below_centre(app: &AppHandle, w: &tauri::WebviewWindow) {
+    let Ok(Some(mon)) = w.current_monitor().or_else(|_| app.primary_monitor()) else {
+        let _ = w.center();
+        return;
+    };
+    let (pos, size) = (mon.position(), mon.size());
+    let win = w.outer_size().unwrap_or(tauri::PhysicalSize { width: 480, height: 240 });
+    let x = pos.x + (size.width as i32 - win.width as i32) / 2;
+    let y = pos.y + (size.height as i32 - win.height as i32) / 2 + (size.height as i32) / 5;
+    let _ = w.set_position(tauri::PhysicalPosition { x, y });
+}
+
 #[tauri::command]
 fn place_flourish(app: AppHandle, placing: bool) {
     let Some(w) = app.get_webview_window("flourish") else {
@@ -1494,7 +1527,7 @@ fn place_flourish(app: AppHandle, placing: bool) {
         // wherever the window manager fancies — which on a first run has been
         // on top of the dashboard, over the buttons, invisible.
         if parked("flourish").is_none() {
-            let _ = w.center();
+            park_below_centre(&app, &w);
         }
         reveal(&app, "flourish", false);
         // While it is being placed it is an ordinary window: it takes the
@@ -1541,18 +1574,6 @@ pub struct About {
 }
 
 const REPO: &str = "https://github.com/Parazeya/hs-tracker";
-
-/// The addresses a streamer pastes into OBS, or nothing when it is switched off.
-#[tauri::command]
-fn stream_urls() -> Option<Vec<(&'static str, String)>> {
-    let port = stream::port();
-    (port != 0 && read_settings().stream).then(|| {
-        ["overlay", "dashboard", "flourish", "ticker"]
-            .into_iter()
-            .map(|view| (view, format!("http://127.0.0.1:{port}/?view={view}")))
-            .collect()
-    })
-}
 
 /// The front end's own errors. A panel that throws while rendering goes blank
 /// and says nothing; this is how it says something.
@@ -2261,7 +2282,18 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+            // A click is reported twice — once going down and once coming up —
+            // so acting on both toggled the window twice for one press: it
+            // appeared and vanished again, and only a double click, being an
+            // even number of toggles away, appeared to work. The release is
+            // the one to act on: it is where the press finished, and it is
+            // what a drag off the icon cancels.
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
                 toggle_window(tray.app_handle());
             }
         })
@@ -2392,7 +2424,6 @@ pub fn run() {
             report,
             log_path,
             show_log,
-            stream_urls,
             open_url,
             fit_overlay,
             flourish_done,
@@ -2490,7 +2521,6 @@ pub fn run() {
             spawn_position_saver(app.handle().clone());
             spawn_stats_pusher(app.handle().clone());
             presence::spawn(app.handle().clone());
-            stream::spawn(app.handle().clone());
             sniffer::spawn(app.state::<Shared>().inner(), app.handle().clone());
             // The breadcrumb that says "we already tried XWayland" used to be
             // dropped here, but `setup` runs before `app.run` and so before a
