@@ -34,6 +34,12 @@ pub const SS_TIER: i64 = 6;
 // stack resources by item type
 const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "materials"), (15, "socketables")];
 
+/// What a character wears and carries: helmets through charms, and orbs. The
+/// grade counters are about gear and nothing else — a key or a reagent has a
+/// grade of its own and would otherwise sit in the SS column beside a weapon,
+/// which is not the thing the column is counting.
+const GEAR: [i64; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10];
+
 /// Containers, which carry a real rarity and are worth keeping in the tables —
 /// the game shows an Angelic Vault in gold and a Superior one in blue — but
 /// which nobody wants a chime for. They come in seven rarities under one
@@ -986,9 +992,10 @@ impl GameStats {
                 // drive the ticker and sounds, never the counters
                 if !announced && first {
                     let n = (*amount).max(1);
-                    // by grade, resources included: an Angelic Key is an SS drop
-                    // like any other, whatever shelf it lands on
-                    if tier > 0 {
+                    // Gear only. Counting by grade alone put Angelic keys and
+                    // socketables in the SS column — items the player never
+                    // dropped as gear and would not call an SS find.
+                    if tier > 0 && GEAR.contains(item_type) {
                         *self.graded.entry(tier).or_insert(0) += n;
                     }
                     if !is_resource {
@@ -1828,18 +1835,19 @@ mod tests {
     #[test]
     fn the_session_tallies_drops_by_grade() {
         let mut s = GameStats::default();
-        // a piece of gear that states SS, then an Angelic Key: a resource, and
-        // graded SS by the table rather than by the packet
+        // a piece of gear that states SS, then an Angelic Key: graded SS by
+        // the table, but a resource — the grade columns count gear, so the key
+        // is announced and journalled without joining the SS tally
         s.apply(&tiered_satanic(6, "a"));
         s.apply(&notable_item("Angelic Key", 12, 1));
-        assert_eq!(s.graded(6), 2, "a key is a drop like any other");
+        assert_eq!(s.graded(6), 1, "a key is not an SS find");
         // grade B, and a name the table cannot grade at all
         s.apply(&tiered_satanic(3, "b"));
         s.apply(&notable_item("Mystery Blade", 3, 1));
         assert_eq!(s.graded(3), 1);
-        assert_eq!(s.graded(6), 2, "an item the table cannot grade is not an SS");
+        assert_eq!(s.graded(6), 1, "an item the table cannot grade is not an SS");
         // and the overlay's chip reads the top grade, not some other one
-        assert_eq!(s.snapshot(String::new()).ss, 2);
+        assert_eq!(s.snapshot(String::new()).ss, 1);
         s.reset();
         assert_eq!(s.graded(6), 0, "the tally belongs to the session");
     }
