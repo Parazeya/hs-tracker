@@ -23,6 +23,11 @@ npm ci --no-audit --no-fund
 echo "==> cargo test"
 cargo test --manifest-path src-tauri/Cargo.toml
 
+# /target is a volume that outlives the run and `find` below takes whatever
+# it holds, so a package left by an older version rides along into /out.
+# Bundling is seconds; the compile it depends on is not touched.
+rm -rf "${CARGO_TARGET_DIR}/release/bundle"
+
 echo "==> bundling: ${BUNDLES}"
 tauri build --bundles "${BUNDLES}"
 

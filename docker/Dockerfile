@@ -43,6 +43,24 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 RUN npm install -g @tauri-apps/cli@^2
 
+# The AppImage half, in a layer of its own so adding it does not invalidate the
+# toolchain above — those take minutes, this takes seconds.
+#
+# linuxdeploy needs patchelf, zsync and the desktop-file utils; its GTK plugin
+# copies in what the webview uses to play the alert sounds; its own runtime
+# wants FUSE 2, which is why the bundler is also run with
+# APPIMAGE_EXTRACT_AND_RUN so it never has to mount anything. Only `--appimage`
+# reaches any of it, so a plain `npm run deb` is unaffected.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      patchelf zsync desktop-file-utils fuse3 libfuse2 \
+      gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
+ && rm -rf /var/lib/apt/lists/*
+ENV APPIMAGE_EXTRACT_AND_RUN=1
+
+# Git on Windows hands this over with CRLF line endings, and a carriage
+# return on the shebang line makes the entrypoint "bash\r: No such file
+# or directory" - a 127 with no other clue. Strip them here so the checkout
+# settings of whoever builds the image stop mattering.
 COPY build.sh /usr/local/bin/build.sh
-RUN chmod +x /usr/local/bin/build.sh
+RUN sed -i 's/\r$//' /usr/local/bin/build.sh && chmod +x /usr/local/bin/build.sh
 ENTRYPOINT ["/usr/local/bin/build.sh"]

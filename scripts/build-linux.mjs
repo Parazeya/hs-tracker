@@ -9,11 +9,12 @@
 //
 //   npm run deb                 # a .deb
 //   npm run deb -- --appimage   # a .deb and an AppImage
+//   npm run deb -- --rpm        # and an .rpm
 //   npm run deb -- --rebuild    # rebuild the image first
 //   npm run deb -- --clean      # throw the build caches away
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,16 +56,28 @@ if (has('--clean')) {
   if (!has('--rebuild')) process.exit(0);
 }
 
-const built = (() => {
+const builtAt = (() => {
   try {
-    return docker(['image', 'inspect', IMAGE, '--format', '{{.Id}}'], { quiet: true }).trim();
+    return Date.parse(
+      docker(['image', 'inspect', IMAGE, '--format', '{{.Created}}'], { quiet: true }).trim(),
+    );
   } catch {
-    return '';
+    return 0;
   }
 })();
 
-if (!built || has('--rebuild')) {
-  console.log('\n▸ building the image (once; a few minutes)\n');
+// An edit to docker/ that nobody rebuilt is invisible from here: the run reuses
+// the old image and then fails on precisely what that edit was adding. That is
+// how an APPIMAGE_EXTRACT_AND_RUN and a patchelf sat in the Dockerfile, in no
+// image, while AppImage bundling kept dying. Compare, do not trust.
+const stale =
+  builtAt > 0 &&
+  readdirSync(join(root, 'docker')).some(
+    (f) => statSync(join(root, 'docker', f)).mtimeMs > builtAt,
+  );
+
+if (!builtAt || stale || has('--rebuild')) {
+  console.log(`\n▸ building the image (${stale ? 'docker/ has changed' : 'once'}; a few minutes)\n`);
   docker(['build', '-t', IMAGE, join('docker')]);
 }
 
@@ -72,10 +85,12 @@ mkdirSync(OUT, { recursive: true });
 
 const bundles = ['deb'];
 if (has('--appimage')) bundles.push('appimage');
-if (has('--rpm')) {
-  console.error('\n  The .rpm has to be built on Fedora; see DEVELOPING.md.\n');
-  process.exit(1);
-}
+// Tauri's RPM bundler writes the archive itself rather than shelling out to
+// rpmbuild, so the Debian image can produce one — `build.sh` was already
+// collecting *.rpm when it gathered the results. CI uses a Fedora container
+// for it, which is the more careful place to be sure of the dependency names
+// it records; if the two ever disagree, trust that one.
+if (has('--rpm')) bundles.push('rpm');
 
 console.log(`\n▸ building: ${bundles.join(', ')}\n`);
 docker([
