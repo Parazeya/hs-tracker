@@ -8,6 +8,7 @@ packed trimmed, so render_x/y + bound_w/h must be honoured when compositing.
 
 import struct
 import sys
+import os
 from pathlib import Path
 
 from PIL import Image

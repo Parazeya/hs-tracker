@@ -11,6 +11,7 @@ Reference: UndertaleModTool's QoiConverter.cs.
 import bz2
 import struct
 import sys
+import os
 from pathlib import Path
 
 from PIL import Image

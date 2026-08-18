@@ -44,3 +44,9 @@ src/theme-preview.png
 src/skin-preview.png
 
 dist-linux/
+
+# machine-specific paths; see .env.example
+.env
+
+# artifacts gathered by `npm run all`
+release/
