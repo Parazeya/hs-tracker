@@ -1879,6 +1879,35 @@ fn list_sound(id: &str) -> Option<ExportedSound> {
     })
 }
 
+/// The sound filed under any key, not just a list's.
+fn sound_by_key(key: &str) -> Option<ExportedSound> {
+    if !sound_key(key) {
+        return None;
+    }
+    SOUND_EXTS.iter().find_map(|(ext, _)| {
+        let path = sounds_dir().join(format!("{key}.{ext}"));
+        std::fs::read(&path).ok().map(|bytes| ExportedSound {
+            ext: (*ext).to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    })
+}
+
+/// Put one back. The key is checked the same way it is on the way out: a
+/// settings file is a plain file on disk and could name any path it liked.
+fn write_sound(key: &str, snd: &ExportedSound) -> Result<(), String> {
+    use base64::Engine;
+    if !sound_key(key) || !SOUND_EXTS.iter().any(|(e, _)| *e == snd.ext) {
+        return Err("not a sound this app files".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&snd.data)
+        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(sounds_dir()).map_err(|e| e.to_string())?;
+    std::fs::write(sounds_dir().join(format!("{key}.{}", snd.ext)), bytes)
+        .map_err(|e| e.to_string())
+}
+
 /// Give a new list the sound an old one has, for duplicating a filter.
 ///
 /// A list's sound is a file named after its id, and a copy is given fresh ids
@@ -1941,6 +1970,94 @@ fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, 
     let json = serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(Some(path.file_name().unwrap_or_default().to_string_lossy().into_owned()))
+}
+
+/// Everything the app remembers, in one file.
+///
+/// A filter export carries one filter and its sounds; this carries the lot —
+/// every switch, every filter, every list, and the sound files themselves,
+/// which live outside settings.json and would otherwise arrive as silence on
+/// the other machine.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExportedSettings {
+    app: String,
+    version: u32,
+    kind: String,
+    settings: Settings,
+    /// sound key -> the file, so a restore is not missing its audio
+    sounds: std::collections::HashMap<String, ExportedSound>,
+}
+
+/// Every custom sound the settings refer to, by the key it is filed under.
+fn all_sounds(settings: &Settings) -> std::collections::HashMap<String, ExportedSound> {
+    let mut out = std::collections::HashMap::new();
+    for rarity in ["satanic", "set", "heroic", "angelic", "unholy", "mail"] {
+        if let Some(snd) = sound_by_key(rarity) {
+            out.insert(rarity.to_string(), snd);
+        }
+    }
+    for filter in &settings.filters {
+        for list in &filter.lists {
+            if let Some(snd) = list_sound(&list.id) {
+                out.insert(format!("list-{}", list.id), snd);
+            }
+        }
+    }
+    out
+}
+
+/// Off the main thread; see `export_filter`.
+#[tauri::command(async)]
+fn export_settings(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let settings = read_settings();
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("HS Tracker settings", &["json"])
+        .set_file_name("hs-tracker-settings.hstracker.json")
+        .blocking_save_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    let exported = ExportedSettings {
+        app: "hs-tracker".into(),
+        version: 1,
+        kind: "settings".into(),
+        sounds: all_sounds(&settings),
+        settings,
+    };
+    let json = serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(Some(path.file_name().unwrap_or_default().to_string_lossy().into_owned()))
+}
+
+/// Off the main thread; see `export_filter`.
+#[tauri::command(async)]
+fn import_settings(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("HS Tracker settings", &["json"])
+        .blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let exported: ExportedSettings =
+        serde_json::from_str(&text).map_err(|_| "not an HS Tracker settings file".to_string())?;
+    if exported.app != "hs-tracker" || exported.kind != "settings" {
+        return Err("not an HS Tracker settings file".into());
+    }
+    // the sounds first: settings that name a file which is not there yet would
+    // be saved, applied, and play nothing
+    for (key, snd) in &exported.sounds {
+        let _ = write_sound(key, snd);
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    save_settings(app, exported.settings)?;
+    Ok(Some(name))
 }
 
 /// Off the main thread; see `export_filter`.
@@ -2436,6 +2553,8 @@ pub fn run() {
             restart_backend,
             viewing,
             export_filter,
+            export_settings,
+            import_settings,
             import_filter,
             ticker_busy,
             ui_ready,

@@ -54,6 +54,26 @@
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
 
+  // Import replaces everything, so it asks once — the second click does it.
+  let armedBundle = $state(false);
+  let armTimer;
+  async function bundle(command) {
+    if (command === 'import_settings' && !armedBundle) {
+      armedBundle = true;
+      notice = 'Import replaces every setting — click again to confirm';
+      clearTimeout(armTimer);
+      armTimer = setTimeout(() => { armedBundle = false; notice = ''; }, 5000);
+      return;
+    }
+    armedBundle = false;
+    try {
+      const file = await invoke(command);
+      notice = file ? `${command === 'export_settings' ? 'Saved to' : 'Loaded'} ${file}` : '';
+    } catch (e) {
+      notice = String(e);
+    }
+  }
+
   let saveTimer = null;
   function save() {
     clearTimeout(saveTimer);
@@ -179,6 +199,28 @@
       <!-- The OBS browser sources are gone: one route into OBS, and it is the
            one that needs no address, no port and no local server — capture the
            announcement window, which stays on screen for exactly that. -->
+      <!-- Everything in one file: switches, filters, lists and the sound
+           files themselves, which live outside settings.json and would
+           otherwise arrive as silence on the other machine. -->
+      <div class="line">
+        <button
+          class="btn"
+          style:--btn="url({art('button')})"
+          style:--btn-hover="url({art('button_hover')})"
+          style:--btn-down="url({art('button_down')})"
+          onclick={() => bundle('export_settings')}
+          title="Save every setting, filter and sound to one file"
+        >Export all settings…</button>
+        <button
+          class="btn"
+          style:--btn="url({art('button')})"
+          style:--btn-hover="url({art('button_hover')})"
+          style:--btn-down="url({art('button_down')})"
+          onclick={() => bundle('import_settings')}
+          title="Replace every setting with the ones in a file"
+        >Import…</button>
+      </div>
+
       <button class="more" onclick={() => (advanced = !advanced)}>
         {advanced ? '▾' : '▸'} More settings
       </button>
