@@ -59,6 +59,13 @@
   let rarity = $state('');
   let group = $state('');
   let sort = $state('rarest');
+  // Cards first: what the page is asked is "where do I farm this", and in the
+  // table that answer is the fifth column of a row. The choice outlives the
+  // window the way the dashboard's section does.
+  let view = $state(localStorage.getItem('codex-view') === 'table' ? 'table' : 'cards');
+  $effect(() => {
+    localStorage.setItem('codex-view', view);
+  });
 
   const odds = (rate) =>
     !rate
@@ -85,6 +92,7 @@
     }
     return list;
   });
+
 </script>
 
 <div class="panel">
@@ -103,39 +111,77 @@
         <option value="rarest">Rarest first</option>
         <option value="name">By name</option>
       </select>
+      <div class="views">
+        <button class="pick" class:on={view === 'cards'} onclick={() => (view = 'cards')}>Cards</button>
+        <button class="pick" class:on={view === 'table'} onclick={() => (view = 'table')}>Table</button>
+      </div>
     </div>
 
     <div class="box" style:border-image-source="url({art('chip_dark')})">
-      <div class="head">
-        <span class="hname">Item</span>
-        <span class="hkind">Kind</span>
-        <span class="hgrade">Grade</span>
-        <span class="hrate">Anywhere</span>
-        <span class="hchase">Where it is tied</span>
-      </div>
+      {#if view === 'table'}
+        <div class="head">
+          <span class="hname">Item</span>
+          <span class="hkind">Kind</span>
+          <span class="hgrade">Grade</span>
+          <span class="hrate">Anywhere</span>
+          <span class="hchase">Where it is tied</span>
+        </div>
 
-      <div class="rows">
-        {#each found.slice(0, SHOWN) as it (it.name)}
-          <div class="row">
-            <span class="name {RARITY_CLASS[it.rarity] ?? ''}" title={it.rarity || 'unlisted'}>{it.name}</span>
-            <span class="kind dim">{it.kind}</span>
-            <span class="grade dim">{tierLabel(it.tier) || '—'}</span>
-            <span class="rate">{odds(it.rate)}</span>
-            <span class="chase">
-              {#if it.chase}
-                <b>{odds(it.chase)}</b>
-                <span class="where">{it.places.join(' · ') || it.zones.join(', ')}</span>
-              {:else if it.places.length}
-                <span class="where">{it.places.join(' · ')}</span>
-              {:else}
+        <div class="rows" role="list">
+          {#each found.slice(0, SHOWN) as it (it.name)}
+            <div
+              class="row"
+              role="listitem"
+            >
+              <span class="name {RARITY_CLASS[it.rarity] ?? ''}" title={it.rarity || 'unlisted'}>{it.name}</span>
+              <span class="kind dim">{it.kind}</span>
+              <span class="grade dim">{tierLabel(it.tier) || '—'}</span>
+              <span class="rate">{odds(it.rate)}</span>
+              <span class="chase">
+                {#if it.chase}
+                  <b>{odds(it.chase)}</b>
+                  <span class="where" title={it.places.join(' · ') || it.zones.join(', ')}>{it.places.join(' · ') || it.zones.join(', ')}</span>
+                {:else if it.places.length}
+                  <span class="where" title={it.places.join(' · ')}>{it.places.join(' · ')}</span>
+                {:else}
+                  <span class="dim">anywhere</span>
+                {/if}
+              </span>
+            </div>
+          {:else}
+            <div class="empty dim">nothing matches that</div>
+          {/each}
+        </div>
+      {:else}
+        <div class="grid" role="list">
+          {#each found.slice(0, SHOWN) as it (it.name)}
+            <div
+              class="card {RARITY_CLASS[it.rarity] ?? ''}"
+              role="listitem"
+            >
+              <div class="cname" title={it.rarity || 'unlisted'}>{it.name}</div>
+              <div class="cline dim">{it.kind}{it.tier ? ` · ${tierLabel(it.tier)}` : ''}</div>
+              <div class="odds">
                 <span class="dim">anywhere</span>
-              {/if}
-            </span>
-          </div>
-        {:else}
-          <div class="empty dim">nothing matches that</div>
-        {/each}
-      </div>
+                <span class="rate">{odds(it.rate)}</span>
+                {#if it.chase}
+                  <span class="dim">tied</span>
+                  <b class="tied">{odds(it.chase)}</b>
+                {/if}
+              </div>
+              <div class="places">
+                {#each it.places.length ? it.places : it.zones as w}
+                  <span class="place">{w}</span>
+                {:else}
+                  <span class="dim">drops anywhere</span>
+                {/each}
+              </div>
+            </div>
+          {:else}
+            <div class="empty dim">nothing matches that</div>
+          {/each}
+        </div>
+      {/if}
 
       <div class="foot dim">
         {#if found.length > SHOWN}
@@ -206,6 +252,28 @@
   .picker.narrow { width: 110px; }
   .picker option { background: var(--ground-7); color: var(--bone-9); }
 
+  .views { display: flex; flex: none; }
+  .pick {
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 11px;
+    height: 24px;
+    color: var(--bone-3);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--ground-10);
+    padding: 0 8px;
+    cursor: pointer;
+  }
+  /* the two share an edge, and the chosen one is drawn over it */
+  .pick + .pick { margin-left: -1px; }
+  .pick:hover { color: var(--bone-9); }
+  .pick.on {
+    position: relative;
+    color: var(--bone-13);
+    border-color: var(--edge-4);
+    background: rgba(150, 37, 56, 0.45);
+  }
+
   .box {
     flex: 1 1 auto;
     min-height: 0;
@@ -247,6 +315,59 @@
   .chase { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
   .chase b { color: var(--gold-2); font-weight: normal; }
   .where { color: var(--bone-3); font-size: 11px; }
+
+  /* Cards reflow into whatever width the window is dragged to; the minimum is
+     narrow enough that two still fit side by side at the smallest window the
+     app allows, so a card never has to scroll sideways to be read. */
+  .grid {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+    gap: 5px;
+    padding: 3px 2px 2px 0;
+    align-content: start;
+  }
+  .grid .empty { grid-column: 1 / -1; }
+
+  .card {
+    box-sizing: border-box;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* the accent is the rarity colour the name already wears, so the eye can
+       sort a screenful of cards without reading one of them */
+    border-left: 3px solid currentColor;
+    background: linear-gradient(180deg, var(--ground-8), var(--ground-4));
+    padding: 4px 6px 5px;
+  }
+  .card:hover, .card:focus-visible { background: linear-gradient(180deg, var(--ground-9), var(--ground-6)); }
+  .card:focus-visible { outline: 1px solid var(--edge-4); outline-offset: -1px; }
+
+  .cname { font-size: 12px; line-height: 1.2; overflow-wrap: anywhere; }
+  .cline { font-size: 10px; }
+  .odds {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    font-size: 10px;
+    padding-top: 1px;
+  }
+  .odds .rate, .odds .tied { text-align: right; }
+  .odds .rate { color: var(--bone-9); font-size: 11px; }
+  .odds .tied { color: var(--gold-2); font-size: 13px; font-weight: normal; }
+
+  .places { display: flex; flex-wrap: wrap; gap: 2px; padding-top: 2px; }
+  .place {
+    color: var(--bone-7);
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--ground-10);
+    padding: 0 3px;
+    font-size: 10px;
+  }
 
   .empty { padding: 12px 0; text-align: center; }
   .foot { padding-top: 4px; font-size: 11px; }

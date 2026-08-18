@@ -271,9 +271,12 @@
     gap: 6px;
   }
 
+  /* The list took a fixed 260 of the 434px pane at the smallest window the app
+     allows, and the detail column — where the figures are — got what was left.
+     It gives ground now, down to a width that still reads. */
   .list {
-    flex: none;
-    width: 260px;
+    flex: 0 1 260px;
+    min-width: 150px;
     box-sizing: border-box;
     border: 6px solid transparent;
     border-image-slice: 6 fill;
@@ -287,7 +290,7 @@
 
   .detail {
     flex: 1 1 auto;
-    min-width: 0;
+    min-width: 220px;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -354,8 +357,19 @@
   .len { grid-area: len; color: var(--dim-2); }
   .sum { grid-area: sum; font-size: 10px; color: var(--edge-8); }
 
-  .rates { display: flex; gap: 6px; padding-top: 2px; }
-  .rate { flex: 1; min-width: 0; }
+  /* Four across only while four fit. `flex: 1` with `min-width: 0` let each
+     box shrink to 28px at the 620px minimum window while the figure inside
+     still needed 60, and nothing clipped it: Gold, XP, Kills and Drops were
+     printed on top of one another. */
+  .rates {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+    gap: 6px;
+    padding-top: 2px;
+  }
+  .rate { min-width: 0; overflow: hidden; }
+  .rate .value,
+  .rate .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .label {
     font-size: 9px;
     text-transform: uppercase;
@@ -382,9 +396,22 @@
   .tallyrow b.c-gold { color: var(--gold-2); }
 
   .zone { display: flex; align-items: center; gap: 6px; }
-  .zone .name { flex: none; width: 116px; font-size: 11px; }
+  /* The name was the only fixed part and the bar the only one that could give,
+     so at a narrow window the bar — the whole point of the row — was squeezed
+     to 2px and the duration printed outside the chip. */
+  .zone .name {
+    flex: 1 1 auto;
+    min-width: 60px;
+    max-width: 116px;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .zone .dim { flex: none; }
   .bar {
     flex: 1 1 auto;
+    min-width: 40px;
     height: 6px;
     background: rgba(0, 0, 0, 0.35);
     border: 1px solid var(--ground-10);

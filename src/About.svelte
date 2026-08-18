@@ -189,7 +189,6 @@
 
   .head { font-size: 13px; color: var(--gold-2); }
   .note { font-size: 11px; color: var(--bone-3); line-height: 1.5; margin-top: 3px; }
-  .note b { color: var(--bone-11); font-weight: normal; }
 
   .line { margin-top: 6px; }
   .btn {

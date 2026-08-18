@@ -18,9 +18,9 @@ use tauri::{AppHandle, Emitter, LogicalSize, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Alert kinds that own a configurable sound (not item rarities — see stats).
-const SOUND_KEYS: [&str; 6] = ["satanic", "set", "heroic", "angelic", "unholy", "mail"];
+const SOUND_KEYS: [&str; 7] = ["satanic", "set", "heroic", "angelic", "unholy", "mail", "zone"];
 
-/// A sound is either one of the six built-in alerts or a list's own file,
+/// A sound is either one of the built-in alerts or a list's own file,
 /// named `list-<id>`. Anything else must not reach the filesystem.
 fn sound_key(key: &str) -> bool {
     SOUND_KEYS.contains(&key)
@@ -203,6 +203,9 @@ pub struct Settings {
     pub angelic: SoundCfg,
     pub unholy: SoundCfg,
     pub mail: SoundCfg,
+    /// The satanic zone rotating: its chime, its volume, and — because the two
+    /// are one decision — whether the overlay's zone chip pulses with it.
+    pub zone: SoundCfg,
     /// rarities worth announcing at all, and the tier they must reach
     pub alerts: Vec<String>,
     pub min_tier: i64,
@@ -282,6 +285,10 @@ impl Default for Settings {
             angelic: SoundCfg::default(),
             unholy: SoundCfg::default(),
             mail: SoundCfg::default(),
+            // On out of the box: the zone moving is the one thing on this panel
+            // the player is meant to act on, and it happens while they are
+            // looking at the fight rather than at us.
+            zone: SoundCfg::default(),
             alerts: stats::JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
             min_tier: 0,
             notable: stats::default_notable()
@@ -638,7 +645,16 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::write(&staged, bytes)?;
+    // The rename is atomic, but only over what the disk actually holds: without
+    // this the metadata operation can land while the bytes are still in the
+    // cache, and a power cut leaves the new name pointing at an empty file —
+    // the one outcome the staging was meant to prevent. Saves are debounced at
+    // 150 ms, so this costs a flush a few times a second at worst.
+    {
+        let mut f = std::fs::File::create(&staged)?;
+        std::io::Write::write_all(&mut f, bytes)?;
+        f.sync_data()?;
+    }
     // Windows hands out sharing violations when an antivirus or the indexer
     // has the target open for a moment; a couple of retries covers it.
     let mut last = None;
@@ -672,6 +688,54 @@ fn write_json<T: Serialize>(path: &std::path::Path, value: &T, pretty: bool) {
     };
     if let Err(e) = write_atomic(path, &json) {
         log::once(&path.display().to_string(), "error", format!("cannot write {}: {e}", path.display()));
+    }
+}
+
+/// Read a file of ours, and keep the wreck when it will not parse.
+///
+/// A file that is not there is a first run and answers with defaults. A file
+/// that IS there and does not parse used to answer with defaults too, with no
+/// log line and nothing kept — and the callers that read-modify-write commit
+/// that answer straight back: the lock hotkey and the tray item rewrite the
+/// whole of settings.json, and `end_run` writes a one-run history over two
+/// hundred. One unparseable file therefore cost every filter, every list and
+/// every notable group, on the next keypress, silently. Moving it aside first
+/// leaves the user something to recover and the log something to say.
+///
+/// Only the parse failure moves the file. An io error is the folder being
+/// locked or unreadable, and renaming is the last thing that helps there.
+fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &std::path::Path) -> T {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::once(
+                    &path.display().to_string(),
+                    "error",
+                    format!("cannot read {}: {e}", path.display()),
+                );
+            }
+            return T::default();
+        }
+    };
+    match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(e) => {
+            let kept = path.with_file_name(format!(
+                "{}.bad",
+                path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            ));
+            let moved = std::fs::rename(path, &kept);
+            log::error(format!(
+                "{} does not parse ({e}); {}",
+                path.display(),
+                match &moved {
+                    Ok(()) => format!("kept as {}", kept.display()),
+                    Err(e) => format!("and it could not be kept aside: {e}"),
+                }
+            ));
+            T::default()
+        }
     }
 }
 
@@ -917,7 +981,6 @@ fn spawn_ticker_glue(app: AppHandle) {
 const SNAP_MIN_GAP: Duration = Duration::from_millis(400);
 const SNAP_HEARTBEAT: Duration = Duration::from_millis(2000);
 const EXTRA_MIN_GAP: Duration = Duration::from_millis(1000);
-const EXTRA_HEARTBEAT: Duration = Duration::from_millis(5000);
 
 /// The dashboard shows one section at a time and says which, so the heavy
 /// payload can stay home while the user is on Settings or Sounds.
@@ -939,7 +1002,7 @@ fn spawn_stats_pusher(app: AppHandle) {
         };
         let (mut snap_rev, mut extra_rev) = (u64::MAX, u64::MAX);
         let mut snap_at = Instant::now() - SNAP_HEARTBEAT;
-        let mut extra_at = Instant::now() - EXTRA_HEARTBEAT;
+        let mut extra_at = Instant::now() - EXTRA_MIN_GAP;
         let (mut had_main, mut had_dash) = (false, false);
         let mut had_mail = false;
         loop {
@@ -952,6 +1015,12 @@ fn spawn_stats_pusher(app: AppHandle) {
                 let _ = app.emit("mail", ());
             }
             had_mail = mail;
+            // And the same for the zone moving on: the overlay is the window
+            // that plays sounds whether it is on screen or not, and a player
+            // who has hidden it still wants to know the drops got better.
+            if app.state::<Shared>().stats.lock().unwrap().take_zone_change() {
+                let _ = app.emit("zone-changed", ());
+            }
 
             let (main, dashboard) = (visible("main"), visible("dashboard"));
             // a window that just appeared gets the current numbers at once
@@ -981,23 +1050,32 @@ fn spawn_stats_pusher(app: AppHandle) {
                 }
                 (snap_rev, snap_at) = (revision, Instant::now());
             }
-            // the series and the drop journal are the heaviest payload in the
-            // app, so they only travel while the statistics section is open
+            // The series and the drop journal are the heaviest payload in the
+            // app, so they only travel while the statistics section is open —
+            // and only when one of them has actually changed. Every event bumps
+            // `revision`, the client's heartbeat arrives every few seconds all
+            // run long, and the heartbeat below it fired anyway: a full journal
+            // serialises to 129 KB and it was going out at up to one a second
+            // for a journal and a series nobody had added to. Its own revision
+            // moves when a drop is journalled, a series point is taken or the
+            // character changes, which is everything `extra()` carries.
             let reading_stats = dashboard && STATS_SECTION.load(Ordering::Relaxed);
-            if reading_stats && due(extra_rev, extra_at, EXTRA_MIN_GAP, EXTRA_HEARTBEAT) {
-                let extra = shared.stats.lock().unwrap().extra();
-                let _ = app.emit_to("dashboard", "stats-extra", &extra);
-                (extra_rev, extra_at) = (revision, Instant::now());
+            if reading_stats && extra_at.elapsed() >= EXTRA_MIN_GAP {
+                let stats = shared.stats.lock().unwrap();
+                let extra_now = stats.extra_revision();
+                if extra_rev != extra_now {
+                    let extra = stats.extra();
+                    drop(stats);
+                    let _ = app.emit_to("dashboard", "stats-extra", &extra);
+                    (extra_rev, extra_at) = (extra_now, Instant::now());
+                }
             }
         }
     });
 }
 
 pub(crate) fn read_settings() -> Settings {
-    let mut settings: Settings = std::fs::read_to_string(settings_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    let mut settings: Settings = read_json_or_default(&settings_path());
     migrate_notable(&mut settings);
     migrate_lists(&mut settings);
     settings
@@ -1277,6 +1355,7 @@ fn save_settings(app: AppHandle, mut settings: Settings) -> Result<(), String> {
         &mut settings.angelic,
         &mut settings.unholy,
         &mut settings.mail,
+        &mut settings.zone,
     ] {
         cfg.volume = cfg.volume.clamp(0.0, 1.0);
     }
@@ -1318,10 +1397,7 @@ fn runs_path() -> PathBuf {
 }
 
 pub(crate) fn read_runs() -> Vec<stats::Run> {
-    std::fs::read_to_string(runs_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    read_json_or_default(&runs_path())
 }
 
 /// End the session and file it away. Everything that ends a run goes through
@@ -1349,7 +1425,9 @@ fn get_runs() -> Vec<stats::Run> {
 
 #[tauri::command]
 fn clear_runs() -> Result<(), String> {
-    std::fs::write(runs_path(), "[]").map_err(|e| e.to_string())
+    // through the same staging as every other writer: a truncate in place is
+    // what leaves a history that reads as nothing
+    write_atomic(&runs_path(), b"[]").map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1895,7 +1973,7 @@ fn sound_by_key(key: &str) -> Option<ExportedSound> {
 
 /// Put one back. The key is checked the same way it is on the way out: a
 /// settings file is a plain file on disk and could name any path it liked.
-fn write_sound(key: &str, snd: &ExportedSound) -> Result<(), String> {
+fn write_sound(dir: &std::path::Path, key: &str, snd: &ExportedSound) -> Result<(), String> {
     use base64::Engine;
     if !sound_key(key) || !SOUND_EXTS.iter().any(|(e, _)| *e == snd.ext) {
         return Err("not a sound this app files".into());
@@ -1903,9 +1981,23 @@ fn write_sound(key: &str, snd: &ExportedSound) -> Result<(), String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&snd.data)
         .map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(sounds_dir()).map_err(|e| e.to_string())?;
-    std::fs::write(sounds_dir().join(format!("{key}.{}", snd.ext)), bytes)
-        .map_err(|e| e.to_string())
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    // One key, one file — the rule `pick_sound` and `clear_sound` both keep.
+    // Every reader takes the first extension of SOUND_EXTS that exists, so
+    // importing a satanic.wav onto a machine that already had a satanic.mp3
+    // left both on disk with the old mp3 still playing: an import that says it
+    // replaces every setting, and the one it could not replace was the sound.
+    // Written first and cleared after, as there: a write that fails must not
+    // leave the key silent.
+    let staged = dir.join(format!("{key}.{}.new", snd.ext));
+    std::fs::write(&staged, bytes).map_err(|e| e.to_string())?;
+    for (e, _) in SOUND_EXTS {
+        let _ = std::fs::remove_file(dir.join(format!("{key}.{e}")));
+    }
+    std::fs::rename(&staged, dir.join(format!("{key}.{}", snd.ext))).map_err(|e| {
+        let _ = std::fs::remove_file(&staged);
+        e.to_string()
+    })
 }
 
 /// Give a new list the sound an old one has, for duplicating a filter.
@@ -1991,7 +2083,7 @@ struct ExportedSettings {
 /// Every custom sound the settings refer to, by the key it is filed under.
 fn all_sounds(settings: &Settings) -> std::collections::HashMap<String, ExportedSound> {
     let mut out = std::collections::HashMap::new();
-    for rarity in ["satanic", "set", "heroic", "angelic", "unholy", "mail"] {
+    for rarity in SOUND_KEYS {
         if let Some(snd) = sound_by_key(rarity) {
             out.insert(rarity.to_string(), snd);
         }
@@ -2053,7 +2145,7 @@ fn import_settings(app: AppHandle) -> Result<Option<String>, String> {
     // the sounds first: settings that name a file which is not there yet would
     // be saved, applied, and play nothing
     for (key, snd) in &exported.sounds {
-        let _ = write_sound(key, snd);
+        let _ = write_sound(&sounds_dir(), key, snd);
     }
     let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     save_settings(app, exported.settings)?;
@@ -2700,7 +2792,7 @@ mod tests {
     /// reason: nothing about a wrong answer here is loud.
     #[test]
     fn a_sound_key_cannot_walk_out_of_its_directory() {
-        for good in ["satanic", "set", "heroic", "angelic", "unholy", "mail", "list-9f3a2b", "list-a-b"] {
+        for good in ["satanic", "set", "heroic", "angelic", "unholy", "mail", "zone", "list-9f3a2b", "list-a-b"] {
             assert!(sound_key(good), "{good} should be allowed");
         }
         for bad in [
@@ -2717,5 +2809,55 @@ mod tests {
         }
         // and the length ceiling, which is what stops a very long id at all
         assert!(!sound_key(&format!("list-{}", "a".repeat(60))));
+    }
+
+    /// The imported sound has to be the one that plays. Every reader takes the
+    /// first extension in SOUND_EXTS that exists, and the import used to write
+    /// its file beside whatever was already there.
+    #[test]
+    fn an_imported_sound_replaces_the_one_the_key_already_had() {
+        let dir = std::env::temp_dir().join(format!("hs-tracker-sound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("satanic.mp3"), b"the old one").unwrap();
+
+        let imported = ExportedSound {
+            ext: "wav".into(),
+            data: base64::engine::general_purpose::STANDARD.encode(b"the imported one"),
+        };
+        write_sound(&dir, "satanic", &imported).unwrap();
+
+        assert!(!dir.join("satanic.mp3").exists(), "mp3 comes first and would shadow the wav");
+        assert_eq!(std::fs::read(dir.join("satanic.wav")).unwrap(), b"the imported one");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// settings.json is a plain file on disk and the code says so twice. When
+    /// one comes back unparseable — hand-edited, or half-written by a power cut
+    /// — answering with defaults means the next lock toggle writes those
+    /// defaults over the only copy of every filter and list the user has.
+    #[test]
+    fn a_file_that_will_not_parse_is_kept_rather_than_answered_with_defaults() {
+        let dir = std::env::temp_dir().join(format!("hs-tracker-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let wreck = r#"{"min_tier": 5, "alerts": ["Sat"#;
+        std::fs::write(&path, wreck).unwrap();
+
+        let settings: Settings = read_json_or_default(&path);
+        assert_eq!(settings.min_tier, Settings::default().min_tier, "defaults, as before");
+        assert!(!path.exists(), "and not left where the next save overwrites it");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("settings.json.bad")).unwrap(),
+            wreck,
+            "the user's own file, kept whole"
+        );
+
+        // a file that is simply not there is a first run, and stays quiet
+        let fresh: Settings = read_json_or_default(&dir.join("nothing.json"));
+        assert_eq!(fresh.min_tier, Settings::default().min_tier);
+        assert!(!dir.join("nothing.json.bad").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

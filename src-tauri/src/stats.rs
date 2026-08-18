@@ -279,7 +279,17 @@ pub struct GameStats {
     mf: i64,
     satanic_here: bool,
     room: Option<String>,
+    /// When the game last MOVED the satanic zone, waiting to be told. Not set
+    /// by the first sighting of a zone: a tracker started mid-rotation learns
+    /// where the zone is from the next packet the client sends, and that is not
+    /// the zone rotating.
     sz_changed: Option<Instant>,
+    /// The zone above was carried over a reset and nothing has confirmed it
+    /// since — so a packet that disagrees with it is this session catching up,
+    /// not a rotation. A reset is also what the game starting does, and the
+    /// zone does not hold still while the game is closed: without this, coming
+    /// back after an hour away announced a rotation nobody was there for.
+    stale_zone: bool,
     season_mode: Option<&'static str>,
     gold_mode: Option<&'static str>,
     last_currency: Option<crate::parser::Currency>,
@@ -308,6 +318,11 @@ pub struct GameStats {
     series: Vec<SeriesPoint>,
     /// bumped by every change, so the pusher can skip unchanged snapshots
     revision: u64,
+    /// bumped only by what `extra()` actually shows. The graph series and the
+    /// 400-entry drop journal are the heaviest payload the app sends, and the
+    /// counters move on every heartbeat the client emits — gating them on
+    /// `revision` shipped 130 KB a second for a journal nobody had added to.
+    extra_rev: u64,
 }
 
 /// Everything the player chose, as against everything the session earned.
@@ -379,6 +394,7 @@ impl Default for GameStats {
             satanic_here: false,
             room: None,
             sz_changed: None,
+            stale_zone: false,
             season_mode: None,
             gold_mode: None,
             last_currency: None,
@@ -399,6 +415,7 @@ impl Default for GameStats {
             drops: VecDeque::new(),
             series: Vec::new(),
             revision: 0,
+            extra_rev: 0,
         }
     }
 }
@@ -408,6 +425,7 @@ impl GameStats {
     /// the earned counters restart, so the next packet still yields a diff.
     pub fn reset(&mut self) {
         let revision = self.revision;
+        let extra_rev = self.extra_rev;
         let carry = (
             self.character.take(),
             self.satanic.take(),
@@ -422,6 +440,17 @@ impl GameStats {
             self.total_kills,
             self.xp_authoritative,
             self.stale_bank,
+            // The deposit the client has reported and the balance has not
+            // confirmed yet. It belongs to the same in-flight balance as
+            // `total_gold` above, and dropping it here left the balance that
+            // lands after a reset with nothing to cancel against: coins banked
+            // before the reset were counted a second time, as the new
+            // session's earnings. Replaying a real capture, 88% of the points
+            // a reset could fall on hold one.
+            self.banked,
+            // the balance travels, so the moment it was read travels with it:
+            // without it the carried gold reports an age of zero and looks fresh
+            self.last_bank,
             self.stale_save,
             // every setting in one piece; see `Prefs` for why
             std::mem::take(&mut self.prefs),
@@ -444,11 +473,20 @@ impl GameStats {
             self.total_kills,
             self.xp_authoritative,
             self.stale_bank,
+            self.banked,
+            // the balance travels, so the moment it was read travels with it:
+            // without it the carried gold reports an age of zero and looks fresh
+            self.last_bank,
             self.stale_save,
             self.prefs,
             self.tally_base,
         ) = carry;
+        // the zone came across with the character; what has not come across is
+        // any guarantee that it is still the zone
+        self.stale_zone = self.satanic.is_some();
         self.revision = revision + 1;
+        // the journal, the series and the character all just went
+        self.extra_rev = extra_rev + 1;
     }
 
     /// Totals from the previous run, so a restart shows the last known bank
@@ -478,6 +516,12 @@ impl GameStats {
     /// that shows the counters is hidden.
     pub fn has_mail(&self) -> bool {
         self.has_mail
+    }
+
+    /// Has the satanic zone moved since this was last asked? Taken rather than
+    /// read, so one rotation is announced once however often the pusher looks.
+    pub fn take_zone_change(&mut self) -> bool {
+        self.sz_changed.take().is_some()
     }
 
     /// Add the time spent in the current room to its total and start counting
@@ -621,6 +665,10 @@ impl GameStats {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn extra_revision(&self) -> u64 {
+        self.extra_rev
     }
 
     fn listed_sound(&self, name: &str) -> Option<String> {
@@ -876,6 +924,7 @@ impl GameStats {
                     });
                 }
                 if full || self.character.is_none() {
+                    self.extra_rev += 1;
                     self.character = Some(CharacterInfo {
                         name: name.clone(),
                         level: *level,
@@ -902,11 +951,24 @@ impl GameStats {
             GameEvent::Mail(has) => self.has_mail = *has,
             GameEvent::Room(room) => {
                 if self.room.as_deref() != Some(room.as_str()) {
-                    // close the books on the room being left: a run is worth
-                    // little without knowing where it happened
-                    self.bank_room_time();
+                    // Close the books on the room being left: a run is worth
+                    // little without knowing where it happened.
+                    //
+                    // Never while the clock is stopped. A hand pause is a trip
+                    // to town, and a trip to town is a sequence of room
+                    // changes; `bank_room_time` re-arms the clock on its way
+                    // out, so the first change restarted the one the pause had
+                    // just stopped and every change after it banked paused
+                    // wall-clock seconds. A 600-second run reported 900 seconds
+                    // in one room, the wrong room sorted to the top of the
+                    // run's zones, and the run card's share bar drew past the
+                    // end of its track. The room itself still moves, so the
+                    // panel keeps saying where the character is.
+                    if !self.paused() {
+                        self.bank_room_time();
+                        self.room_since = Some(Instant::now());
+                    }
                     self.room = Some(room.clone());
-                    self.room_since = Some(Instant::now());
                 }
             }
             GameEvent::Vitals { mf, level, hlevel, satanic_here } => {
@@ -922,10 +984,12 @@ impl GameStats {
                     if *level > 0 && c.level != *level {
                         c.level = *level;
                         self.revision += 1;
+                        self.extra_rev += 1;
                     }
                     if *hlevel > 0 && c.herolevel != *hlevel {
                         c.herolevel = *hlevel;
                         self.revision += 1;
+                        self.extra_rev += 1;
                     }
                 }
             }
@@ -948,12 +1012,27 @@ impl GameStats {
                 // lands in the bag. Its own hash ties the two together, so it
                 // counts once — and the tier the roll reported is remembered
                 // for the pickup, which never carries one.
+                //
+                // Not every packet carries that hash, and the two sightings
+                // used to fall into identity spaces that could never meet when
+                // it was missing: the roll minted `g:seed:type:id` while the
+                // pickup used the inventory fingerprint, so `counted` admitted
+                // both and one item was added to its rarity twice. The
+                // fingerprint is what both sightings actually share — the
+                // server's generation answer keys the item by it and the bag
+                // reports the same string — so it is asked for first, and the
+                // seed key is left for a roll that arrives without one.
                 let identity = if !hash.is_empty() {
                     format!("h:{hash}")
-                } else if *ground {
+                } else if !fingerprint.is_empty() {
+                    fingerprint.clone()
+                } else if *ground || *seed != 0 {
+                    // a pickup with neither hash, fingerprint nor seed has
+                    // nothing that tells one copy of an item from the next, and
+                    // merging those would undercount rather than double-count
                     format!("g:{seed}:{item_type}:{item_id}")
                 } else {
-                    fingerprint.clone()
+                    String::new()
                 };
                 if !identity.is_empty() {
                     // a world sync repeats the very same sighting; that is noise
@@ -1103,14 +1182,21 @@ impl GameStats {
                             self.drops.pop_front();
                         }
                         self.drops.push_back(entry.clone());
+                        self.extra_rev += 1;
                     }
                     return Some(entry);
                 }
             }
             GameEvent::SatanicZone { zone, buffs, debuffs } => {
-                if self.satanic.as_ref().map(|s| &s.zone) != Some(zone) {
+                // A zone we already had and no longer have is the rotation; a
+                // zone where there was none is this process finding out where
+                // the zone is, which is not news the player asked to hear. Nor
+                // is the first packet after a reset — see `stale_zone`.
+                let moved = self.satanic.as_ref().is_some_and(|s| s.zone != *zone);
+                if moved && !self.stale_zone {
                     self.sz_changed = Some(Instant::now());
                 }
+                self.stale_zone = false;
                 self.satanic = Some(SatanicZone {
                     zone: zone.clone(),
                     buffs: buffs.clone(),
@@ -1177,6 +1263,7 @@ impl GameStats {
         if self.series.len() >= SERIES_CAP {
             return;
         }
+        self.extra_rev += 1;
         self.series.push(SeriesPoint {
             t: self.active().as_secs(),
             gold: self.gold_earned,
@@ -1272,7 +1359,6 @@ impl GameStats {
             character: self.character.clone(),
             series: self.series.clone(),
             drops: self.drops.iter().rev().cloned().collect(),
-            sz_active_secs: self.sz_changed.map(|t| t.elapsed().as_secs()),
         }
     }
 }
@@ -1375,7 +1461,6 @@ pub struct Extra {
     pub character: Option<CharacterInfo>,
     pub series: Vec<SeriesPoint>,
     pub drops: Vec<DropEntry>,
-    pub sz_active_secs: Option<u64>,
 }
 
 #[cfg(test)]
@@ -1416,6 +1501,10 @@ mod tests {
             }
             other => other,
         }
+    }
+
+    fn satanic_zone(zone: &str) -> GameEvent {
+        GameEvent::SatanicZone { zone: zone.into(), buffs: vec![1, 2, 3], debuffs: vec![4] }
     }
 
     fn notable_item(name: &str, item_type: i64, amount: i64) -> GameEvent {
@@ -1597,6 +1686,28 @@ mod tests {
         // gold that appears without a deposit (mail, selling) still counts
         feed(&mut s, json!({"currencyData": {"GSS": 723_000}}));
         assert_eq!(s.snapshot(String::new()).gold.earned, 2761);
+    }
+
+    /// The same pair with a reset between them: bank the loot at the vendor,
+    /// then start the next run clean. `banked` is the only thing that stops
+    /// the balance from being counted a second time, and the reset used to
+    /// leave it behind — so the coins the finished run was already credited
+    /// with turned up again as the new session's earnings.
+    #[test]
+    fn a_reset_between_a_deposit_and_its_balance_earns_the_gold_once() {
+        let mut s = GameStats::default();
+        s.apply(&account_packet("Parahryushka", 0, 84_833_801));
+        let feed = |s: &mut GameStats, packet: serde_json::Value| {
+            for e in parser::events_from_messages(&[packet]) {
+                s.apply(&e);
+            }
+        };
+        feed(&mut s, json!({"currencyData": {"GSS": 720_239}}));
+        feed(&mut s, json!({"amount_gold": "2600"}));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 2600, "the finished run keeps it");
+        s.reset();
+        feed(&mut s, json!({"currencyData": {"GSS": 722_839}}));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 0, "the new session did not earn it");
     }
 
     #[test]
@@ -2107,6 +2218,33 @@ mod tests {
         assert_eq!(s.snapshot(String::new()).items["Satanic"].total, 1, "counted once");
     }
 
+    /// The same pair without the hash. Both sightings carry the inventory
+    /// fingerprint — the generation answer keys the item by it and the bag
+    /// reports the same string — and keying the roll by seed instead put the
+    /// two in spaces that could never meet, so one find was counted twice.
+    #[test]
+    fn a_hashless_drop_and_its_pickup_are_one_item_too() {
+        let mut s = GameStats::default();
+        let sighting = |ground: bool| GameEvent::ItemAdded {
+            rarity: json!(3),
+            mf: false,
+            tier: 0,
+            item_type: 8,
+            item_id: 2,
+            weapon_type: 0,
+            seed: 55,
+            name: "Azazel's Despair".into(),
+            announced: false,
+            amount: 1,
+            fingerprint: "7-4964607-65875ac569ff60006-8".into(),
+            hash: String::new(),
+            ground,
+        };
+        s.apply(&sighting(true));
+        s.apply(&sighting(false));
+        assert_eq!(s.snapshot(String::new()).items["Heroic"].total, 1, "one item, one count");
+    }
+
     #[test]
     fn the_pickup_inherits_the_tier_the_roll_reported() {
         let mut s = GameStats::default();
@@ -2151,6 +2289,25 @@ mod tests {
         assert_eq!(snap.items["Rare"].total, 0);
     }
 
+    /// The graph series and the drop journal are the heaviest thing the app
+    /// sends, and the client's heartbeat arrives every few seconds all run
+    /// long. Neither carries anything either of them shows.
+    #[test]
+    fn the_heavy_payload_moves_only_when_it_has_something_new() {
+        let mut s = GameStats::default();
+        s.set_prefer_ground(false);
+        let quiet = s.extra_revision();
+        s.apply(&GameEvent::Room("Act_07_03".into()));
+        s.apply(&GameEvent::Vitals { mf: 120, level: 0, hlevel: 0, satanic_here: false });
+        s.apply(&GameEvent::Gold(Currency { gss: 500, ..Default::default() }));
+        s.apply(&GameEvent::XpGain(15));
+        assert_eq!(s.extra_revision(), quiet, "a heartbeat adds nothing to the journal");
+        assert!(s.revision() > quiet, "the counters themselves did move");
+
+        assert!(s.apply(&named_item(json!(6), false, "Azazel's Despair", "8-9-1")).is_some());
+        assert!(s.extra_revision() > quiet, "a journalled drop is something new");
+    }
+
     #[test]
     fn xp_gain_uses_original_factor() {
         let mut s = GameStats::default();
@@ -2163,6 +2320,38 @@ mod tests {
     /// A session that has been running for a while, without waiting for one.
     fn aged(secs: u64) -> GameStats {
         GameStats { start: Instant::now() - Duration::from_secs(secs), ..GameStats::default() }
+    }
+
+    /// You pause because you are going to town, and going to town is a
+    /// sequence of room changes. The clock is stopped for all of it.
+    #[test]
+    fn a_paused_run_does_not_credit_a_room_with_the_pause() {
+        // 1500 seconds on the wall, 900 of them paused: a 600-second run
+        let mut s = aged(1500);
+        s.apply(&account_packet("Test", 1_000, 10_000)); // the baseline
+        s.apply(&account_packet("Test", 1_400, 60_000)); // +400 kills, +50k xp
+        s.apply(&GameEvent::Room("Act_07_03".into()));
+
+        s.set_paused(true);
+        s.apply(&GameEvent::Room("Town_01".into()));
+        assert!(s.room_since.is_none(), "a room change must not restart a stopped clock");
+        assert_eq!(s.room.as_deref(), Some("Town_01"), "the panel still says where we are");
+
+        // and a room clock left running by any other route banks nothing while
+        // the session is held
+        s.room_since = Some(Instant::now() - Duration::from_secs(900));
+        s.paused_at = Some(Instant::now() - Duration::from_secs(900));
+        s.apply(&GameEvent::Room("Act_07_03".into()));
+        s.set_paused(false);
+
+        let run = s.finish().expect("a session with earnings is worth keeping");
+        let banked: u64 = run.zones.iter().map(|(_, secs)| secs).sum();
+        assert!(banked <= run.secs, "{banked} room-seconds inside a {}-second run", run.secs);
+        assert!(
+            !run.zones.iter().any(|(room, _)| room == "Town_01"),
+            "the paused town trip is not where the run happened: {:?}",
+            run.zones
+        );
     }
 
     #[test]
@@ -2231,5 +2420,31 @@ mod tests {
         let snap = s.snapshot(String::new());
         assert_eq!(snap.xp.earned, 0);
         assert_eq!(snap.character.as_ref().unwrap().name, "Test");
+    }
+
+    #[test]
+    fn only_a_real_rotation_announces_the_satanic_zone() {
+        let mut s = GameStats::default();
+        // The client repeats the zone in every heartbeat, so this is what a
+        // tracker started between rotations sees: the same zone, over and over.
+        s.apply(&satanic_zone("Act_08_02"));
+        assert!(!s.take_zone_change(), "learning where the zone is is not it moving");
+        s.apply(&satanic_zone("Act_08_02"));
+        assert!(!s.take_zone_change(), "the same zone said twice is one zone");
+
+        s.apply(&satanic_zone("Act_03_01"));
+        assert!(s.take_zone_change(), "the zone moved");
+        assert!(!s.take_zone_change(), "and it is announced once, not until the next look");
+
+        // A reset is the player starting a new session — and the game starting
+        // is one too, which is the case that matters: the zone travels across
+        // it, the game has been closed for an hour, and where the zone has got
+        // to in the meantime is news to this app rather than news to tell.
+        s.reset();
+        s.apply(&satanic_zone("Act_11_01"));
+        assert!(!s.take_zone_change(), "a reset must not be reported as a rotation");
+        // and the zone that packet named is the zone from then on
+        s.apply(&satanic_zone("Act_02_04"));
+        assert!(s.take_zone_change(), "the first packet after a reset re-arms it");
     }
 }

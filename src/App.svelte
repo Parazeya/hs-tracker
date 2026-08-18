@@ -27,7 +27,7 @@
   }
 
   // a list brings its own sound and its own volume; everything else is one of
-  // the six built-in alerts. Lists live inside the active filter — the loose
+  // the built-in alerts. Lists live inside the active filter — the loose
   // `lists` field is pre-0.9.4 and is emptied by the migration on load.
   function channel(key) {
     if (!key.startsWith('list-')) return cfg?.[key];
@@ -66,6 +66,13 @@
   let mailFresh = $state(false);
   let mailTimer;
 
+  // The satanic zone has just moved. Held for a few seconds and then dropped:
+  // the chip has to be noticed from the corner of an eye during a fight, and
+  // anything still moving after that is something the eye learns to ignore.
+  let zoneMoved = $state(false);
+  let zoneTimer;
+  const ZONE_ALERT_MS = 4000;
+
   $effect(() => {
     initSounds();
     invoke('snapshot').then(received).catch(() => {});
@@ -86,6 +93,16 @@
         mailTimer = setTimeout(() => (mailFresh = false), 20000);
       }),
       listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
+      // The rotation, from the backend, which only says so for a real one —
+      // never for the zone this app has just learned about. Chime and pulse
+      // answer to the one switch: they are two halves of the same alert.
+      listen('zone-changed', () => {
+        if (cfg?.zone?.enabled === false) return;
+        playSound('zone');
+        zoneMoved = true;
+        clearTimeout(zoneTimer);
+        zoneTimer = setTimeout(() => (zoneMoved = false), ZONE_ALERT_MS);
+      }),
       listen('settings-changed', (e) => (cfg = e.payload)),
       listen('strip-hover', (e) => {
         nearStrip = !!e.payload;
@@ -100,6 +117,7 @@
     return () => {
       clearInterval(timer);
       clearTimeout(mailTimer);
+      clearTimeout(zoneTimer);
       unsubs.forEach((u) => u.then((f) => f()));
     };
   });
@@ -345,7 +363,12 @@
           />
         {/each}
       </div>
-      <div class="zone" style:background-image="url({art('header')})" data-tauri-drag-region={drag}>
+      <div
+        class="zone"
+        class:moved={zoneMoved}
+        style:background-image="url({art('header')})"
+        data-tauri-drag-region={drag}
+      >
         <span class="zone-name" class:here={snap?.satanic_here}>
           {snap?.satanic_zone ? zoneName(snap.satanic_zone.zone) : '—'}
         </span>
@@ -632,6 +655,11 @@
 
   .zone {
     box-sizing: border-box;
+    /* the frame the rotation sweep is painted in — on the plate always, not
+       only while it is sweeping, so the class that starts it changes nothing
+       but what is drawn */
+    position: relative;
+    overflow: hidden;
     /* 140 + 240 is 380 in a 404 box, so this plate needs the 24px slack pushed
        in front of it to keep its right edge on the same boundary as the chips
        above. It used to come from `space-between` on the row, which the short
@@ -647,6 +675,43 @@
     image-rendering: pixelated;
     padding: 0 24px;
   }
+  /* The zone has just moved. A sweep of light across the plate and a pulse on
+     the name: drawn in the plate's own ::after, which is out of the flow and
+     takes no clicks, so the row cannot reflow and the panel cannot start
+     catching a click meant for the game underneath. It runs for as long as
+     App.svelte holds the class and then the chip is an ordinary chip again. */
+  .zone.moved::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      100deg,
+      transparent 30%,
+      rgba(255, 255, 255, 0.35) 50%,
+      transparent 70%
+    );
+    animation: zone-sweep 1.1s ease-out infinite;
+  }
+  .zone.moved .zone-name {
+    color: var(--rar-satanic);
+    animation: zone-pulse 0.55s infinite;
+  }
+  @keyframes zone-sweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+  }
+  /* A square wave, like the mail chip and the armed buttons: this skin is pixel
+     art, and a filter carries the plate and the glyphs together. */
+  @keyframes zone-pulse {
+    0%, 49% { filter: none; }
+    50%, 100% { filter: brightness(1.7); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .zone.moved::after { animation: none; opacity: 0.25; }
+    .zone.moved .zone-name { animation: none; filter: brightness(1.35); }
+  }
+
   .zone-name {
     overflow: hidden;
     text-overflow: ellipsis;

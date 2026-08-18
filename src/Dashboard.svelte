@@ -171,7 +171,7 @@
           {#if trouble.fix}<code class="tf">{trouble.fix}</code>{/if}
         </div>
       {/if}
-      <Current />
+      <div class="content"><Current /></div>
     </div>
   </div>
 
@@ -395,6 +395,18 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+
+  /* The section had no size of its own, so it took the height of its content
+     and the pane clipped whatever did not fit — with no way to scroll to it.
+     Only visible while the "waiting for the game" banner is up, because that is
+     the one thing that ever pushed a page past the bottom. It takes what the
+     banner leaves and scrolls inside itself; min-height is what lets a flex
+     child be shorter than its content instead of overflowing. */
+  .content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
   }
 
   /* Above whatever section is open, because it explains all of them at once.

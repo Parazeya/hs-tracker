@@ -69,6 +69,7 @@
   }
 
   let mailVolume = $derived(Math.round((settings?.mail?.volume ?? 0.7) * 100));
+  let zoneVolume = $derived(Math.round((settings?.zone?.volume ?? 0.7) * 100));
 
   // The announcement lives here rather than in Settings: it answers the same
   // question the rest of this page answers — what is worth telling you about —
@@ -450,16 +451,18 @@
           <span class="src" title={custom[key] ? `sounds/${custom[key]}` : 'built-in sound'}>
             {custom[key] ?? 'built-in'}
           </span>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity(key)}>Test</button>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound(key)}>Browse…</button>
-          <button
-            class="btn sm"
-            style:--btn="url({art('button')})"
-            style:--btn-hover="url({art('button_hover')})"
-            style:--btn-down="url({art('button_down')})"
-            disabled={!custom[key]}
-            onclick={() => danger(`snd-${key}`, () => invoke('clear_sound', { rarity: key }).catch(() => {}))}
-          >{armed === `snd-${key}` ? 'Sure?' : 'Default'}</button>
+          <div class="rbtns">
+            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity(key)}>Test</button>
+            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound(key)}>Browse…</button>
+            <button
+              class="btn sm"
+              style:--btn="url({art('button')})"
+              style:--btn-hover="url({art('button_hover')})"
+              style:--btn-down="url({art('button_down')})"
+              disabled={!custom[key]}
+              onclick={() => danger(`snd-${key}`, () => invoke('clear_sound', { rarity: key }).catch(() => {}))}
+            >{armed === `snd-${key}` ? 'Sure?' : 'Default'}</button>
+          </div>
         </div>
       {/each}
 
@@ -480,16 +483,51 @@
         />
         <span class="pct">{mailVolume}%</span>
         <span class="src" title={custom.mail ? `sounds/${custom.mail}` : 'built-in sound'}>{custom.mail ?? 'built-in'}</span>
-        <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('mail')}>Test</button>
-        <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('mail')}>Browse…</button>
-        <button
-          class="btn sm"
-          style:--btn="url({art('button')})"
-          style:--btn-hover="url({art('button_hover')})"
-          style:--btn-down="url({art('button_down')})"
-          disabled={!custom.mail}
-          onclick={() => danger('snd-mail', () => invoke('clear_sound', { rarity: 'mail' }).catch(() => {}))}
-        >{armed === 'snd-mail' ? 'Sure?' : 'Default'}</button>
+        <div class="rbtns">
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('mail')}>Test</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('mail')}>Browse…</button>
+          <button
+            class="btn sm"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
+            disabled={!custom.mail}
+            onclick={() => danger('snd-mail', () => invoke('clear_sound', { rarity: 'mail' }).catch(() => {}))}
+          >{armed === 'snd-mail' ? 'Sure?' : 'Default'}</button>
+        </div>
+      </div>
+      <!-- Also not a drop: the game moving the satanic zone, which is the one
+           thing on the overlay worth leaving a fight for. One switch, because
+           the chime and the chip's pulse are one alert told two ways — see
+           App.svelte. -->
+      <div class="rrow" class:off={!settings.zone?.enabled}>
+        <button class="check" onclick={() => { settings.zone.enabled = !settings.zone.enabled; save(); }} aria-label="satanic zone change">
+          <img src={settings.zone?.enabled ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="rname c-sat" title="The satanic zone rotating: the chime, and the zone chip pulsing on the overlay">Zone change</span>
+        <input
+          class="vol"
+          type="range"
+          min="0"
+          max="100"
+          disabled={!settings.zone?.enabled}
+          value={zoneVolume}
+          oninput={(e) => setVolume('zone', e.currentTarget.value / 100)}
+        />
+        <span class="pct">{zoneVolume}%</span>
+        <span class="src" title={custom.zone ? `sounds/${custom.zone}` : 'built-in sound — the satanic chime'}>{custom.zone ?? 'built-in'}</span>
+        <div class="rbtns">
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('zone')}>Test</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('zone')}>Browse…</button>
+          <button
+            class="btn sm"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
+            disabled={!custom.zone}
+            onclick={() => danger('snd-zone', () => invoke('clear_sound', { rarity: 'zone' }).catch(() => {}))}
+          >{armed === 'snd-zone' ? 'Sure?' : 'Default'}</button>
+        </div>
       </div>
       <div class="line">
         <span class="name">Min tier</span>
@@ -787,10 +825,28 @@
     gap: 10px;
     align-items: start;
   }
-  @media (min-width: 900px) {
+  /* The query is on the viewport, but the columns live in the dashboard pane —
+     186px narrower once the frame, the 116px nav and the pane's own border and
+     padding are taken out. Switched on at 900px of window the left column was
+     360px and a rarity row wants 449, so the page came out with two nested
+     horizontal scrollbars — worse than the single column it had just left, and
+     a 960px half-screen snap landed in the middle of it. 1200 is measured: it
+     is where a rarity row finally fits, on one line, in the column it is
+     given. Under it the single column is the better page, not the fallback. */
+  @media (min-width: 1200px) {
     .panel.two { grid-template-columns: minmax(360px, 1fr) minmax(380px, 1.1fr); }
+    /* A column owns its scrolling only while the two are side by side. Stacked,
+       `max-height: 100%` cut each of them to half the page with the page itself
+       unable to scroll, so both halves were read through a slit. */
+    .col { overflow-y: auto; max-height: 100%; }
   }
   .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  /* A flex child shrinks below its own content by default, and in a column
+     that is a short window drawing every box on top of the one above it. The
+     filter's name field, its buttons and the checkbox above them all landed in
+     the same twenty pixels. Nothing here may shrink; if the window is too short
+     the column scrolls instead. */
+  .col > * { flex: 0 0 auto; }
 
 
   @font-face {
@@ -861,10 +917,21 @@
      left edge cannot be compared at a glance. */
   .rrow {
     display: grid;
-    grid-template-columns: 18px 62px 1fr 34px minmax(0, 1.4fr) auto auto auto;
+    grid-template-columns: 18px 62px minmax(44px, 1fr) 34px minmax(90px, 1.4fr) auto;
     align-items: center;
     gap: 6px;
     padding: 1px 0;
+  }
+  /* The three buttons were three `auto` tracks, and `auto` does not give: the
+     row's own minimum was 427px inside a 360px column, so the file name was
+     squeezed to nothing and "Default" was drawn outside the panel. As one cell
+     they wrap onto a second line instead, and the file name — the only thing
+     that says built-in or picked — keeps a floor of its own. */
+  .rbtns {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
   }
   .rrow.off .vol,
   .rrow.off .pct,
@@ -921,7 +988,7 @@
 
   /* a setting that is on but cannot act yet says so where it is set */
   .note.warn { color: var(--gold, #e8c860); }
-  .vol { width: 100%; min-width: 60px; }
+  .vol { width: 100%; min-width: 44px; }
   .pct {
     font-size: 11px;
     color: var(--edge-2b);
@@ -1271,6 +1338,10 @@
   .btn:hover { border-image-source: var(--btn-hover); }
   .btn:active { border-image-source: var(--btn-down); }
   .btn.add { height: 24px; font-size: 10px; }
+  /* Six rows carry three of these each; at full size they alone were 194px of
+     a row that had 360 to live in. The class was on the buttons from the start
+     and never had a rule. */
+  .btn.sm { height: 22px; font-size: 10px; padding: 0 4px; }
 
   .c-sat { color: #d24b4b; }
   .c-set { color: #45c15a; }

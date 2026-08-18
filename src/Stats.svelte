@@ -64,8 +64,17 @@
       : `${m}:${String(s).padStart(2, '0')}`;
   }
 
-  const time = (ms) =>
-    new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  // One formatter, built once. `extra` arrives as a fresh object, so every one
+  // of the journal's 400 rows re-runs its template on every push, and building
+  // a Date and a fresh options literal per row costs 10.2ms of blocking main
+  // thread per push — for timestamps that never change. The same 400 rows
+  // through one hoisted Intl.DateTimeFormat: 0.23ms.
+  const TIME = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const time = (ms) => TIME.format(ms);
 
 
   const item = (name) => snap?.items?.[name] ?? { total: 0, mf: 0, per_hour: 0 };
@@ -568,6 +577,7 @@
     box-sizing: border-box;
     flex: 1;
     min-width: 0;
+    overflow: hidden;
     border: 6px solid transparent;
     border-image-slice: 6 fill;
     border-image-width: 6px;
@@ -684,15 +694,22 @@
   .body::-webkit-scrollbar { width: 6px; }
   .body::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
+  /* An `fr` track's floor is its item's min-content, and `.clock` — unlike the
+     three cards beside it — had no `min-width: 0`. `.clock .sub` is the whole
+     character line and does not wrap, so the length of the character's name
+     set the width of Gold, XP and Kills: an 18-character name took 275px of a
+     171px track and pushed the three figures out over their own frames. */
   .run {
     flex: none;
     display: grid;
-    grid-template-columns: 1.4fr 1fr 1fr 1fr;
+    grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
     gap: 6px;
   }
 
   .clock {
     box-sizing: border-box;
+    min-width: 0;
+    overflow: hidden;
     border: 6px solid transparent;
     border-image-slice: 6 fill;
     border-image-width: 6px;
@@ -725,7 +742,7 @@
   }
   @media (max-width: 720px) {
     .cols { grid-template-columns: 1fr; }
-    .run { grid-template-columns: 1fr 1fr; }
+    .run { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   }
 
   .col {

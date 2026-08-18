@@ -8,7 +8,10 @@ import angelicWav from './assets/sounds/angelic.wav';
 import unholyWav from './assets/sounds/unholy.wav';
 import mailWav from './assets/sounds/mail.wav';
 
-export const RARITIES = ['satanic', 'set', 'heroic', 'angelic', 'unholy', 'mail'];
+/// Every key that owns a sound of its own. Two of them are not rarities at all
+/// — the mail chime and the satanic zone rotating — and they are on this list
+/// because everything that loads, tests or replaces a sound walks it.
+export const RARITIES = ['satanic', 'set', 'heroic', 'angelic', 'unholy', 'mail', 'zone'];
 
 export const DEFAULTS = {
   satanic: satanicWav,
@@ -17,6 +20,10 @@ export const DEFAULTS = {
   angelic: angelicWav,
   unholy: unholyWav,
   mail: mailWav,
+  // No file of its own is shipped for the zone: the satanic chime is the right
+  // sound for the satanic zone moving, and borrowing it means the alert works
+  // out of the box. Browse… puts any other file over it, as for every key here.
+  zone: satanicWav,
 };
 
 // A custom file beside the exe wins over the built-in chime. It is streamed

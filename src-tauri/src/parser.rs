@@ -121,6 +121,13 @@ pub enum GameEvent {
 }
 
 const BUF_CAP: usize = 1 << 20;
+/// The longest a single JSON value may span. Nothing the game sends is near it:
+/// the biggest message in a 16,104-message capture is 35,674 bytes.
+const MAX_SPAN: usize = 256 << 10;
+/// What all the scans over one buffer may read between them, as a multiple of
+/// its length. Openers that lead nowhere are what made the scan quadratic, and
+/// this is the ceiling that stops a buffer of them from stalling capture.
+const SCAN_BUDGET: usize = 8;
 /// A carried tail is the truncated end of one message. Anything bigger is a
 /// stray brace in framing noise — carrying that would stall capture forever.
 const CARRY_CAP: usize = 8 << 10;
@@ -431,13 +438,29 @@ fn parse_query_value(v: String) -> Value {
 
 /// Balanced-bracket scan: a flushed buffer often carries SEVERAL concatenated
 /// JSON messages; a greedy first-to-last span drops all of them.
+///
+/// An opener that never closes costs a walk to the end of the buffer and the
+/// scan resumes at the next byte, so a buffer full of them cost the square of
+/// its length. The filter captures every plaintext TCP byte on the machine,
+/// the buffer runs to `BUF_CAP`, and this runs on the capture thread between
+/// `next_packet` calls: 1 MB of `{` measured 536 seconds in release, nine
+/// minutes in which the pcap ring overflows and the game's own packets are
+/// lost. The budget holds one flush to a constant multiple of its own length
+/// whatever the bytes turn out to be.
 fn extract_json_values(bytes: &[u8]) -> Vec<Value> {
     let mut out = Vec::new();
     let mut i = 0;
+    let mut budget = bytes.len().saturating_mul(SCAN_BUDGET).saturating_add(MAX_SPAN);
     while i < bytes.len() {
         let c = bytes[i];
         if c == b'{' || c == b'[' {
-            if let Some(end) = matching_json_end(bytes, i) {
+            if budget == 0 {
+                break;
+            }
+            let mut walked = 0;
+            let end = json_end(bytes, i, &mut walked);
+            budget = budget.saturating_sub(walked);
+            if let Some(end) = end {
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes[i..=end]) {
                     let excluded = v.as_object().is_some_and(|o| {
                         o.contains_key("inventory_charms") || o.contains_key("steam")
@@ -456,10 +479,26 @@ fn extract_json_values(bytes: &[u8]) -> Vec<Value> {
 }
 
 fn matching_json_end(b: &[u8], start: usize) -> Option<usize> {
+    json_end(b, start, &mut 0)
+}
+
+/// Where the value opened at `start` closes, and how many bytes were read to
+/// find that out — the caller that scans from every position in a buffer needs
+/// the second number to keep the whole scan linear.
+///
+/// The walk stops at `MAX_SPAN`: the longest message in a full session's
+/// capture is 35,674 bytes, so a span still open a quarter of a megabyte later
+/// is a framing byte being chased, not a message being read.
+fn json_end(b: &[u8], start: usize, walked: &mut usize) -> Option<usize> {
+    let stop = b.len().min(start.saturating_add(MAX_SPAN));
     let mut stack = vec![b[start]];
     let mut in_str = false;
     let mut esc = false;
-    for (i, &c) in b.iter().enumerate().skip(start + 1) {
+    let mut found = None;
+    let mut i = start + 1;
+    while i < stop {
+        let c = b[i];
+        i += 1;
         if esc {
             esc = false;
             continue;
@@ -469,19 +508,21 @@ fn matching_json_end(b: &[u8], start: usize) -> Option<usize> {
             b'"' => in_str = !in_str,
             b'{' | b'[' if !in_str => stack.push(c),
             b'}' | b']' if !in_str => {
-                let open = *stack.last()?;
+                let Some(&open) = stack.last() else { break };
                 if (c == b'}') != (open == b'{') {
-                    return None;
+                    break;
                 }
                 stack.pop();
                 if stack.is_empty() {
-                    return Some(i);
+                    found = Some(i - 1);
+                    break;
                 }
             }
             _ => {}
         }
     }
-    None
+    *walked += i - start;
+    found
 }
 
 fn b64_json(s: &str) -> Option<Value> {
@@ -1030,6 +1071,24 @@ fn satanic_event(d: &Value) -> GameEvent {
 
 #[cfg(test)]
 mod tests {
+    /// The capture filter takes every plaintext TCP byte the machine sends or
+    /// receives, so a bulk transfer on any other port arrives here as one
+    /// buffer of up to `BUF_CAP`. Every opener used to be chased to the end of
+    /// it and the scan resumed one byte later, which is the square of the
+    /// length: 256 KB of `{` measured 288 seconds in a debug build, and this
+    /// runs on the capture thread, so the game's own packets are dropped for
+    /// the duration. Messages ahead of the noise are still read.
+    #[test]
+    fn a_buffer_of_open_braces_does_not_stall_capture() {
+        let mut buf = br#"{"currencyData": {"GSS": 1}}"#.to_vec();
+        buf.extend(std::iter::repeat(b'{').take(512 << 10));
+        let at = std::time::Instant::now();
+        let messages = super::extract_messages(&buf);
+        let took = at.elapsed();
+        assert!(took < std::time::Duration::from_secs(5), "512 KB of braces took {took:?}");
+        assert_eq!(messages.len(), 1, "the message before the noise is still read");
+    }
+
     #[test]
     fn an_item_posted_to_the_market_is_not_a_drop() {
         // the listing as captured, credentials replaced
