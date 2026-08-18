@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.9.92 — 2026-08-18
+
+### Changed
+
+- Sounds and the sound filter are one page, **Alerts**, in two columns. The
+  five rarities were being configured in two tabs at once — whether they alert
+  at all in one, how loud and with which file in the other. They are one
+  question and are now one row each.
+- The drop announcement moved there too, and arrives switched on. Off, with the
+  narrowest band it had, it announced nothing whatever, which reads as broken
+  rather than unset. Now all five rarities, any grade, volume at half, and a
+  place a fifth of the screen below centre, where the pillar clears the fight
+  instead of landing on it.
+- The announcement can follow the custom filter: anything on a list is
+  announced whatever its rarity. Putting an item on a list is already a
+  statement that it matters.
+- Settings keeps what people set and hides what they set once behind **More
+  settings**, which remembers being opened.
+- The OBS browser sources are gone, and with them the local server, the port
+  and the four addresses. One route in: capture the announcement window, which
+  can stay on screen for exactly that.
+
+### Added
+
+- Export every setting to one file and read it back — rarities, grades, the
+  announcement, every filter and list, and the sound files themselves, which
+  live outside settings.json and would otherwise arrive as silence.
+
+### Fixed
+
+- A single left click on the tray icon toggled the window twice, because the
+  click is reported going down and coming up. It appeared and vanished again;
+  only a double click, an even number of toggles away, looked like it worked.
+- The SS chip counted anything with an SS grade, resources included, so it read
+  2 before a piece of gear had dropped. Keys, socketables and orbs have grades
+  of their own; the grade columns are about gear and now count only gear.
+- Essence Vaults no longer sound a rarity alert. Seven of them share one
+  display name, so the alert fired constantly and said nothing about what had
+  been found. They are still journalled and still counted.
+
 ## 0.9.91 — 2026-08-17
 
 ### Fixed
