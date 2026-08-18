@@ -93,14 +93,22 @@ jobs:
       # and the desktop-file utils, its GTK and GStreamer plugins copy in what
       # the webview uses to play the alert sounds, and its own runtime needs
       # FUSE 2 — a package Ubuntu renamed in 24.04.
+      # The runner points apt at azure.archive.ubuntu.com, which goes dark often
+      # enough to matter: every index times out in turn, apt falls back to the
+      # main archive, and a step that takes ninety seconds took an hour and a
+      # half before anyone noticed it was not building anything. So: the main
+      # archive outright, short timeouts, few retries, and a ceiling on the step
+      # so a dead mirror fails the run instead of renting a runner all evening.
       - name: Install the system libraries
+        timeout-minutes: 12
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev libpcap-dev \
-            patchelf zsync desktop-file-utils \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav
-          sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g'             /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          apt_opts="-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+          sudo apt-get $apt_opts update
+          sudo apt-get $apt_opts install -y libwebkit2gtk-4.1-dev libgtk-3-dev             libayatana-appindicator3-dev librsvg2-dev libpcap-dev             patchelf zsync desktop-file-utils             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav
+          sudo apt-get $apt_opts install -y libfuse2             || sudo apt-get $apt_opts install -y libfuse2t64
 
       - run: npm ci
       # package.json owns the version; the Windows job syncs it the same way
