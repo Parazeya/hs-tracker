@@ -11,6 +11,16 @@
   <a href="../../releases"><b>➡️ Download for Windows &amp; Linux ⬅️</b></a>
 </p>
 
+> [!WARNING]
+> **Still in development.** It is usable and in daily use, but it is not
+> finished: expect bugs, expect settings to move between versions, and expect
+> the occasional drop to be counted oddly after a game patch. Nothing it does
+> can harm your account or your saves — it only reads — but do not treat its
+> numbers as authoritative until a version says it is out of beta.
+>
+> Found something wrong? [Open an issue](../../issues) with what you were
+> doing and, if you can, the log from `%LOCALAPPDATA%\HS Tracker\`.
+
 ![The overlay over a running game](screenshots/overlay.png)
 
 ## What it does
@@ -19,12 +29,13 @@
 | --- | --- |
 | **Overlay** | A small always-on-top panel with the run so far. Lock it and it becomes click-through, so it never eats a click meant for the game. |
 | **Statistics** | Gold, xp and kills per hour, drops by rarity, magic find, bosses and chests, what rolls better in the zone you are standing in, and the Satanic Zone with a countdown to the next rotation. |
-| **Sound alerts** | Its own sound per rarity, and named lists of specific items with sounds of their own. Alerts fire the moment an item hits the ground. |
-| **Drop flourish** | Optional: something SS-grade drops and the game's own loot pillar plays over the screen, wherever you have put it. |
+| **Alerts** | One page: a sound per rarity, the grade a drop must reach, named lists of specific items with sounds of their own, and the announcement — all set side by side rather than three tabs apart. Alerts fire the moment an item hits the ground. |
+| **Announcement** | A drop lands and the game's own loot pillar plays over the screen, wherever you have put it. It can follow the rarity switches or simply announce whatever your custom filter lists. |
 | **Items** | Every named item, its drop chance, and the places it rolls better in. Search by name, rarity or kind. |
 | **Runs** | Every finished session kept — the rates, the finds, where the time went. **Copy card** turns one into a picture you can paste into a chat. |
 | **Pause** | By hand, or by itself after five quiet minutes, so a break does not end up in the per-hour figures. |
-| **OBS** | Optional: the overlay served as a page on your own machine, to add in OBS as a Browser Source — transparent, and the same one you see. |
+| **OBS** | The announcement window can stay on screen between drops, so OBS can capture it as a window source. |
+| **Backup** | Export every setting — rarities, grades, the announcement, every filter and list, and the sound files themselves — to one file, and read it back on another machine. |
 | **About** | The version you are running, who made it, and a button that asks GitHub whether a newer release is out. |
 | **Discord** | Optional: while the game is open, your friends see the zone, the drops and the timer. |
 
@@ -33,13 +44,32 @@ injects anything, and sends nothing anywhere — everything stays on your machin
 The one exception is the **About** section's update check, which asks GitHub for
 the newest release and only when you press the button.
 
+## Where it stands
+
+Roughly **80% of the way to 1.0**. What is left is mostly the last stretch of one
+job: making the app's knowledge of the game come from the game.
+
+| | |
+| --- | --- |
+| ✅ **Capture** | Reads the traffic without touching the game. Survives adapters that do segmentation offload, which used to hide every message longer than one frame. |
+| ✅ **Statistics & runs** | Rates, drops by rarity and grade, magic find, bosses, chests, the Satanic Zone, and every finished session kept with a shareable card. |
+| ✅ **Alerts** | Per-rarity sounds, minimum grade, custom filters with their own lists and sounds, and the loot-pillar announcement — on one page. |
+| ✅ **Overlay** | Click-through when locked, its own placement, hotkeys, tray, compact and dashboard faces. |
+| ✅ **Linux** | Builds and runs; on Wayland it runs as the dashboard, and says so instead of pretending the overlay works. |
+| ✅ **Backup** | Every setting, filter, list and sound in one file. |
+| 🚧 **Item data from the game** | Drop rates, names, rarity, grade and drop zones are now read out of the game's own files instead of a datamining site. Drop rates agree with the game's journal exactly; rarity matches the old source on 1552 items of 1577, grades on every named item. |
+| 🚧 **The last field** | One piece of item identity still comes from that outside source. Until it is derived locally, an item added by a game patch is known by rarity and grade but cannot yet be named from a packet. |
+| 🔜 **Polish** | Layout on small windows, Linux packaging, and the long tail of things that only show up in someone else's session. |
+
+Nothing here is a promise of a date. It is where the work actually is.
+
 ## Showcase
 
-| Statistics | Sound Filter |
+| Statistics | Alerts |
 | --- | --- |
-| ![Statistics](screenshots/statistics.png) | ![Sound Filter](screenshots/sound-filter.png) |
+| ![Statistics](screenshots/statistics.png) | ![Alerts](screenshots/sound-filter.png) |
 
-| Sounds | Shopping List |
+| Sounds — now part of Alerts | Shopping List |
 | --- | --- |
 | ![Sounds](screenshots/sounds.png) | ![Shopping list](screenshots/shopping-list.png) |
 
