@@ -4,6 +4,7 @@
   import { listen } from './bridge.js';
   import { ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { RARITIES, soundUrl, play } from './audio.js';
+  import { ALL_BUFFS, ALL_BUFF_IDS } from './buffs.js';
 
   // only named items can be listed: an ordinary base has no identity of its own
   const NAMED = [
@@ -99,6 +100,23 @@
     const on = new Set(settings.flourish_rarities ?? []);
     on.has(name) ? on.delete(name) : on.add(name);
     settings.flourish_rarities = [...on];
+    save();
+  }
+
+  function toggleBuff(id) {
+    const on = new Set(settings.zone_buffs ?? ALL_BUFF_IDS);
+    on.has(id) ? on.delete(id) : on.add(id);
+    settings.zone_buffs = [...on];
+    save();
+  }
+
+  function selectAllBuffs() {
+    settings.zone_buffs = [...ALL_BUFF_IDS];
+    save();
+  }
+
+  function selectNoBuffs() {
+    settings.zone_buffs = [];
     save();
   }
 
@@ -541,6 +559,32 @@
       </div>
     </div>
 
+    <div class="section" style:border-image-source="url({art('chip_dark')})">
+      <div class="sechead sec-split" data-tauri-drag-region>
+        <span>Satanic zone buffs — alert when these appear</span>
+        <div class="sec-actions">
+          <button class="link" onclick={selectAllBuffs}>all</button>
+          <span class="sep">·</span>
+          <button class="link" onclick={selectNoBuffs}>none</button>
+        </div>
+      </div>
+      <div class="grid buff-grid">
+        {#each ALL_BUFFS as b}
+          {@const on = (settings.zone_buffs ?? ALL_BUFF_IDS).includes(b.id)}
+          <button
+            class="secopt buff-opt"
+            class:off={!on}
+            onclick={() => toggleBuff(b.id)}
+            title="{b.name} : {b.desc}"
+          >
+            <img class="check-img" src={on ? art('check_on') : art('check_off')} alt="" />
+            <img class="buff-img" src={b.icon} alt="" />
+            <span class="buff-name">{b.name}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
     {#if canAnnounce}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
         <div class="sechead" data-tauri-drag-region>Announcement — the loot pillar over the screen</div>
@@ -571,6 +615,19 @@
               The custom filter is switched off below, so this does nothing yet.
             </div>
           {/if}
+
+          <div class="line">
+            <button
+              class="check"
+              onclick={() => { settings.flourish_zone = !(settings.flourish_zone ?? true); save(); }}
+              aria-label="announce satanic zone"
+            >
+              <img src={(settings.flourish_zone ?? true) ? art('check_on') : art('check_off')} alt="" />
+            </button>
+            <span class="opt" title="Announce the Satanic Zone and its buffs with the loot pillar when it rotates">
+              Announce Satanic Zone Buffs
+            </span>
+          </div>
 
           <div class="grid">
             {#each ALERT_RARITIES as name}
@@ -943,6 +1000,9 @@
     grid-template-columns: 1fr 1fr;
     gap: 2px 10px;
   }
+  .buff-grid {
+    gap: 2px 8px;
+  }
   .secopt {
     display: flex;
     align-items: center;
@@ -958,6 +1018,35 @@
   }
   .secopt img { width: 19px; height: 19px; flex: none; }
   .secopt:hover { color: var(--bone-13); }
+  .buff-opt {
+    gap: 5px;
+    min-width: 0;
+  }
+  .buff-opt.off { opacity: 0.5; }
+  .buff-opt .check-img { width: 16px; height: 16px; flex: none; }
+  .buff-opt .buff-img { width: 18px; height: 18px; flex: none; }
+  .buff-opt .buff-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+  .sec-split {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .sec-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .sec-actions .sep {
+    color: var(--edge-2b);
+    font-size: 10px;
+  }
 
   input[type='range'] {
     flex: 1 1 auto;

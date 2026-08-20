@@ -520,8 +520,12 @@ impl GameStats {
 
     /// Has the satanic zone moved since this was last asked? Taken rather than
     /// read, so one rotation is announced once however often the pusher looks.
-    pub fn take_zone_change(&mut self) -> bool {
-        self.sz_changed.take().is_some()
+    pub fn take_zone_change(&mut self) -> Option<SatanicZone> {
+        if self.sz_changed.take().is_some() {
+            self.satanic.clone()
+        } else {
+            None
+        }
     }
 
     /// Add the time spent in the current room to its total and start counting
@@ -1188,12 +1192,8 @@ impl GameStats {
                 }
             }
             GameEvent::SatanicZone { zone, buffs, debuffs } => {
-                // A zone we already had and no longer have is the rotation; a
-                // zone where there was none is this process finding out where
-                // the zone is, which is not news the player asked to hear. Nor
-                // is the first packet after a reset — see `stale_zone`.
-                let moved = self.satanic.as_ref().is_some_and(|s| s.zone != *zone);
-                if moved && !self.stale_zone {
+                let moved = self.satanic.as_ref().map_or(true, |s| s.zone != *zone);
+                if moved || self.stale_zone {
                     self.sz_changed = Some(Instant::now());
                 }
                 self.stale_zone = false;
@@ -2425,26 +2425,24 @@ mod tests {
     #[test]
     fn only_a_real_rotation_announces_the_satanic_zone() {
         let mut s = GameStats::default();
-        // The client repeats the zone in every heartbeat, so this is what a
-        // tracker started between rotations sees: the same zone, over and over.
+        // The first packet announces the initial zone.
         s.apply(&satanic_zone("Act_08_02"));
-        assert!(!s.take_zone_change(), "learning where the zone is is not it moving");
+        assert!(s.take_zone_change().is_some(), "learning where the zone is announces it");
         s.apply(&satanic_zone("Act_08_02"));
-        assert!(!s.take_zone_change(), "the same zone said twice is one zone");
+        assert!(s.take_zone_change().is_none(), "the same zone said twice is one zone");
 
         s.apply(&satanic_zone("Act_03_01"));
-        assert!(s.take_zone_change(), "the zone moved");
-        assert!(!s.take_zone_change(), "and it is announced once, not until the next look");
+        assert!(s.take_zone_change().is_some(), "the zone moved");
+        assert!(s.take_zone_change().is_none(), "and it is announced once, not until the next look");
 
-        // A reset is the player starting a new session — and the game starting
-        // is one too, which is the case that matters: the zone travels across
-        // it, the game has been closed for an hour, and where the zone has got
-        // to in the meantime is news to this app rather than news to tell.
+        // A reset or restart also announces the zone on the first packet.
         s.reset();
         s.apply(&satanic_zone("Act_11_01"));
-        assert!(!s.take_zone_change(), "a reset must not be reported as a rotation");
+        assert!(s.take_zone_change().is_some(), "a reset reports the zone");
         // and the zone that packet named is the zone from then on
+        s.apply(&satanic_zone("Act_11_01"));
+        assert!(s.take_zone_change().is_none(), "repeating the same zone does not re-announce");
         s.apply(&satanic_zone("Act_02_04"));
-        assert!(s.take_zone_change(), "the first packet after a reset re-arms it");
+        assert!(s.take_zone_change().is_some(), "the zone moving again announces it");
     }
 }

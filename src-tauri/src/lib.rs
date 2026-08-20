@@ -146,6 +146,10 @@ fn ghost_default() -> bool {
     cfg!(windows)
 }
 
+fn default_zone_buffs() -> Vec<u8> {
+    (1..=25).collect()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct SoundCfg {
@@ -206,6 +210,9 @@ pub struct Settings {
     /// The satanic zone rotating: its chime, its volume, and — because the two
     /// are one decision — whether the overlay's zone chip pulses with it.
     pub zone: SoundCfg,
+    /// Which satanic zone buffs trigger a zone change alert
+    #[serde(default = "default_zone_buffs")]
+    pub zone_buffs: Vec<u8>,
     /// rarities worth announcing at all, and the tier they must reach
     pub alerts: Vec<String>,
     pub min_tier: i64,
@@ -251,6 +258,8 @@ pub struct Settings {
     /// it again in the announcement's own switches is how a filter comes to
     /// look as though it does nothing.
     pub flourish_listed: bool,
+    /// Announce satanic zone rotations with the loot pillar over the screen.
+    pub flourish_zone: bool,
     /// Keep the announcement window on screen between drops, drawing nothing.
     /// OBS can only capture a window that exists, and this one otherwise
     /// appears for a few seconds and is gone again. Off by default: a window
@@ -289,6 +298,7 @@ impl Default for Settings {
             // the player is meant to act on, and it happens while they are
             // looking at the fight rather than at us.
             zone: SoundCfg::default(),
+            zone_buffs: default_zone_buffs(),
             alerts: stats::JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
             min_tier: 0,
             notable: stats::default_notable()
@@ -310,10 +320,9 @@ impl Default for Settings {
             theme: "default".into(),
             stream: false,
             stream_port: 4600,
-            // On out of the box. Off, with the narrowest band it has, it
-            // announced nothing at all — which reads as a broken feature
-            // rather than an unset one, and cost a bug report saying so.
-            flourish: true,
+            // Off by default: it is a window over the game, and that is the
+            // player's screen to give away, not ours to take.
+            flourish: false,
             flourish_scale: 1.0,
             flourish_shade: 0.55,
             flourish_secs: 6.0,
@@ -324,6 +333,7 @@ impl Default for Settings {
             // grade 1 is D, which this slider reads as "any"
             flourish_tier: 1,
             flourish_listed: false,
+            flourish_zone: true,
             flourish_always: false,
             discord: false,
             compact: false,
@@ -1018,8 +1028,8 @@ fn spawn_stats_pusher(app: AppHandle) {
             // And the same for the zone moving on: the overlay is the window
             // that plays sounds whether it is on screen or not, and a player
             // who has hidden it still wants to know the drops got better.
-            if app.state::<Shared>().stats.lock().unwrap().take_zone_change() {
-                let _ = app.emit("zone-changed", ());
+            if let Some(zone) = app.state::<Shared>().stats.lock().unwrap().take_zone_change() {
+                let _ = app.emit("zone-changed", &zone);
             }
 
             let (main, dashboard) = (visible("main"), visible("dashboard"));
@@ -1536,6 +1546,22 @@ pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
     let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", drop);
     show_flourish(app, &w);
+}
+
+#[tauri::command]
+fn trigger_zone_flourish(app: AppHandle, zone: String, buffs: Vec<u8>) {
+    if !FLOURISH.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(w) = app.get_webview_window("flourish") else { return };
+    let payload = serde_json::json!({
+        "kind": "zone",
+        "rarity": "Satanic",
+        "name": zone,
+        "buffs": buffs,
+    });
+    let _ = app.emit_to("flourish", "flourish-play", &payload);
+    show_flourish(&app, &w);
 }
 
 /// On screen without taking the keyboard, click-through, and where the player
@@ -2637,6 +2663,7 @@ pub fn run() {
             fit_overlay,
             flourish_done,
             place_flourish,
+            trigger_zone_flourish,
             hide_window,
             hide_dashboard,
             compact_mode,

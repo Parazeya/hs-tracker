@@ -2,7 +2,7 @@
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen, native } from './bridge.js';
-  import { buffInfo, defaultBuffIcon, zoneName, icon } from './buffs.js';
+  import { buffInfo, defaultBuffIcon, zoneName, icon, ALL_BUFF_IDS } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
   import { fmt } from './format.js';
 
@@ -96,12 +96,31 @@
       // The rotation, from the backend, which only says so for a real one —
       // never for the zone this app has just learned about. Chime and pulse
       // answer to the one switch: they are two halves of the same alert.
-      listen('zone-changed', () => {
+      listen('zone-changed', (e) => {
         if (cfg?.zone?.enabled === false) return;
+        const allowed = cfg?.zone_buffs ?? ALL_BUFF_IDS;
+        const buffs = e.payload?.buffs ?? snap?.satanic_zone?.buffs ?? [];
+
+        // Checks the buffs you enabled in ALERTS and plays sound only if one is found in current zone
+        if (Array.isArray(buffs) && buffs.length > 0) {
+          const hasEnabled = buffs.some((b) => allowed.includes(b));
+          if (!hasEnabled) return;
+        } else if (allowed.length < ALL_BUFF_IDS.length) {
+          return;
+        }
         playSound('zone');
         zoneMoved = true;
         clearTimeout(zoneTimer);
         zoneTimer = setTimeout(() => (zoneMoved = false), ZONE_ALERT_MS);
+
+        // Shows on loot pillar if enabled
+        if (cfg?.flourish && (cfg?.flourish_zone ?? true)) {
+          const zoneRaw = e.payload?.zone ?? snap?.satanic_zone?.zone ?? '';
+          invoke('trigger_zone_flourish', {
+            zone: zoneName(zoneRaw),
+            buffs: buffs,
+          }).catch(() => {});
+        }
       }),
       listen('settings-changed', (e) => (cfg = e.payload)),
       listen('strip-hover', (e) => {

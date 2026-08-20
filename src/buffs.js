@@ -89,6 +89,16 @@ export function buffInfo(id) {
   return { name: b[0], desc: b[1], icon: ic };
 }
 
+export const ALL_BUFFS = Object.entries(BUFFS).map(([id, [name, desc]]) => ({
+  id: Number(id),
+  name,
+  desc,
+  icon: buffIcons[`./assets/buffs/${id}.png`] ?? defaultBuffIcon,
+}));
+
+export const ALL_BUFF_IDS = ALL_BUFFS.map((b) => b.id);
+export { BUFFS };
+
 export { defaultBuffIcon };
 
 // "Satanic_5_5" → "Act 5 : Temple of Zamjo"

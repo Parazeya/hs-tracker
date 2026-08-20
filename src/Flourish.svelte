@@ -9,6 +9,7 @@
   import { appWindow, invoke, listen, native } from './bridge.js';
   import { itemName, tierLabel, typeLabel } from './items.js';
   import { art } from './skin.svelte.js';
+  import { buffInfo } from './buffs.js';
 
   const RARITY_TINT = {
     Satanic: '#ca1717',
@@ -143,9 +144,22 @@
       <div class="sparks over"></div>
       {#if drop}
         <div class="caption">
-          <span class="rar">{drop.rarity}</span>
-          <span class="name">{label}</span>
-          {#if drop.tier > 0}<span class="grade">{tierLabel(drop.tier)}</span>{/if}
+          <div class="caption-head">
+            <span class="rar">{drop.kind === 'zone' ? 'Satanic Zone' : drop.rarity}</span>
+            <span class="name">{label}</span>
+            {#if drop.tier > 0}<span class="grade">{tierLabel(drop.tier)}</span>{/if}
+          </div>
+          {#if drop.buffs && Array.isArray(drop.buffs) && drop.buffs.length > 0}
+            <div class="zone-buffs">
+              {#each drop.buffs as bId}
+                {@const b = buffInfo(bId)}
+                <div class="zone-buff-pill" title={b ? `${b.name} : ${b.desc}` : ''}>
+                  {#if b?.icon}<img class="buff-icon" src={b.icon} alt="" />{/if}
+                  <span class="buff-text">{b?.name ?? `Buff ${bId}`}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -285,12 +299,47 @@
   .caption {
     position: relative;
     display: flex;
-    align-items: baseline;
-    gap: 8px;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
     font-size: 19px;
     white-space: nowrap;
     text-shadow: 0 2px 0 #000, 0 0 12px #000, 0 0 24px var(--tint);
     opacity: 0;
+  }
+  .caption-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .zone-buffs {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    max-width: 90vw;
+  }
+  .zone-buff-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(10, 8, 8, 0.85);
+    border: 1px solid var(--tint);
+    border-radius: 4px;
+    padding: 3px 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  }
+  .zone-buff-pill .buff-icon {
+    width: 18px;
+    height: 18px;
+    flex: none;
+  }
+  .zone-buff-pill .buff-text {
+    color: #f4e6bb;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 2px #000;
   }
   .fx.playing .caption {
     animation: rise var(--in) ease-out forwards,
