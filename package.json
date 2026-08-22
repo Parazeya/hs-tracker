@@ -1,6 +1,6 @@
 {
   "name": "hs-tracker",
-  "version": "0.9.93",
+  "version": "0.9.94",
   "description": "HS Tracker — Hero Siege session tracker with a pinned on-screen overlay.",
   "private": true,
   "type": "module",
@@ -13,6 +13,7 @@
     "items": "node scripts/update-items.mjs",
     "tauri": "tauri",
     "ship": "node scripts/ship.mjs",
+    "publish": "node scripts/publish.mjs",
     "test": "node scripts/test.mjs",
     "deb": "node scripts/build-linux.mjs",
     "all": "node scripts/build-all.mjs"

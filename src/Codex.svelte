@@ -18,6 +18,7 @@
     typeLabel,
   } from './items.js';
   import { art } from './skin.svelte.js';
+  import { recall, remember } from './bridge.js';
 
   /// Built once: the tables are keyed by lowercase name, and one item can wear
   /// several ids, so the first sighting of a name wins.
@@ -62,9 +63,9 @@
   // Cards first: what the page is asked is "where do I farm this", and in the
   // table that answer is the fifth column of a row. The choice outlives the
   // window the way the dashboard's section does.
-  let view = $state(localStorage.getItem('codex-view') === 'table' ? 'table' : 'cards');
+  let view = $state(recall('codex-view') === 'table' ? 'table' : 'cards');
   $effect(() => {
-    localStorage.setItem('codex-view', view);
+    remember('codex-view', view);
   });
 
   const odds = (rate) =>
@@ -123,8 +124,8 @@
           <span class="hname">Item</span>
           <span class="hkind">Kind</span>
           <span class="hgrade">Grade</span>
-          <span class="hrate">Anywhere</span>
-          <span class="hchase">Where it is tied</span>
+          <span class="hrate">Chance</span>
+          <span class="hchase">Drop location</span>
         </div>
 
         <div class="rows" role="list">
@@ -212,10 +213,16 @@
     color: var(--bone-6);
   }
 
-  .tools { display: flex; gap: 6px; align-items: center; }
+  /* and when even the floor does not fit, the row wraps rather than overflowing */
+  .tools {
+    flex-wrap: wrap; display: flex; gap: 6px; align-items: center; }
   .find {
     flex: 1 1 auto;
-    min-width: 0;
+    /* A floor, because everything beside it refuses to shrink: the three
+       selects size to their widest option and the view buttons are fixed, so
+       at the 620px minimum the search box — the thing the page is for — was
+       the only thing left to take the space out of. */
+    min-width: 9rem;
     box-sizing: border-box;
     font: inherit;
     font-size: 12px;

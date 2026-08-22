@@ -7,6 +7,7 @@ import heroicWav from './assets/sounds/heroic.wav';
 import angelicWav from './assets/sounds/angelic.wav';
 import unholyWav from './assets/sounds/unholy.wav';
 import mailWav from './assets/sounds/mail.wav';
+import zoneMp3 from './assets/sounds/zone.mp3';
 
 /// Every key that owns a sound of its own. Two of them are not rarities at all
 /// — the mail chime and the satanic zone rotating — and they are on this list
@@ -20,18 +21,18 @@ export const DEFAULTS = {
   angelic: angelicWav,
   unholy: unholyWav,
   mail: mailWav,
-  // No file of its own is shipped for the zone: the satanic chime is the right
-  // sound for the satanic zone moving, and borrowing it means the alert works
-  // out of the box. Browse… puts any other file over it, as for every key here.
-  zone: satanicWav,
+  // The rotation gets a sound of its own rather than borrowing the satanic
+  // chime it used to: the two mean different things and were told apart only by
+  // where on the screen something happened. Browse… puts any other file over
+  // it, as for every key here.
+  zone: zoneMp3,
 };
 
 // A custom file beside the exe wins over the built-in chime. It is streamed
 // through the asset protocol; only if that is unavailable do we fall back to
 // hauling the whole file over IPC as a data URL.
 export async function soundUrl(rarity) {
-  // a page in a browser has no files beside an executable, and a stream does
-  // not want the alerts twice
+  // there are no files beside the executable when there is no executable
   if (!native) return null;
   try {
     const path = await invoke('sound_path', { rarity });

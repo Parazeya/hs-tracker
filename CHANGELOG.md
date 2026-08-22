@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.9.94 — 2026-08-22
+
+### Fixed
+
+- **Turning on the loot pillar froze the whole app.** Switching the
+  announcement on built its window from inside a synchronous Tauri command, and
+  a window is built by the event loop — which on Windows is the very thread that
+  command is running on. The two waited for each other forever: every tab went
+  empty, Compact mode stopped answering, the close button stopped answering, and
+  the only way out was the task manager. The setting even unticked itself
+  afterwards, because the save that would have written it never returned. The
+  window is now built off that thread, so no command can do this again whoever
+  calls it. Reported by Mindusz and by one other player, whose settings file
+  showed the one thing needed to trigger it: the pillar switched off.
+- **Npcap being installed and being usable are different things.** Its own
+  installer has a box marked "Restrict Npcap driver's access to Administrators
+  only", and with it ticked the app was refused the adapter and reported "Npcap
+  is not installed" — sending players to install what they already had. The two
+  states are now told apart, and the second one says what to do about it.
+- **Split messages were being thrown away.** A message cut across a TCP flush
+  was only carried if nothing inside it had closed yet — but every drop answer
+  has a closed item object in it long before the end, so a drop cut this way was
+  never counted, never chimed and never journalled. Tails larger than 8 KB were
+  refused outright, which is every large answer the game sends: the biggest is
+  35 KB.
+- **Gold earned could read zero for a whole session.** The mark that stops a
+  balance climbing back to a level it has already held from counting as income
+  survived a change of purse, so a player whose seasonal purse was empty while
+  the blood pact one held a million and a half had every later penny measured
+  against the wrong peak. It was persisted into the run history that way too.
+- The room a Reset carried over started no clock, so the run card's "where it
+  happened" was empty for a run that happened in one room. The graph's points
+  were stamped with a clock that steps backwards when the idle watch back-dates
+  a pause, so the line doubled back and ran off the canvas.
+- **Fifteen items were announced as something else.** Rarity, grade and drop
+  chance were keyed on the name the game prints, and eleven of those names
+  belong to two different items that disagree: the relic "Death's Scythe" is a
+  Common D and the polearm of that name is a Set S, so picking up the relic
+  played the Set chime, coloured the announcement green and filed it in the Set
+  column. A name two items disagree about now answers nothing, and the packet's
+  own claim about the item stands instead.
+- "Show it in the folder" opened the wrong folder on every install, because the
+  product's own name has a space in it and the argument was quoted where
+  Explorer wanted it raw.
+- Closing the dashboard on a session with no tray left a process running with
+  nothing on screen and no way back, and the single-instance guard then
+  swallowed every relaunch.
+- A window that fails to start now says so in something opaque with a working
+  close button, instead of leaving an invisible rectangle that answers no click.
+  A panel that throws no longer takes the sidebar, Compact mode and the close
+  button down with it. Reading a remembered preference can no longer take a
+  window with it either.
+
+### Changed
+
+- **The drops panel follows the Satanic Zone**, not the room under your feet.
+  The game names the room only in its own state packet and, since the August
+  patch, sends that about twenty times less often than it used to — so the panel
+  sat for hours on a zone the player had left three acts ago. The satanic zone
+  is announced by name over and over, and it is the one worth reading a drop
+  list for. Where you are is shown as the act, which every save states.
+- The zone is marked **unconfirmed** once the rotation has come round since the
+  game last asked the server, rather than stating an hours-old answer as this
+  hour's.
+- Act 9 has drop locations at last. They were read from the game's own words for
+  where things drop rather than from a datamined snapshot that predates the act:
+  27 items moved, 5 gained a location, none were lost. Chase rates are computed
+  from the rate the game states now instead of being carried from that snapshot.
+- Every command that touches a file now runs off the interface thread, so a save
+  landing while an antivirus holds the file no longer stops the window answering.
+- On Windows the log opens with which Windows, which WebView2 and where the app
+  is installed. A log with none of that in it is what the last freeze report
+  arrived with.
+
 ## 0.9.93 — 2026-08-18
 
 ### Changed

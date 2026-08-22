@@ -23,12 +23,14 @@ The pieces of the Rust side, in the order data moves through them:
 | `lib.rs` | Windows, tray, hotkeys, settings, commands. |
 | `presence.rs` | The Discord status. |
 | `log.rs` | Panics, warnings and whatever the front end throws, appended to `hs-tracker.log`. A released build has no console, so nothing else survives. |
-| `stream.rs` | A loopback HTTP server that serves the front end and a snapshot stream, so OBS can add the overlay as a Browser Source. |
 
-The front end is drawn twice: in the app's windows, where Tauri is under it, and
-in a browser, where it is not. Everything goes through `src/bridge.js` — it
-answers from Tauri when there is Tauri and over HTTP when there is not, and a
-page in a browser can read but never command.
+The front end runs in the app's own windows and nowhere else. It went through
+`src/bridge.js` to reach the backend when there was a second way in — a page
+served to OBS as a Browser Source — and it still does, because the guard is
+worth keeping: a component rendered by a webview with no Tauri under it gets
+nothing back rather than an exception in a transparent window.
+
+There is one route into OBS now, and it is a window capture. See the README.
 
 Two things worth knowing before changing anything:
 

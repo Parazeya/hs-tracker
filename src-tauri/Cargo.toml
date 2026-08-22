@@ -1,6 +1,6 @@
 [package]
 name = "hs-tracker"
-version = "0.9.93"
+version = "0.9.94"
 description = "HS Tracker — Hero Siege session tracker overlay"
 edition = "2021"
 # The tree uses `is_multiple_of` (1.87) and `is_none_or` (1.82); the lock file

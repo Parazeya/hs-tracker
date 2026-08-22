@@ -41,34 +41,83 @@ window.addEventListener('unhandledrejection', (e) => {
 // The skin is chosen once, before anything is drawn, so no window ever flashes
 // in the wrong colours. Every window follows the same setting, and a change in
 // Settings reaches the others through the event the backend already emits.
-import { invoke, listen, native, view } from './bridge.js';
+import { invoke, listen, native, recall, remember } from './bridge.js';
 
 const wearTheme = (name) => {
   const root = document.documentElement;
   if (name && name !== 'default') root.setAttribute('data-theme', name);
   else root.removeAttribute('data-theme');
-  localStorage.setItem('theme', name ?? 'default');
+  remember('theme', name ?? 'default');
   // the sprites follow the palette; both halves of a skin move together
   wearSkin(name);
 };
 // The settings live in the backend, and asking for them is a round trip — long
 // enough to draw one frame in the wrong colours. The last answer is kept here
 // and worn immediately; the real one arrives a moment later and corrects it.
-wearTheme(localStorage.getItem('theme'));
+wearTheme(recall('theme'));
 invoke('get_settings')
   .then((s) => wearTheme(s?.theme))
   .catch(() => {});
 listen('settings-changed', (e) => wearTheme(e.payload?.theme));
 
-// In one of the app's own windows the label says which face to draw. Served to
-// a browser — OBS's Browser Source — there is no window to ask, so the address
-// says instead: /?view=overlay or /?view=dashboard.
-const label = native ? getCurrentWebviewWindow().label : view;
+// The window's own label says which face to draw. There is one other way in —
+// a webview built without Tauri under it, which is what a test harness gets —
+// and it draws the overlay, the same as an unlabelled window would.
+const label = native ? getCurrentWebviewWindow().label : 'main';
 const roots = { dashboard: Dashboard, ticker: Ticker, flourish: Flourish };
 
-const app = mount(roots[label] ?? App, {
-  target: document.getElementById('app'),
-});
+// Nothing drew, and every window here is transparent.
+//
+// A page that throws on its way up leaves an invisible rectangle: no panel, no
+// close button, no drag region, nothing on screen to tell it from a working
+// window over something dark. Clicks land on it and nothing answers, and the
+// only way out is the task manager — which is exactly the report this app has
+// had from a Windows user. The backend cannot help: it sees a window it built
+// and shown, and `ui_ready` never arriving only reaches the log.
+//
+// So if the interface cannot start, it says so in something opaque and puts a
+// button on it that closes the window.
+function lastResort(err) {
+  const said = `${err?.stack || err?.message || err}`;
+  try {
+    invoke('report', { level: 'error', message: `the interface did not start: ${said}` });
+  } catch {
+    // the bridge itself is what failed; the panel below is all that is left
+  }
+  const root = document.getElementById('app') ?? document.body;
+  root.innerHTML = '';
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'font:13px/1.5 system-ui,sans-serif;box-sizing:border-box;height:100vh;padding:16px;' +
+    'display:flex;flex-direction:column;gap:10px;background:#151016;color:#e8dfd4';
+  const head = document.createElement('b');
+  head.textContent = 'HS Tracker could not start its interface.';
+  const why = document.createElement('pre');
+  why.style.cssText = 'flex:1;margin:0;overflow:auto;white-space:pre-wrap;font-size:11px;opacity:.75';
+  why.textContent = said;
+  const shut = document.createElement('button');
+  shut.textContent = 'Close';
+  shut.style.cssText = 'align-self:flex-start;padding:6px 14px;cursor:pointer';
+  shut.onclick = () => {
+    try {
+      getCurrentWebviewWindow().destroy();
+    } catch {
+      window.close();
+    }
+  };
+  panel.append(head, why, shut);
+  root.append(panel);
+  document.documentElement.style.background = '#151016';
+}
+
+let app;
+try {
+  app = mount(roots[label] ?? App, {
+    target: document.getElementById('app'),
+  });
+} catch (e) {
+  lastResort(e);
+}
 
 // Tell the backend a page really did paint. Every window here is transparent,
 // so a renderer that dies leaves an *invisible* window rather than a blank one

@@ -1,5 +1,5 @@
 <script>
-  import { appWindow, invoke } from './bridge.js';
+  import { appWindow, invoke, recall, remember } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import Stats from './Stats.svelte';
@@ -33,12 +33,23 @@
 
   // the section survives a hide/show, which is what makes the sidebar feel
   // like one window rather than four
-  let section = $state(localStorage.getItem('section') ?? 'stats');
+  //
+  // Checked against the list it is restored into: a section that was removed by
+  // an update is still sitting in the browser's storage on the machines that
+  // had it open, and a name nothing answers to was carried on being reported to
+  // the backend. It gates the heavy statistics payload, so Statistics drew but
+  // its timeline and its graph never moved and no tab looked selected — which
+  // reads exactly like the window being broken, until the next click on a tab
+  // quietly repairs it.
+  const remembered = recall('section');
+  let section = $state(
+    SECTIONS.some((s) => s.id === remembered) ? remembered : 'stats'
+  );
 
   // the backend pushes the heavy statistics payload only while it is the
   // section on screen, so it has to be told which one that is
   $effect(() => {
-    localStorage.setItem('section', section);
+    remember('section', section);
     invoke('viewing', { section }).catch(() => {});
   });
 
@@ -77,6 +88,13 @@
         title: 'Npcap is not installed',
         detail:
           'It is the driver that lets the app read the game’s traffic. Without it nothing can be counted. Get it from npcap.com — its defaults are right.',
+      };
+    if (status === 'no-access')
+      return {
+        bad: true,
+        title: 'Npcap is installed, but this app may not use it',
+        detail:
+          'Npcap has an option called “Restrict Npcap driver’s access to Administrators only”. With it on, only an elevated program can read traffic. Either run HS Tracker as administrator, or reinstall Npcap from npcap.com with that box unticked.',
       };
     if (status === 'no-capture')
       return {
@@ -171,7 +189,22 @@
           {#if trouble.fix}<code class="tf">{trouble.fix}</code>{/if}
         </div>
       {/if}
-      <div class="content"><Current /></div>
+      <!-- One section that throws must not take the window with it.
+           Without this the sidebar, Compact mode and the close button go down
+           with whatever panel failed, and the window is transparent, so what is
+           left on screen is nothing at all. -->
+      <div class="content">
+        <svelte:boundary onerror={(e) => invoke('report', { level: 'error', message: `${section}: ${e?.stack ?? e}` }).catch(() => {})}>
+          <Current />
+          {#snippet failed(error, reset)}
+            <div class="broke">
+              <div class="tt">This panel stopped working.</div>
+              <div class="td">{error?.message ?? error}</div>
+              <button onclick={reset}>Try again</button>
+            </div>
+          {/snippet}
+        </svelte:boundary>
+      </div>
     </div>
   </div>
 
@@ -411,6 +444,34 @@
 
   /* Above whatever section is open, because it explains all of them at once.
      Amber for something to wait out, crimson for something to go and fix. */
+  /* A panel that threw. It wears the same clothes as `.trouble` because it is
+     the same kind of news, and it keeps the window's own chrome alive around
+     it — which is the whole point of the boundary it renders inside. */
+  .broke {
+    margin: 10px;
+    padding: 8px 10px;
+    border-left: 3px solid #ca1717;
+    background: rgba(150, 37, 56, 0.18);
+    font-family: 'CookieRun Bold', sans-serif;
+  }
+  .broke .tt { font-size: 13px; color: #ff7a7a; }
+  .broke .td {
+    font-size: 11px;
+    color: var(--bone-7);
+    line-height: 1.45;
+    margin: 2px 0 8px;
+    font-family: ui-monospace, Consolas, monospace;
+  }
+  .broke button {
+    font: inherit;
+    font-size: 11px;
+    padding: 4px 12px;
+    cursor: pointer;
+    color: var(--bone-11);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
   .trouble {
     flex: none;
     margin-bottom: 6px;

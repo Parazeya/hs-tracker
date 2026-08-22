@@ -5,7 +5,7 @@
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
-  import { buffInfo, debuffInfo, zoneName } from './buffs.js';
+  import { buffInfo, debuffInfo, zoneAct, zoneName } from './buffs.js';
   import {
     ITEMS,
     DROP_CHASE,
@@ -19,13 +19,14 @@
     tierLabel,
     typeLabel,
     zoneCode,
-    zoneLabel,
   } from './items.js';
   import { fmt, difficulty, RARITIES, RARITY_CLASS } from './format.js';
 
   let snap = $state(null);
   let extra = $state(null);
-  let canvas;
+  // See App.svelte: a `bind:this` an effect reads has to be state, or it
+  // works only for as long as nothing is ever conditional.
+  let canvas = $state(null);
 
   // pushed by the backend, and only while this window is on screen
   let clock = $state({ secs: 0, at: Date.now() });
@@ -111,8 +112,15 @@
     return parts.length ? `last from the game · ${parts.join(' · ')}` : '';
   });
 
-  let buffs = $derived((snap?.satanic_zone?.buffs ?? []).slice(0, 4).map(buffInfo));
-  let debuffs = $derived((snap?.satanic_zone?.debuffs ?? []).slice(0, 4).map(debuffInfo));
+  // Four fit. A rotation can carry five, and the box used to cut the list
+  // there and say nothing — the two columns read as complete and were not.
+  const SHOWN = 4;
+  let allBuffs = $derived(snap?.satanic_zone?.buffs ?? []);
+  let allDebuffs = $derived(snap?.satanic_zone?.debuffs ?? []);
+  let buffs = $derived(allBuffs.slice(0, SHOWN).map(buffInfo));
+  let debuffs = $derived(allDebuffs.slice(0, SHOWN).map(debuffInfo));
+  let moreBuffs = $derived(Math.max(0, allBuffs.length - SHOWN));
+  let moreDebuffs = $derived(Math.max(0, allDebuffs.length - SHOWN));
 
   // the window is resizable, so the graph is redrawn at whatever size the box
   // ends up being rather than stretched from the size it was first drawn at
@@ -138,6 +146,31 @@
       in: dur(Math.max(0, Math.floor((next.getTime() - nowTick) / 1000))),
     };
   });
+
+  // Whether the zone on screen is still the one the server is running.
+  //
+  // The game asks the server only as part of saving, and it saves when it feels
+  // like it — measured at up to twenty-four minutes standing still. So the zone
+  // here is an answer that was true when it was given, and the rotation does not
+  // wait for the next save: stand still across :30 and this box goes on naming
+  // the previous half hour's zone, listing its buffs and its drops, next to a
+  // countdown that has already run out. Close the game and it repeats that
+  // answer for as long as the window is open.
+  //
+  // It cannot be fixed by asking — nothing here can ask the server, it only
+  // reads the replies the game gets. What it can do is stop stating it as fact.
+  let zoneStale = $derived.by(() => {
+    const at = snap?.satanic_at;
+    if (!at) return false;
+    const since = new Date(nowTick);
+    since.setMinutes(since.getMinutes() < 30 ? 0 : 30, 0, 0);
+    return at < since.getTime();
+  });
+  let zoneSeen = $derived(
+    snap?.satanic_at
+      ? new Date(snap.satanic_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+      : ''
+  );
 
   function dropLabel(d) {
     if (d.name) return d.name;
@@ -261,33 +294,60 @@
           ? `1/${(rate / 1e3).toFixed(rate >= 1e4 ? 0 : 1)}k`
           : `1/${rate}`;
 
-  // Only what is tied to the ground under your feet. Tied is not exclusive:
-  // the item drops anywhere, it just rolls on a far better chance here — the
-  // one the game prints in green — so that is the number worth showing.
-  let here = $derived.by(() => {
-    const code = zoneCode(snap?.room);
-    if (!code) return [];
-    return TIED.filter(({ codes }) => codes.includes(code))
-      .map(({ key }) => {
-        const base = DROP_RATE[key] ?? 0;
-        const chase = DROP_CHASE[key] ?? base;
-        return {
-          name: PROPER.get(key) ?? key,
-          rarity: RARITY_BY_NAME[key],
-          tier: TIER_BY_NAME[key] ?? 0,
-          rate: chase,
-          hint: `1 in ${chase.toLocaleString('en-US')} here, 1 in ${base.toLocaleString('en-US')} anywhere${
-            DROP_PLACES[key] ? ` · ${DROP_PLACES[key].join(', ')}` : ''
-          }`,
-        };
-      })
-      .sort((a, b) => b.tier - a.tier || a.rate - b.rate);
-  });
+  // Only what is tied to one patch of ground. Tied is not exclusive: the item
+  // drops anywhere, it just rolls on a far better chance there — the one the
+  // game prints in green — so that is the number worth showing.
+  const detail = (key) => {
+    const base = DROP_RATE[key] ?? 0;
+    const chase = DROP_CHASE[key] ?? base;
+    return {
+      name: PROPER.get(key) ?? key,
+      rarity: RARITY_BY_NAME[key],
+      tier: TIER_BY_NAME[key] ?? 0,
+      rate: chase,
+      hint: `1 in ${chase.toLocaleString('en-US')} in the zone, 1 in ${base.toLocaleString('en-US')} anywhere${
+        DROP_PLACES[key] ? ` · ${DROP_PLACES[key].join(', ')}` : ''
+      }`,
+    };
+  };
+  const byWorth = (a, b) => b.tier - a.tier || a.rate - b.rate;
+  const pick = (want) => TIED.filter(({ codes }) => codes.some(want)).map(({ key }) => detail(key)).sort(byWorth);
+
+  // The satanic zone, not the room the player is standing in.
+  //
+  // Where the player is standing is the one thing the game will not say. It
+  // names the room only in its own state packet, and since the August 2026
+  // patch that arrives about twenty times less often than it used to — 7.6
+  // packets per thousand against 163 — mostly while the map is open. Nothing
+  // else on the wire carries it: not the save's 131 fields, not the drop
+  // packets, not the market, not the chat. A list built on it sat for hours on
+  // a zone the player had left three acts ago.
+  //
+  // The satanic zone is the opposite: the server announces it by name, again
+  // and again, because every client has to agree on it. It is also the zone
+  // worth reading a drop list for, so this answers the question that can be
+  // answered exactly instead of guessing at the one that cannot.
+  let szCode = $derived(zoneCode(snap?.satanic_zone?.zone));
+  let here = $derived(szCode ? pick((c) => c === szCode) : []);
+
+  // The game says outright when the character is standing in the satanic zone,
+  // but that flag rides the same scarce heartbeat the room did — so it is held
+  // against the act, which every save write states. Walk into another act and
+  // the chip goes, even though no heartbeat has said so yet.
+  let szHere = $derived(Boolean(snap?.satanic_here && snap?.act && zoneAct(snap?.satanic_zone?.zone) === snap.act));
 
   // A drop worth hearing next time is easiest to add the moment it lands, so
   // the timeline can push a name straight into a list of the active filter.
   let settings = $state(null);
   let adding = $state(null);
+
+  /// Bring a just-opened popup fully into the scroller it lives in.
+  ///
+  /// `block: 'nearest'` moves the list as little as it can, so a picker that is
+  /// already visible does not make the page jump under the cursor.
+  function reveal(node) {
+    node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
   let added = $state(null);
   let addedTimer;
 
@@ -327,23 +387,23 @@
       </button>
       <div class="card" style:border-image-source="url({art('chip_dark')})">
         <div class="label">Gold</div>
-        <div class="value c-gold">{fmt(snap?.gold.earned)}</div>
+        <div class="value c-gold">{fmt(snap?.gold?.earned)}</div>
         <div class="sub" title={snap?.carried_bank ? 'the balance the last run ended on — the game has not sent a new one yet' : 'bank balance as the game last reported it'}>
-          {fmt(snap?.gold.per_hour)}/h · bank {fmt(snap?.gold.total)}{snap?.carried_bank ? ' *' : ''}
+          {fmt(snap?.gold?.per_hour)}/h · bank {fmt(snap?.gold?.total)}{snap?.carried_bank ? ' *' : ''}
         </div>
       </div>
       <div class="card" style:border-image-source="url({art('chip_dark')})">
         <div class="label">XP</div>
-        <div class="value c-xp">{fmt(snap?.xp.earned)}</div>
+        <div class="value c-xp">{fmt(snap?.xp?.earned)}</div>
         <div class="sub" title="the big number is what this session earned; 'in level' is the game's own bar — the experience banked towards the next hero level">
-          {fmt(snap?.xp.per_hour)}/h · in level {fmt(snap?.xp.total)}
+          {fmt(snap?.xp?.per_hour)}/h · in level {fmt(snap?.xp?.total)}
         </div>
       </div>
       <div class="card" style:border-image-source="url({art('chip_dark')})">
         <div class="label">Kills</div>
-        <div class="value c-her">{fmt(snap?.kills.earned)}</div>
+        <div class="value c-her">{fmt(snap?.kills?.earned)}</div>
         <div class="sub" title={snap?.carried_totals ? 'the total the last run ended on — the game has not saved the character yet' : 'lifetime total as the game last saved it'}>
-          {fmt(snap?.kills.per_hour)}/h · total {fmt(snap?.kills.total)}{snap?.carried_totals ? ' *' : ''}
+          {fmt(snap?.kills?.per_hour)}/h · total {fmt(snap?.kills?.total)}{snap?.carried_totals ? ' *' : ''}
         </div>
       </div>
     </div>
@@ -431,7 +491,14 @@
             {#if lists.length && dropLabel(d)}
               <button class="tolist" title="Add to a sound list" onclick={() => (adding = adding === d.ts_ms ? null : d.ts_ms)}>+</button>
               {#if adding === d.ts_ms}
-                <div class="picker">
+                <!-- The timeline scrolls, and this opens inside it: on a drop
+                     in the lower half the list was simply cut off by the
+                     scroller. Scrolled to rather than repositioned, because
+                     the row it belongs to has to stay visible with it. -->
+                <div
+                  class="picker"
+                  use:reveal
+                >
                   {#each lists as list}
                     <button onclick={() => addTo(list, dropLabel(d))}>{list.name}</button>
                   {/each}
@@ -451,10 +518,18 @@
     <div class="box" style:border-image-source="url({art('chip_dark')})">
       <div class="box-head">
         <span class="accent">Satanic Zone</span>
+        {#if zoneStale}
+          <span class="stale" title="the rotation has come round since the game last asked the server, and the game asks only when it saves">
+            unconfirmed
+          </span>
+        {/if}
         <span class="right">resets in {zoneReset.in} · at {zoneReset.at}</span>
       </div>
       {#if snap?.satanic_zone}
-        <div class="szname">{zoneName(snap.satanic_zone.zone)}</div>
+        <div class="szname" class:unsure={zoneStale}>
+          {zoneName(snap.satanic_zone.zone)}
+          {#if zoneStale}<span class="seen">last confirmed {zoneSeen}</span>{/if}
+        </div>
         <div class="effects">
           <div class="effcol">
             <div class="effhead pros">Pros</div>
@@ -469,6 +544,10 @@
             {:else}
               <div class="buffdesc">—</div>
             {/each}
+            <!-- said rather than left off: four fit and a rotation can carry
+                 five, and a list that stops without saying so reads as the
+                 whole of it -->
+            {#if moreBuffs}<div class="buffdesc more">+{moreBuffs} more</div>{/if}
           </div>
           <div class="effcol">
             <div class="effhead cons">Cons</div>
@@ -482,6 +561,7 @@
             {:else}
               <div class="buffdesc">—</div>
             {/each}
+            {#if moreDebuffs}<div class="buffdesc more">+{moreDebuffs} more</div>{/if}
           </div>
         </div>
       {:else}
@@ -491,11 +571,19 @@
 
     <div class="box" style:border-image-source="url({art('chip_dark')})">
       <div class="box-head">
-        <span class="accent">Drops in this area</span>
-        {#if snap?.satanic_here}
-          <span class="szhere" title="the game reports this room as the Satanic Zone">Satanic Zone</span>
+        <span class="accent">Drops in the Satanic Zone</span>
+        {#if zoneStale}
+          <span class="stale" title="this list is for the zone last confirmed at {zoneSeen}; the rotation has come round since">
+            unconfirmed
+          </span>
         {/if}
-        <span class="right">{snap?.room ? zoneLabel(snap.room) : 'waiting for the game'}</span>
+        {#if szHere}
+          <span class="szhere" title="the game reports you as standing in it">you are here</span>
+        {/if}
+        <span class="right" title="the zone the server is running satanic this hour">
+          {#if snap?.satanic_zone}{zoneName(snap.satanic_zone.zone)}
+          {:else}waiting for the game{/if}
+        </span>
       </div>
       <div class="vitals">
         <span class="dim">Magic find</span>
@@ -506,6 +594,8 @@
         <b>{snap?.character?.level || '—'}</b>
         <span class="dim">Hero</span>
         <b>{snap?.character?.herolevel || '—'}</b>
+        <span class="dim" title="the act the character save last stated — the game no longer names the zone often enough to show one">Act</span>
+        <b>{snap?.act || '—'}</b>
       </div>
       {#if here.length}
         <div class="tied">
@@ -519,9 +609,9 @@
         </div>
       {:else}
         <div class="dim empty">
-          {snap?.room
-            ? 'nothing rolls better here than it does anywhere else'
-            : 'the area appears once the game reports it'}
+          {szCode
+            ? 'nothing rolls better there than it does anywhere else'
+            : 'the zone appears once the game announces it'}
         </div>
       {/if}
     </div>
@@ -663,6 +753,7 @@
   .picker {
     position: absolute;
     right: 8px;
+    top: 100%;
     z-index: 4;
     display: flex;
     flex-direction: column;
@@ -820,6 +911,18 @@
   .right { color: var(--edge-8); text-transform: none; letter-spacing: 0; }
 
   .szname { font-size: 15px; margin-bottom: 4px; }
+  /* Named, but no longer vouched for. Dimmed rather than hidden: it is still
+     the best answer there is, and a player who has not moved is probably still
+     standing in it. */
+  .szname.unsure { color: var(--bone-7); }
+  .seen { font-size: 11px; color: var(--bone-7); margin-left: 6px; }
+  .stale {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #d8a24a;
+    margin-left: 6px;
+  }
 
   .effects {
     display: flex;
@@ -896,7 +999,7 @@
   .c-sat { color: var(--rar-satanic); }
   .c-blue { color: var(--mf); }
   /* `.vitals b` is (0,1,1) and a bare class is (0,1,0), so the Magic Find figure
-     in "Drops in this area" — the flagship one — has been rendering bone all
+     in the drops panel — the flagship one — has been rendering bone all
      along and no change to .c-blue could reach it. */
   .vitals b.c-blue { color: var(--mf); }
   .c-myt { color: #c060e0; }
@@ -920,4 +1023,5 @@
 
   .c-gold { color: var(--gold-2); }
   .c-xp { color: #a06ae0; }
+  .buffdesc.more { opacity: 0.75; font-style: italic; }
 </style>

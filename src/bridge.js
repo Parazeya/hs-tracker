@@ -1,86 +1,68 @@
 // One way in for everything the windows ask of the backend.
 //
-// The same components are drawn twice: in the app's own windows, where Tauri is
-// there and every command works, and in a browser — OBS's Browser Source — where
-// none of it exists. Rather than two versions of each panel, both talk to this,
-// and it answers from whichever side it is on.
+// There used to be two sides to this: the app's own windows, where Tauri is
+// there and every command works, and a page served to OBS as a Browser Source,
+// where none of it exists. The served page is gone — it went with the little
+// HTTP server that fed it — so what is left is the one door, and the guards
+// that used to choose between two.
 //
-// The page on a stream reads and never commands: it shows the run, it does not
-// reset it. Anything that would change something answers with nothing.
+// The guards stay. `native` is what tells a Tauri window from anything else,
+// and the panels are drawn by a webview either way: a component that calls a
+// command while it is being rendered somewhere without one should get nothing
+// back, not an exception in a transparent window nobody can see fail.
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-/// Tauri puts this on the window before any of our code runs; a browser has no
-/// such thing, and that is the whole of the difference.
+/// Tauri puts this on the window before any of our code runs.
 export const native = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-/// Which face the page is showing when it is not in a window of its own —
-/// `?view=overlay` or `?view=dashboard`, as the addresses in Settings say.
-export const view = native
-  ? null
-  : new URLSearchParams(location.search).get('view') || 'overlay';
-
-const READS = {
-  snapshot: '/api/snapshot',
-  get_settings: '/api/settings',
-  get_runs: '/api/runs',
-};
-
 export async function invoke(command, args) {
-  if (native) return tauriInvoke(command, args);
-  const path = READS[command];
-  if (!path) return null;
-  const answer = await fetch(path, { cache: 'no-store' });
-  if (!answer.ok) throw new Error(`${command}: ${answer.status}`);
-  return answer.json();
-}
-
-const listeners = new Map();
-let events = null;
-
-function open() {
-  if (events) return;
-  events = new EventSource('/api/events');
-  // `flourish-play` is the same event the app's own window answers to, so the
-  // announcement panel needs no idea which side it is drawn on
-  for (const name of ['stats', 'flourish', 'drop']) {
-    events.addEventListener(name, (e) => {
-      let payload = null;
-      try {
-        payload = JSON.parse(e.data);
-      } catch {
-        return;
-      }
-      const to = { flourish: 'flourish-play', drop: 'drop-entry' }[name] ?? name;
-      for (const fn of listeners.get(to) ?? []) fn({ payload });
-    });
-  }
-  // EventSource reconnects on its own; nothing here has to
+  if (!native) return null;
+  return tauriInvoke(command, args);
 }
 
 export async function listen(name, handler) {
-  if (native) return tauriListen(name, handler);
-  open();
-  const list = listeners.get(name) ?? [];
-  list.push(handler);
-  listeners.set(name, list);
-  return () => {
-    const now = (listeners.get(name) ?? []).filter((f) => f !== handler);
-    listeners.set(name, now);
-  };
+  if (!native) return () => {};
+  return tauriListen(name, handler);
 }
 
-/// The window itself — minimise, drag, resize. A page in a browser has no window
-/// to speak of, so it gets one that politely does nothing.
+/// What the windows remember between sessions, and what to do when they cannot.
+///
+/// `localStorage` is not guaranteed to work. A WebView2 profile that is damaged,
+/// read-only or out of quota throws on the first touch of it, and this app read
+/// it at module scope, before the interface was mounted: the throw took the
+/// whole module with it. Every window here is transparent and has no frame, so
+/// what was left on screen was an invisible rectangle with no close button and
+/// no drag region — a window that answers no click and can only be ended in the
+/// task manager. A remembered tab is not worth that.
+export function recall(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function remember(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // A preference that cannot be written is a preference that lasts one
+    // session. The window stays up, which is the part that matters.
+  }
+}
+
+/// The window itself — minimise, drag, resize. Without Tauri under it there is
+/// no window to speak of, so it gets one that politely does nothing.
 const NOTHING = {
   minimize() {},
   hide() {},
   setFocus() {},
   startDragging() {},
   startResizeDragging() {},
-  label: view ?? 'browser',
+  label: 'none',
 };
 
 export function appWindow() {

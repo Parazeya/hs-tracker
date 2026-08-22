@@ -2,7 +2,7 @@
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen, native } from './bridge.js';
-  import { buffInfo, defaultBuffIcon, zoneName, icon } from './buffs.js';
+  import { buffInfo, defaultBuffIcon, zoneAct, zoneName, icon } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
   import { fmt } from './format.js';
 
@@ -94,8 +94,14 @@
       }),
       listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
       // The rotation, from the backend, which only says so for a real one —
-      // never for the zone this app has just learned about. Chime and pulse
-      // answer to the one switch: they are two halves of the same alert.
+      // never for the zone this app has just learned about, and never for one
+      // whose buffs the player did not ask to hear about. That last is decided
+      // there rather than here: the pillar asks the same question, and a rule
+      // written out twice in two languages is a rule that comes to disagree.
+      //
+      // Chime and pulse answer to the one switch: they are two halves of the
+      // same alert. The pillar has its own, because being shown and being told
+      // are not the same want.
       listen('zone-changed', () => {
         if (cfg?.zone?.enabled === false) return;
         playSound('zone');
@@ -139,10 +145,24 @@
     })
   );
 
+  // The game says outright when the character is standing in the satanic zone,
+  // and that is what colours the name here. The flag rides the game's own state
+  // packet, which since the August 2026 patch arrives about twenty times less
+  // often than it used to, so it is held against the act — which every save
+  // write states. Walk into another act and the colour goes, even though no
+  // heartbeat has said so yet.
+  let satanicHere = $derived(
+    Boolean(snap?.satanic_here && snap?.act && zoneAct(snap?.satanic_zone?.zone) === snap.act)
+  );
+
   // The window is only ever as tall as the panel inside it. Measuring here and
   // telling the backend keeps the two in step whatever rows are switched on —
   // and means adding a row to this file needs nothing done anywhere else.
-  let panelEl;
+  // `bind:this` writes this, and an effect reads it. As a plain `let` that
+  // works by the order the two happen to run in; behind an `{#if}` it would
+  // stop working with nothing to see — the overlay would simply never resize
+  // itself again.
+  let panelEl = $state(null);
   $effect(() => {
     if (!panelEl) return;
     const report = () => {
@@ -164,6 +184,8 @@
     }
     if (s === 'waiting-for-game') return { cls: 'warn', tip: 'Waiting for Hero Siege to start' };
     if (s === 'npcap-missing') return { cls: 'err', tip: 'Npcap is not installed — https://npcap.com' };
+    if (s === 'no-access')
+      return { cls: 'err', tip: 'Npcap will not let this app read traffic — run as administrator, or reinstall it without “Restrict to Administrators”' };
     // elsewhere libpcap is always there; what is missing is the right to use it
     if (s === 'no-capture') return { cls: 'err', tip: 'No capture device — the binary needs cap_net_raw' };
     return { cls: 'err', tip: 'No suitable network interface' };
@@ -307,10 +329,10 @@
     <div class="row" data-tauri-drag-region={drag}>
       <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="gold earned this session">
         <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
-        <span class="val">+{fmt(snap?.gold.earned)}</span>
+        <span class="val">+{fmt(snap?.gold?.earned)}</span>
       </div>
       <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="gold per hour">
-        <span class="val">{fmt(snap?.gold.per_hour)}/h</span>
+        <span class="val">{fmt(snap?.gold?.per_hour)}/h</span>
       </div>
       <!-- Kills is a statistic and has stopped standing in for the button. It
            used to render only when the Reset button was switched off or the
@@ -318,7 +340,7 @@
            you saw by accident. -->
       <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <span class="dot {status.cls}"></span>
-        <span class="val">{fmt(snap?.kills.earned)} kills</span>
+        <span class="val">{fmt(snap?.kills?.earned)} kills</span>
       </div>
     </div>
   {/if}
@@ -327,10 +349,10 @@
     <div class="row" data-tauri-drag-region={drag}>
       <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="experience earned this session">
         <img src={icon('xp')} alt="" class="ic" />
-        <span class="val">+{fmt(snap?.xp.earned)}</span>
+        <span class="val">+{fmt(snap?.xp?.earned)}</span>
       </div>
       <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="experience per hour">
-        <span class="val">{fmt(snap?.xp.per_hour)}/h</span>
+        <span class="val">{fmt(snap?.xp?.per_hour)}/h</span>
       </div>
       <!-- The cell the Reset button used to end the row with. The button was the
            only one that came and went — ghost mode draws none — so the panel
@@ -338,8 +360,9 @@
 
            SS is the top grade, and the number a run is judged by whatever colour
            the drops came out in. The backend has counted every grade all along;
-           this is the one worth a chip. The label is written out because this is
-           also the OBS browser source, where there is no tooltip to hover. -->
+           this is the one worth a chip. The label is written out rather than
+           left to a tooltip: this panel is what a capture card records, and
+           nobody hovers a video. -->
       <div
         class="chip md"
         style:border-image-source="url({art('chip_dark')})"
@@ -369,7 +392,7 @@
         style:background-image="url({art('header')})"
         data-tauri-drag-region={drag}
       >
-        <span class="zone-name" class:here={snap?.satanic_here}>
+        <span class="zone-name" class:here={satanicHere}>
           {snap?.satanic_zone ? zoneName(snap.satanic_zone.zone) : '—'}
         </span>
       </div>
@@ -544,7 +567,7 @@
   /* The grade, set the way the game sets it: full size and gold, with the count
      beside it in ordinary bone — the game's own tooltip reads "Tier SS, Requires
      Level 100" with exactly that split. Written out rather than left to a
-     tooltip because this component is also the OBS browser source, and nobody
+     tooltip because this panel is what a capture card records, and nobody
      hovers a video. Gold measures 10:1 on the plate. */
   .grade { color: var(--gold-2); letter-spacing: 1px; }
 
@@ -693,8 +716,12 @@
     );
     animation: zone-sweep 1.1s ease-out infinite;
   }
+  /* The rotation, which is news for four seconds. Deliberately not
+     `--rar-satanic`: that colour means "the room you are in is the satanic
+     one", and wearing it here said so for four seconds every rotation — and
+     outranked the real thing while it did. */
   .zone.moved .zone-name {
-    color: var(--rar-satanic);
+    color: #ffb08a;
     animation: zone-pulse 0.55s infinite;
   }
   @keyframes zone-sweep {

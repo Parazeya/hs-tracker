@@ -1,8 +1,12 @@
 name: release
 
+# Not on a tag any more. The packages are built on the maintainer's machine —
+# `npm run all` — and the release is cut with `npm run publish`, because a
+# hosted runner spent an evening timing out against a dead Ubuntu mirror while
+# the same build took four minutes here. Start it by hand when a second opinion
+# is wanted: the .rpm in particular is built on Fedora here and on Debian there,
+# and Fedora is the more careful place to record what the package depends on.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 # read-only by default; only the job that publishes the release asks for more

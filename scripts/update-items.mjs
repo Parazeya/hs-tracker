@@ -22,7 +22,7 @@ import { dirname, join, resolve } from 'node:path';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dry = process.argv.includes('--dry');
 
-import { EXTRACTOR } from './paths.mjs';
+import { EXTRACTOR, GAME } from './paths.mjs';
 
 const home = EXTRACTOR;
 if (!existsSync(join(home, 'target', 'release', 'hse-extractor.exe'))) {
@@ -68,5 +68,14 @@ if (dry) {
 copyFileSync(staged, target);
 console.log(`\n  installed ${target}\n`);
 
+// The generator reads the game too — for the translated names and the stat
+// labels — and it looks for it in the environment, which is not where this
+// checkout keeps that path. Told nothing it looked at a folder that does not
+// exist on this machine and fell back to the datamined names without failing,
+// so a season of renamed items would have gone in under last season's names.
 console.log('  $ python tools/gen_items.py\n');
-execFileSync('python', [join(root, 'tools', 'gen_items.py')], { cwd: root, stdio: 'inherit' });
+execFileSync('python', [join(root, 'tools', 'gen_items.py')], {
+  cwd: root,
+  stdio: 'inherit',
+  env: { ...process.env, HERO_SIEGE_BIN: GAME },
+});

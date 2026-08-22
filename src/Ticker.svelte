@@ -9,7 +9,10 @@
   const MAX_VISIBLE = 5;
 
   let entries = $state([]);
-  let enabled = $state(true);
+  // Off until the settings say otherwise. Starting on meant a drop that
+  // arrived in the moment before they loaded was shown by a ticker the player
+  // had switched off.
+  let enabled = $state(false);
   let nowTick = $state(Date.now());
   let nextKey = 0;
 

@@ -4,6 +4,7 @@
   import { listen } from './bridge.js';
   import { ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { RARITIES, soundUrl, play } from './audio.js';
+  import { ALL_BUFFS } from './buffs.js';
 
   // only named items can be listed: an ordinary base has no identity of its own
   const NAMED = [
@@ -102,6 +103,50 @@
     save();
   }
 
+  // Whether the buff list is on show. Local, and seeded from the setting
+  // rather than stored beside it: what is persisted is the list, and a second
+  // switch saying "the list is in use" is a second thing that can disagree
+  // with it.
+  // null means "not decided here yet", so the list itself answers. It has to
+  // go back to null whenever the settings are replaced from outside — a tray
+  // change, an import — or a player who had closed the picker would be shown
+  // "every rotation alerts" while a list carried over from the new settings
+  // quietly filtered them.
+  let picking = $state(null);
+  let pickingOn = $derived(picking ?? (settings?.zone_buffs?.length ?? 0) > 0);
+  let buffsPicked = $derived(settings?.zone_buffs?.length ?? 0);
+  let allBuffsPicked = $derived(buffsPicked === ALL_BUFFS.length);
+
+  function togglePicking() {
+    const on = !pickingOn;
+    picking = on;
+    // Switching the narrowing off switches it off, rather than hiding it: a
+    // list that goes on filtering out of sight is a silence with nothing on the
+    // page to account for it.
+    if (!on && buffsPicked) {
+      settings.zone_buffs = [];
+      save();
+    }
+  }
+
+  function toggleBuff(id) {
+    const on = new Set(settings.zone_buffs ?? []);
+    on.has(id) ? on.delete(id) : on.add(id);
+    // sorted, so the settings file does not churn its order on every click
+    settings.zone_buffs = [...on].sort((a, b) => a - b);
+    save();
+  }
+
+  function tickAllBuffs() {
+    settings.zone_buffs = ALL_BUFFS.map((b) => b.id);
+    save();
+  }
+
+  function clearBuffs() {
+    settings.zone_buffs = [];
+    save();
+  }
+
   function setVolume(key, v) {
     if (!settings?.[key] || settings[key].volume === v) return;
     settings[key].volume = v;
@@ -172,7 +217,7 @@
     invoke('get_settings').then((s) => (settings = s));
     refreshSounds();
     const unsubs = [
-      listen('settings-changed', (e) => (settings = e.payload)),
+      listen('settings-changed', (e) => ((settings = e.payload), (picking = null))),
       listen('sounds-changed', (e) => {
         refreshStatus(e.payload);
         refreshSounds();
@@ -499,12 +544,13 @@
       <!-- Also not a drop: the game moving the satanic zone, which is the one
            thing on the overlay worth leaving a fight for. One switch, because
            the chime and the chip's pulse are one alert told two ways — see
-           App.svelte. -->
+           App.svelte. The pillar has its own, under Announcement; which
+           rotations count at all is the section below. -->
       <div class="rrow" class:off={!settings.zone?.enabled}>
         <button class="check" onclick={() => { settings.zone.enabled = !settings.zone.enabled; save(); }} aria-label="satanic zone change">
           <img src={settings.zone?.enabled ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="rname c-sat" title="The satanic zone rotating: the chime, and the zone chip pulsing on the overlay">Zone change</span>
+        <span class="rname c-zone" title="The satanic zone rotating: the chime, and the zone chip pulsing on the overlay">Zone change</span>
         <input
           class="vol"
           type="range"
@@ -515,7 +561,7 @@
           oninput={(e) => setVolume('zone', e.currentTarget.value / 100)}
         />
         <span class="pct">{zoneVolume}%</span>
-        <span class="src" title={custom.zone ? `sounds/${custom.zone}` : 'built-in sound — the satanic chime'}>{custom.zone ?? 'built-in'}</span>
+        <span class="src" title={custom.zone ? `sounds/${custom.zone}` : 'built-in sound — the zone chime'}>{custom.zone ?? 'built-in'}</span>
         <div class="rbtns">
           <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('zone')}>Test</button>
           <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('zone')}>Browse…</button>
@@ -539,6 +585,63 @@
           {/each}
         </div>
       </div>
+    </div>
+
+    <!-- Outside the `canAnnounce` guard below on purpose: this narrows the
+         chime as much as the pillar, and the chime is the half that still works
+         on a session with no overlay at all. -->
+    <div class="section" style:border-image-source="url({art('chip_dark')})">
+      <div class="sechead" data-tauri-drag-region>Zone buffs — which rotations are worth the alert</div>
+      <div class="line">
+        <button class="check" onclick={togglePicking} aria-label="narrow the zone alert">
+          <img src={pickingOn ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="opt" title="A rotation is announced only when the zone it lands on carries at least one of the buffs you tick">
+          Only alert when the new zone rolls one of these buffs
+        </span>
+      </div>
+
+      {#if !pickingOn}
+        <div class="note">Every rotation alerts. Tick buffs to alert on fewer.</div>
+      {:else if buffsPicked === 0}
+        <!-- The one state a player can be misled by: the list is on show, it is
+             empty, and empty is not silence. Say so where they are looking. -->
+        <div class="note warn">Nothing ticked yet, so every rotation still alerts.</div>
+      {:else if allBuffsPicked}
+        <!-- Not quite the same as an empty list, and the difference is a
+             silence: a rotation the game gives no buffs at all matches nothing
+             on any list, and so does a buff this table does not know yet. An
+             empty list asks no question and lets both through. -->
+        <div class="note">
+          Every buff in the table ticked. A rotation with no buffs at all, or with one this
+          table does not know, still passes in silence — clear the list to hear every rotation.
+        </div>
+      {:else}
+        <div class="note">{buffsPicked} ticked — a rotation with none of them passes in silence.</div>
+      {/if}
+
+      {#if pickingOn}
+        <!-- Twenty-five rows is a third of the page, so they are only drawn
+             when they are being used; the line above says what they say. -->
+        <div class="grid buffs" class:none-yet={buffsPicked === 0}>
+          {#each ALL_BUFFS as b (b.id)}
+            {@const on = (settings.zone_buffs ?? []).includes(b.id)}
+            <button class="secopt buff" class:off={!on} onclick={() => toggleBuff(b.id)} title="{b.name} : {b.desc}">
+              <img src={on ? art('check_on') : art('check_off')} alt="" />
+              <img class="bicon" src={b.icon} alt="" />
+              <span class="bname">{b.name}</span>
+            </button>
+          {/each}
+        </div>
+        <div class="line ends">
+          <button class="link" onclick={tickAllBuffs}>tick all {ALL_BUFFS.length}</button>
+          <!-- Never "none": with an empty list meaning every rotation, a link
+               named as the opposite of "all" lands on the same behaviour. -->
+          <button class="link" class:armed={armed === 'zone-buffs'} onclick={() => danger('zone-buffs', clearBuffs)}>
+            {armed === 'zone-buffs' ? 'clear it?' : 'clear — alert on every rotation'}
+          </button>
+        </div>
+      {/if}
     </div>
 
     {#if canAnnounce}
@@ -569,6 +672,24 @@
           {#if settings.flourish_listed && !settings.use_filter}
             <div class="note warn">
               The custom filter is switched off below, so this does nothing yet.
+            </div>
+          {/if}
+
+          <div class="line">
+            <button
+              class="check"
+              onclick={() => { settings.flourish_zone = !settings.flourish_zone; save(); }}
+              aria-label="announce the satanic zone"
+            >
+              <img src={settings.flourish_zone ? art('check_on') : art('check_off')} alt="" />
+            </button>
+            <span class="opt" title="The satanic zone rotating gets the pillar too, drawn its own way — the zone and the buffs it rolled">
+              Announce the satanic zone when it rotates
+            </span>
+          </div>
+          {#if settings.flourish_zone && !settings.zone?.enabled}
+            <div class="note">
+              The chime for it is off above; the pillar still plays.
             </div>
           {/if}
 
@@ -735,7 +856,19 @@
         value={current.volume}
         oninput={(e) => { current.volume = +e.currentTarget.value; save(); }}
       />
-      <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={test}>Test</button>
+      <!-- A list with no file of its own has nothing of its own to play: when
+           one of its items drops it is announced by that item's rarity, and
+           which rarity that is depends on the item. So the button says so
+           rather than being pressed and doing nothing, which is what it did. -->
+      <button
+        class="btn"
+        style:--btn="url({art('button')})"
+        style:--btn-hover="url({art('button_hover')})"
+        style:--btn-down="url({art('button_down')})"
+        disabled={!status[soundKey]}
+        title={status[soundKey] ? "play this list’s sound" : "this list has no sound of its own — a drop on it is announced by the item’s rarity"}
+        onclick={test}
+      >Test</button>
       <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={pickSound}>Browse…</button>
     </div>
 
@@ -956,8 +1089,30 @@
     padding: 1px 0;
     text-align: left;
   }
-  .secopt img { width: 19px; height: 19px; flex: none; }
+  .secopt img { flex: none; }
   .secopt:hover { color: var(--bone-13); }
+  /* Twenty-five names in two columns. The longest, "Artifact Excavator", is
+     98px at this size against a 195px cell at the narrowest the window goes —
+     so they are set rather than measured, and the ellipsis is a belt. */
+  .buffs { gap: 2px 8px; }
+  .buff { gap: 5px; min-width: 0; }
+  /* Dimmed only once something is ticked, so the difference means something.
+     Dimming every row the moment the picker opens — which is the state it
+     always opens in — made the whole control read as disabled, at about 2:1
+     against the panel. */
+  .buff.off { opacity: 0.62; }
+  .buffs.none-yet .buff.off { opacity: 1; }
+  .buff img { width: 16px; height: 16px; }
+  .buff .bicon { width: 18px; height: 18px; }
+  .buff .bname {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+  .line.ends { justify-content: space-between; gap: 10px; }
 
   input[type='range'] {
     flex: 1 1 auto;
@@ -1348,4 +1503,15 @@
   .c-her { color: #35d3c1; }
   .c-ang { color: var(--gold-1); }
   .c-unh { color: #e04a7a; }
+  /* The rotation is not a rarity, and wearing the satanic red said it was —
+     one more colour in a column of five that all mean "an item this good".
+     This is the peach the announcement writes SATANIC ZONE in, which nothing
+     that drops owns. Mail, the other row here that is not a rarity, is gold
+     for the same reason. */
+  .c-zone { color: #ffb08a; }
+  /* Mail is not a rarity either, and this is the class it has always asked for
+     — it was simply never defined here, and styles are scoped, so the row
+     inherited the ordinary text colour and was the only one of the seven with
+     no colour of its own. */
+  .c-gold { color: var(--gold-1); }
 </style>

@@ -17,7 +17,13 @@ the drop that lands on the ground does not state one.
 import json
 import os
 import re
+import sys
 from pathlib import Path
+
+# Item names carry characters a Windows console's default code page cannot
+# encode, and printing one killed the run after the tables were already built.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 DATA = Path(__file__).parent / "data" / "helper" / "items.json"
 GAME = Path(os.environ.get("HERO_SIEGE_BIN", r"C:\Program Files (x86)\Steam\steamapps\common\HeroSiege\bin"))
@@ -25,7 +31,22 @@ OUT = Path(__file__).parent.parent / "src" / "items.js"
 OUT_RS = Path(__file__).parent.parent / "src-tauri" / "src" / "items.rs"
 
 # the five the tracker announces; the game's "Satanic Set" is the Set rarity
-RARITIES = {"Satanic": "Satanic", "Satanic Set": "Set", "Heroic": "Heroic", "Angelic": "Angelic", "Unholy": "Unholy"}
+# The tracker spells one rarity differently from the tables; everything else it
+# calls what the game calls it.
+RENAMED = {"Satanic Set": "Set"}
+
+# The five the tracker announces, chimes, counts and files in the journal. This
+# gates the drop rates, zones and places below — those are for chase items, and
+# emitting them for every white base would be noise.
+#
+# It does NOT gate the rarity itself, and that distinction is the whole point of
+# splitting it out. The name table used to hold only these five, so any other
+# item — a relic, a rune, a potion — had no rarity there and `resolve_rarity`
+# fell back to the packet, whose rarity field is documented in parser.rs as
+# taking two values over 6,617 rolls, one of which reads as "Angelic". A Common
+# relic was announced as a Heroic one, and a pickup could be filed under a
+# rarity the item never had.
+NOTABLE = {"Satanic", "Set", "Heroic", "Angelic", "Unholy"}
 
 # The ordinary bases are left out of the tables entirely, and that is what keeps
 # the identity triple unambiguous.
@@ -58,6 +79,11 @@ RARITIES = {"Satanic": "Satanic", "Satanic Set": "Set", "Heroic": "Heroic", "Ang
 # only when a NAMED item already claims its triple. That drops exactly the 412
 # losers and keeps the other 534 ordinary entries — and it needs no list of item
 # types, so a season that renumbers them cannot silently invalidate it.
+# What the engine leaves in a record that never states a drop rate — the game's
+# own way of saying "not from the world". `exe.rs` reads it out of the default
+# struct rather than assuming it, and calls it NO_DROP.
+NO_DROP = 50_000_000
+
 ORDINARY = {"Common", "Superior", "Rare"}
 TIERS = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5, "SS": 6}
 
@@ -348,6 +374,33 @@ def game_names() -> dict[str, str]:
     return names
 
 
+def room_names() -> dict[str, str]:
+    """room -> the name the game shows for it.
+
+    The client's heartbeat says where the character is by room: `Act_05_03`,
+    `Town_01_rm`, `Shadow_Realm_rm`. The tracker used to turn those into
+    "Act 5 . Zone 3" by arithmetic and anything else into the raw name with its
+    underscores swapped for spaces, which put "Shadow Realm rm" in front of the
+    player, suffix and all.
+
+    The game names every one of them itself, keyed by exactly the string the
+    heartbeat sends, so there is nothing to compose and nothing to guess: a
+    season that adds an act adds its rooms here with it.
+    """
+    out: dict[str, str] = {}
+    for path in sorted(GAME.glob("translations*.csv")):
+        for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+            key, _, rest = line.partition("|")
+            key = key.strip()
+            if not key or not rest:
+                continue
+            if not (re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*_rm", key) or re.fullmatch(r"Act_\d+_\d+", key)):
+                continue
+            name = rest.split("|")[0].strip()
+            if name:
+                out.setdefault(key, name)
+    return out
+
 def attribute_names() -> dict[str, str]:
     """key -> English label, as the game words the stat on a tooltip."""
     path = GAME / "translationsAttributes.csv"
@@ -371,8 +424,81 @@ def attribute_names() -> dict[str, str]:
 
 translations = game_names()
 attributes = attribute_names()
+rooms = room_names()
+
+# Which zones each act actually has, out of the rooms the game names: act 1 runs
+# to 6 and act 4 stops at 5. "Overworld" and a range that overshoots both need
+# this, and a season that adds an act brings its own answer with it.
+ACT_ZONES: dict[int, list[int]] = {}
+for room in rooms:
+    part = re.fullmatch(r"Act_(\d+)_(\d+)", room)
+    if part:
+        ACT_ZONES.setdefault(int(part.group(1)), []).append(int(part.group(2)))
+for numbers in ACT_ZONES.values():
+    numbers.sort()
+
+ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10}
+
+
+def place_codes(place: str) -> list[str]:
+    """The game's own words for where a thing drops, as the codes we key on.
+
+    `dropPlaces` is written to be read by a player — "Act IX Zone 4-5", "Act IV
+    Dungeons", "Act III Zone 1, 2, 5", a bare "Boss Dungeons" for a thing that
+    falls in all of them — and the panel needs "9-4" and "9-5", because that is
+    what the satanic zone announcement can be matched against.
+
+    Both say the same thing, and only one of them is current: `dropPlaces` is
+    read out of the game itself, while the locations in the datamined table are
+    a snapshot of some earlier season. They disagree for 19 items and the game
+    is right about all of them — The Colossal Avenger has moved from act 6 to
+    act 9, and the snapshot has never heard of act 9 at all.
+
+    Anything that is not an act answers nothing: "Grimbone" and "Crystal Chest"
+    and "Sheeponia (Inferno Only)" are places too, and they stay in `dropPlaces`
+    as the words they are.
+    """
+    text = place.strip().rstrip(".")
+    acts: list[int] = []
+    named = re.match(r"Act\s+([IVX]+(?:\s*&\s*[IVX]+)*)\s+(.+)", text, re.I)
+    if named:
+        for numeral in re.split(r"\s*&\s*", named.group(1)):
+            act = ROMAN.get(numeral.upper())
+            if act:
+                acts.append(act)
+        rest = named.group(2)
+    else:
+        # A bare "Dungeons" is every act's, which is how the snapshot has it too
+        acts = sorted(ACT_ZONES)
+        rest = text
+    if not acts:
+        return []
+
+    low = rest.strip().lower()
+    if low.startswith("boss dungeon"):
+        return [f"{act}-BD" for act in acts]
+    if low.startswith("dungeon"):
+        return [f"{act}-D" for act in acts]
+    if low.startswith("overworld"):
+        return [f"{act}-{zone}" for act in acts for zone in ACT_ZONES.get(act, [])]
+
+    listed = re.fullmatch(r"zones?\s+(.+)", low)
+    if not listed:
+        return []
+    wanted: set[int] = set()
+    for part in listed.group(1).split(","):
+        span = re.fullmatch(r"(\d+)\s*-\s*(\d+)", part.strip())
+        if span and int(span.group(1)) <= int(span.group(2)):
+            wanted.update(range(int(span.group(1)), int(span.group(2)) + 1))
+        elif part.strip().isdigit():
+            wanted.add(int(part.strip()))
+    return [f"{act}-{zone}" for act in acts for zone in sorted(wanted)]
+
 items, rarities, tiers, drops, zones, places, chases, rolls = {}, {}, {}, {}, {}, {}, {}, {}
 dropped: list[tuple[str, str, str]] = []
+# What each name is claimed to be, by every item that answers to it. See the
+# pruning below the loop.
+claimed: dict[str, set] = {}
 
 # Named items first, so a base can be checked against a settled table.
 ENTRIES = json.loads(DATA.read_text(encoding="utf-8"))
@@ -397,29 +523,74 @@ for entry in ENTRIES:
                 # Two NAMED items on one triple would mean the tables are lying
                 # about one of them, and no rule here could tell which.
                 print(f"warning: {key} is both {taken!r} and {name!r}")
-    rarity = RARITIES.get(meta.get("rarity"))
+    stated = meta.get("rarity")
+    rarity = RENAMED.get(stated, stated)
     if rarity:
         rarities.setdefault(name.lower(), rarity)
+    notable = rarity in NOTABLE
     tier = TIERS.get(meta.get("tier"))
     if tier:
         tiers.setdefault(name.lower(), tier)
     # "one in N" — the bigger the number, the rarer the drop
+    #
+    # Except for one number, which is not a chance at all. NO_DROP is what the
+    # engine leaves in a record that never sets a rate, and it means the item
+    # does not fall out of the world: it comes from a boss, a chest or a tower,
+    # and the place it comes from is in `dropPlaces` beside it. Passing it
+    # through printed "1/50M" against Grimbone's own helmet — a number a reader
+    # would take for a one-in-fifty-million chance rather than for silence.
+    # 1,058 of the 2,094 items carry it, 109 of them with a place named.
+    #
+    # Exactly that number, not everything above it. Three items are written with
+    # a rate rarer than the default and meant it: 50,696,969, 111,111,111 and
+    # 999,999,999 are hand-picked, and Lucifer's Crown really is one in a
+    # hundred and eleven million.
     rate = (entry.get("droprate") or {}).get("base")
-    if rarity and isinstance(rate, (int, float)) and rate > 0:
+    if notable and isinstance(rate, (int, float)) and rate > 0 and rate != NO_DROP:
         drops.setdefault(name.lower(), int(rate))
     # where it is tied to: "8-2" is act 8 zone 2, "-D" a dungeon, "-BD" a boss
     # dungeon. Being tied is not exclusivity — the item drops anywhere, just
     # several times more often there, which is the "chase" rate the game shows
     # in green on the tooltip.
-    codes = sorted({c for d in (meta.get("drop") or []) for c in (d.get("locations") or [])})
-    if rarity and codes:
-        zones.setdefault(name.lower(), codes)
-        best = [d["chase"] for d in (meta.get("drop") or []) if isinstance(d.get("chase"), (int, float)) and d["chase"] > 0]
-        if best:
-            chases.setdefault(name.lower(), int(min(best)))
     where = entry.get("dropPlaces")
     where = [where] if isinstance(where, str) else (where or [])
-    if rarity and where:
+    # Only from an entry that is an item. The table also carries the names of
+    # the categories themselves — `item_type_boots` is the word "Boots", with
+    # no identity, no rarity and no grade — and counting those as a second
+    # opinion made every base whose name matches its own category look
+    # disputed.
+    if rarity and isinstance(identity, list) and len(identity) == 3:
+        claimed.setdefault(name.lower(), set()).add(
+            (rarity, tier, rate if isinstance(rate, (int, float)) else None)
+        )
+    codes = sorted({c for place in where for c in place_codes(place)})
+    if not codes:
+        # The game named no place at all for this one — 23 items — so the
+        # snapshot is all there is. It is kept rather than dropped: stale is
+        # better than silent, and every code the game does state overrides it.
+        codes = sorted({c for d in (meta.get("drop") or []) for c in (d.get("locations") or [])})
+    if notable and codes:
+        zones.setdefault(name.lower(), codes)
+        # The chase rate is the base rate times a factor the game carries beside
+        # it — 142 of the snapshot's own chase numbers are exactly that product,
+        # and not one of them is anything else. Computing it from the rate the
+        # game states now keeps the pair in step through a season that retunes
+        # either half, which taking the snapshot's number does not.
+        factor = entry.get("chaseDropRate")
+        if isinstance(rate, (int, float)) and rate > 0 and rate != NO_DROP and isinstance(factor, (int, float)) and factor > 0:
+            # Truncated, not rounded: the snapshot's own chase numbers are the
+            # exact product with the fraction cut off, and matching that keeps
+            # a rebuild from moving 89 unrelated numbers by one.
+            chases.setdefault(name.lower(), max(1, int(rate * factor)))
+        else:
+            best = [
+                d["chase"]
+                for d in (meta.get("drop") or [])
+                if isinstance(d.get("chase"), (int, float)) and d["chase"] > 0 and d["chase"] != NO_DROP
+            ]
+            if best:
+                chases.setdefault(name.lower(), int(min(best)))
+    if notable and where:
         places.setdefault(name.lower(), sorted({str(w) for w in where}))
     if entry.get("stats"):
         rolls.setdefault(name.lower(), entry["stats"])
@@ -460,6 +631,48 @@ header = """// Generated by tools/gen_items.py — do not edit by hand.
 // Identities, rarities and grades: datamined tables from hero-siege-helper.
 // Display names: the game's own translationsItem.csv."""
 
+# A name two different items disagree about is not a name this app can answer
+# for.
+#
+# Everything below is keyed by the name the game prints, and eleven names belong
+# to two items that say different things about themselves: the orb "Angel" is a
+# Heroic SS and the gun of that name is a Satanic Set S; the relic "Death's
+# Scythe" is a Common D and the polearm is a Set S. The first one written won
+# and the second inherited its answer, so picking up a worthless relic played
+# the Set chime, coloured the announcement green, added to the Set column and
+# showed a drop chance belonging to a weapon.
+#
+# Nothing here can tell them apart, because the only thing this table is given
+# is the name — a drop that arrives through the chat line carries no identity at
+# all. So the name is dropped rather than answered wrongly, and the packet's own
+# claim about the item stands instead, which is right for both of them.
+#
+# Per table, not wholesale: two items can agree on what they are and still fall
+# at different rates, and that costs the Codex a number, not the rarity.
+def disagree(claims: set, field: int) -> bool:
+    return len({c[field] for c in claims}) > 1
+
+
+muddled = {
+    "rarity": {n for n, c in claimed.items() if disagree(c, 0)},
+    "tier": {n for n, c in claimed.items() if disagree(c, 1)},
+    "rate": {n for n, c in claimed.items() if disagree(c, 2)},
+}
+for name in muddled["rarity"]:
+    rarities.pop(name, None)
+for name in muddled["tier"]:
+    tiers.pop(name, None)
+for name in muddled["rate"]:
+    for table in (drops, chases, zones, places):
+        table.pop(name, None)
+for field, names in muddled.items():
+    if names:
+        print(f"note: {len(names)} names two items disagree about, so no {field}: {', '.join(sorted(names))}")
+
+rs_rooms = sorted(rooms.items())
+
+rooms_js = json.dumps(rooms, ensure_ascii=False, separators=(",", ":"))
+
 out = rf"""{header}
 // Item identity is (type, gameId, weaponType); key "type:id:wt".
 
@@ -484,17 +697,31 @@ export const DROP_CHASE = {json.dumps(chases, ensure_ascii=False, separators=(",
 // the same in words, for bosses and chests that have no zone code
 export const DROP_PLACES = {json.dumps(places, ensure_ascii=False, separators=(",", ":"))};
 
-/// "Act_08_02" is what the game calls the room; the tables call it "8-2".
-export function zoneCode(room) {{
-  const m = /^Act_(\d+)_(\d+)/i.exec(String(room ?? ''));
+/// The zone's code, out of whatever the game called it.
+///
+/// The room is "Act_08_02" and the satanic zone announcement is "SZ_8_2" — the
+/// same patch of ground, spelled two ways, and the tables call it neither: they
+/// call it "8-2". Both spellings end in the act and the zone, so both read the
+/// same way.
+export function zoneCode(name) {{
+  const m = /^(?:Act|SZ|Satanic)_(\d+)_(\d+)/i.exec(String(name ?? ''));
   return m ? `${{Number(m[1])}}-${{Number(m[2])}}` : null;
+}}
+
+export const ROOMS = {rooms_js};
+
+/// What the game calls a room, keyed by exactly the string the heartbeat sends.
+export function roomName(room) {{
+  return ROOMS[String(room ?? '')] ?? null;
 }}
 
 export function zoneLabel(room) {{
   const text = String(room ?? '');
+  const known = ROOMS[text];
+  if (known) return known;
   if (/^Town/i.test(text)) return 'town';
   const m = /^Act_(\d+)_(\d+)/i.exec(text);
-  return m ? `Act ${{Number(m[1])}} · Zone ${{Number(m[2])}}` : text.replace(/_/g, ' ');
+  return m ? `Act ${{Number(m[1])}} · Zone ${{Number(m[2])}}` : text.replace(/_rm$/i, '').replace(/_/g, ' ');
 }}
 
 export const TYPE_NAMES = {{
@@ -551,6 +778,7 @@ rs_items = sorted((rs_key(k), v) for k, v in items.items())
 rs_rarities = sorted(rarities.items())
 rs_tiers = sorted(tiers.items())
 
+
 rs_lines = [
     header.replace("//", "//", 1),
     "// Item identity is (type, id, weaponType), packed as (type << 24) | (id << 8) | wt.",
@@ -595,6 +823,23 @@ rs_lines += [
     "        .binary_search_by_key(&key.as_str(), |(k, _)| *k)",
     "        .ok()",
     "        .map_or(0, |i| TIER_BY_NAME[i].1 as i64)",
+    "}",
+    "",
+]
+rs_lines += [f"static ROOMS: [(&str, &str); {len(rs_rooms)}] = ["]
+rs_lines += [f"    ({rs_str(k)}, {rs_str(v)})," for k, v in rs_rooms]
+rs_lines += [
+    "];",
+    "",
+    "/// What the game calls the room the heartbeat named.",
+    "///",
+    "/// The heartbeat says `Act_05_03` or `Shadow_Realm_rm`; the game itself",
+    "/// calls those Fuji Coast and the Shadow Realm, keyed by exactly that",
+    "/// string. Composing a label out of the numbers instead reads acts and",
+    "/// zones correctly and everything else not at all — `Shadow_Realm_rm` came",
+    "/// out as \"Shadow Realm rm\", suffix and all, in the Discord presence.",
+    "pub fn room_name(room: &str) -> Option<&'static str> {",
+    "    ROOMS.binary_search_by_key(&room, |(k, _)| *k).ok().map(|i| ROOMS[i].1)",
     "}",
     "",
 ]

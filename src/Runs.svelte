@@ -13,7 +13,19 @@
   // tray, the game closing, the app quitting. So the list only grows while this
   // panel is open if one of those happens, and the event says when.
   $effect(() => {
-    const load = () => invoke('get_runs').then((list) => (runs = list ?? [])).catch(() => {});
+    // The list gains entries at the front, so the index of whatever is being
+    // read moves under it: a run filed while this panel was open slid the
+    // detail pane onto its neighbour. `started_ms` is the run's own identity
+    // and does not move.
+    const load = () =>
+      invoke('get_runs')
+        .then((list) => {
+          const was = runs[picked]?.started_ms;
+          runs = list ?? [];
+          const now = was == null ? -1 : runs.findIndex((r) => r.started_ms === was);
+          picked = now >= 0 ? now : 0;
+        })
+        .catch(() => {});
     load();
     const unsubs = [listen('runs-changed', load)];
     return () => unsubs.forEach((u) => u.then((f) => f()));

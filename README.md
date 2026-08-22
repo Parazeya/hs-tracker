@@ -25,8 +25,9 @@
 | --- | --- |
 | **Overlay** | A small always-on-top panel with the run so far. Lock it and it becomes click-through, so it never eats a click meant for the game. |
 | **Statistics** | Gold, xp and kills per hour, drops by rarity, magic find, bosses and chests, what rolls better in the zone you are standing in, and the Satanic Zone with a countdown to the next rotation. |
-| **Alerts** | One page: a sound per rarity, the grade a drop must reach, named lists of specific items with sounds of their own, and the announcement — all set side by side rather than three tabs apart. Alerts fire the moment an item hits the ground. |
+| **Alerts** | One page: a sound per rarity, the grade a drop must reach, named lists of specific items with sounds of their own, the satanic zone rotating, and the announcement — all set side by side rather than three tabs apart. Alerts fire the moment an item hits the ground. |
 | **Announcement** | A drop lands and the game's own loot pillar plays over the screen, wherever you have put it. It can follow the rarity switches or simply announce whatever your custom filter lists. |
+| **Satanic Zone** | The rotation gets a chime and an announcement of its own — a rift that opens across the screen with the new zone and the buffs it rolled, drawn so it is never mistaken for a drop. Tick the buffs worth leaving a fight for and the rest pass in silence; tick none and every rotation is announced. |
 | **Items** | Every named item, its drop chance, and the places it rolls better in. Search by name, rarity or kind. |
 | **Runs** | Every finished session kept — the rates, the finds, where the time went. **Copy card** turns one into a picture you can paste into a chat. |
 | **Pause** | By hand, or by itself after five quiet minutes, so a break does not end up in the per-hour figures. |
@@ -131,7 +132,7 @@ The app draws four windows. Each is transparent and can be captured on its own:
 | --- | --- | --- |
 | `HS Tracker — Overlay` | the compact panel | while you are in compact mode |
 | `HS Tracker Ticker` | drop names, under the overlay | for a few seconds after a drop |
-| `HS Tracker Flourish` | the announcement for a big drop | while it plays |
+| `HS Tracker Flourish` | the announcement for a big drop, and for the zone rotating | while it plays |
 | `HS Tracker` | the dashboard | while you are in dashboard mode |
 
 ### Capturing a window
@@ -152,16 +153,6 @@ while the dashboard is up, so its source stays empty until you switch back to
 compact mode. For the announcement there is **Keep its window on screen so OBS
 can capture it** in Settings, which leaves it there drawing nothing.
 
-### Or a browser source
-
-If you would rather these were on the stream and not on your screen, switch on
-**Serve the overlay to OBS** in Settings. **About** then lists an address per
-view — overlay, dashboard, announcement — and the size to give the source.
-
-Add them as **Browser Sources**. The pages are the app's own, transparent, served
-on `127.0.0.1` and nowhere else, and they only ever show what the app already
-shows.
-
 ## If something does not work
 
 **Send the log.** The app writes what goes wrong to `hs-tracker.log` beside its
@@ -172,6 +163,20 @@ line saying which version started, and nothing about you.
 **The numbers stay at zero.** The app has to be allowed to read network traffic:
 on Windows that means Npcap, on Linux the packaged install does it for you and an
 AppImage needs the `setcap` line above.
+
+**The satanic zone alert came late, or not until I moved.** It arrives when the
+game next asks the server where the zone is, and the game asks as part of saving.
+Playing saves constantly, so while you are killing things the alert lands within
+seconds of the rotation. Standing still saves nothing, so nothing asks — and the
+rotation waits. Timed here across two real rotations: **thirteen seconds while
+playing, twenty-four minutes standing away from the keyboard.**
+
+Entering or reloading a zone makes the game ask straight away, which is why
+moving appears to summon the alert. This one is not fixable from here: the app
+reads the game's traffic and has no way to ask the server anything itself.
+
+Zones rotate on the half hour, at :00 and :30 — Statistics counts down to the
+next one, and that countdown is right whether or not the alert has arrived yet.
 
 ### On Linux
 

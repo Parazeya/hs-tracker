@@ -71,6 +71,9 @@ pub enum GameEvent {
         /// the game says which in its own field — so "Hell" alone was never the
         /// whole answer to what a character is playing.
         hell_sub: i64,
+        /// Which act the character is in, or 0 — see `act_of`. The room itself
+        /// only ever comes with the heartbeat; this comes with every save.
+        act: i64,
         kills: i64,
         /// every `statistic…` counter the save carries, by flattened name —
         /// bosses put down, chests opened, floors cleared, deaths
@@ -82,11 +85,17 @@ pub enum GameEvent {
     /// what the same heartbeat says about the character: magic find, the two
     /// levels, and whether the room it is in is the satanic zone
     Vitals {
-        mf: i64,
+        /// absent where the packet did not state it — see `dict_to_events`
+        mf: Option<i64>,
         level: i64,
         hlevel: i64,
-        satanic_here: bool,
+        satanic_here: Option<bool>,
     },
+    /// The client asking the server where the satanic zone is. It carries the
+    /// identifier of the region it is asking on behalf of, and the reply that
+    /// follows answers for that region and no other — which is the whole reason
+    /// this is an event rather than noise. See `GameStats`.
+    ZoneRegion(String),
     /// A find the server put in chat: "Ragnar just found [Azazel's Despair]".
     /// The line goes to everybody on the shard, so who found it matters — it
     /// is only ours when the name is ours. Answered in `GameStats`, which is
@@ -97,6 +106,14 @@ pub enum GameEvent {
     },
     ItemAdded {
         rarity: Value,
+        /// An Odyssey item the game did not flag as named. Odyssey keeps its
+        /// own item space, so neither its packet nor a name read out of the
+        /// seasonal tables says anything about what this is worth. A named
+        /// Odyssey item is exempt: `c == 1` is the game's own claim that this
+        /// is that item, and the tables are right about it whatever mode
+        /// dropped it — which is what keeps the Satanic count on an Odyssey
+        /// character correct.
+        unscaled: bool,
         mf: bool,
         tier: i64,
         item_type: i64,
@@ -128,9 +145,14 @@ const MAX_SPAN: usize = 256 << 10;
 /// its length. Openers that lead nowhere are what made the scan quadratic, and
 /// this is the ceiling that stops a buffer of them from stalling capture.
 const SCAN_BUDGET: usize = 8;
-/// A carried tail is the truncated end of one message. Anything bigger is a
-/// stray brace in framing noise — carrying that would stall capture forever.
-const CARRY_CAP: usize = 8 << 10;
+/// A carried tail is the truncated end of one message, so the cap has to clear
+/// the biggest message the game sends: 35,674 bytes in a 16,104-message capture.
+/// At 8 KB it did not, and the tail of every large answer — which is to say
+/// every answer that lists drops — was refused on length alone.
+///
+/// It is not what tells a real tail from framing noise any more; see
+/// `opens_a_value`. It is only a bound on what one flow may hold.
+const CARRY_CAP: usize = 64 << 10;
 const CARRY_ROUNDS: u8 = 3;
 const BUF_TTL: Duration = Duration::from_secs(15);
 /// What we send is only flushed when the ack changes, and the ack only changes
@@ -206,20 +228,35 @@ impl Reassembler {
     fn finish(&mut self, flow: Flow, flushed: Vec<u8>) -> Vec<u8> {
         // stitch the previous tail back on — unless it has been waiting for
         // its ending too long to be a real message
-        let mut data = match self.carry.remove(&flow) {
-            Some((tail, rounds)) if rounds < CARRY_ROUNDS => tail,
-            _ => Vec::new(),
+        // How many flushes this tail has already survived. It has to come out
+            // of the map with the tail: recomputing it from whether the tail was
+            // empty — which is what this did — made it 0 or 1 forever, so the
+            // count never reached CARRY_ROUNDS and the give-up test below could
+            // never fire.
+        let (mut data, rounds) = match self.carry.remove(&flow) {
+            Some((tail, rounds)) if rounds < CARRY_ROUNDS => (tail, rounds),
+            _ => (Vec::new(), 0),
         };
-        let rounds = if data.is_empty() { 0 } else { 1 };
         data.extend_from_slice(&flushed);
 
-        // A truncated message is the last thing in the stream: nothing whole
-        // follows it. If complete values do follow, the open bracket was just
-        // a framing byte and holding it back would stall capture for good.
+        // Is the unterminated value at the end a real message, or a framing
+        // byte that happens to be a brace?
+        //
+        // This used to ask whether anything complete followed the opener, on
+        // the reasoning that a truncated message is the last thing in the
+        // stream. It is — but the test cannot see that, because it reads what
+        // is INSIDE the truncated message: a drop answer whose first item
+        // object has already closed looks exactly like a stray brace with a
+        // whole message after it. Every split message with a closed value in it
+        // was thrown away, and a drop cut this way is never counted, never
+        // chimed and never journalled — nothing later recovers it.
+        //
+        // The two cannot be told apart by brackets at all: a stray brace never
+        // closes either, so everything after it counts as nested. What tells
+        // them apart is the next byte, which `opens_a_value` reads.
         let cut = unterminated_start(&data);
-        let truncated = cut < data.len()
-            && data.len() - cut <= CARRY_CAP
-            && !has_complete_json(&data[cut + 1..]);
+        let truncated =
+            cut < data.len() && data.len() - cut <= CARRY_CAP && opens_a_value(&data[cut..]);
         if truncated {
             let tail = data.split_off(cut);
             self.carry.insert(flow, (tail, rounds + 1));
@@ -248,15 +285,29 @@ impl Reassembler {
     }
 }
 
-fn has_complete_json(buf: &[u8]) -> bool {
-    let mut i = 0;
-    while i < buf.len() {
-        if (buf[i] == b'{' || buf[i] == b'[') && matching_json_end(buf, i).is_some() {
-            return true;
-        }
+/// Whether an unterminated opener reads as the beginning of a real value.
+///
+/// The game's messages are JSON objects whose first member is a quoted key. The
+/// framing bytes a stray brace lives in are binary, and a `{` in them is
+/// followed by whatever byte came next — `\x02` in the capture this is tested
+/// against. So the byte after the opener is the discriminator that the bracket
+/// structure cannot give: an object must be followed by a quote or its own
+/// close, and an array by something that can start a value.
+///
+/// A tail that ends at the opener itself is a truncation too, and the most
+/// ordinary one there is.
+fn opens_a_value(tail: &[u8]) -> bool {
+    let Some(&opener) = tail.first() else { return false };
+    let mut i = 1;
+    while tail.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
         i += 1;
     }
-    false
+    let Some(&next) = tail.get(i) else { return true };
+    match opener {
+        b'{' => next == b'"' || next == b'}',
+        b'[' => matches!(next, b'"' | b'{' | b'[' | b']' | b'-' | b't' | b'f' | b'n' | b'0'..=b'9'),
+        _ => false,
+    }
 }
 
 /// Index where a JSON value starts that never closes in this buffer, so the
@@ -525,6 +576,46 @@ fn json_end(b: &[u8], start: usize, walked: &mut usize) -> Option<usize> {
     found
 }
 
+/// Which act the character is in, out of the save.
+///
+/// The exact room is only ever in `game_state`, and the game sends that when it
+/// feels like it — in town, and when a panel is opened. A player grinding one
+/// zone can go a thousand packets without one, which left the zone panel saying
+/// "waiting for the game" for as long as they kept playing.
+///
+/// The save has no room in it, but it does carry `act_previous`, whose second
+/// element is the act. Checked against every room the same capture reported:
+/// `[1,7,..]` before `Act_07_05`, `[1,5,..]` before `Act_05_03`, `[1,4,..]`
+/// before `Town_04_rm`, and eight more, without an exception. It is coarser
+/// than a room, and it arrives with every save, which is often.
+fn act_of(d: &Value) -> i64 {
+    let from = |v: Option<&Value>| match v {
+        Some(Value::Array(xs)) => xs.get(1).and_then(as_int).unwrap_or(0),
+        _ => 0,
+    };
+    let direct = from(field_ref(d, &["act_previous", "actPrevious"]));
+    if direct > 0 {
+        return direct;
+    }
+    // the same save arrives wrapped as well as bare
+    match field_ref(d, &["slot_data", "slotData"]) {
+        Some(slot) => from(field_ref(slot, &["act_previous", "actPrevious"])),
+        None => 0,
+    }
+}
+
+/// A flag the game may send as a boolean or as a number.
+///
+/// `sz` was an integer once and is `true`/`false` now; reading it as an integer
+/// alone made every room a non-satanic one.
+fn as_bool(v: Option<&Value>) -> bool {
+    match v {
+        Some(Value::Bool(b)) => *b,
+        Some(other) => as_int(other) == Some(1),
+        None => false,
+    }
+}
+
 fn b64_json(s: &str) -> Option<Value> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(s.trim().as_bytes())
@@ -561,6 +652,9 @@ const ITEM_SIGNATURE_FIELDS: &[&str] = &["seed", "a", "itemId", "item_id", "gid"
 const ITEM_NAMED_SIGNATURE_FIELDS: &[&str] = &["seed", "itemId", "item_id", "gid"];
 const ITEM_RARITY_FIELDS: &[&str] = &["rarity", "itemRarity", "item_rarity", "d"];
 const SATANIC_ZONE_FIELDS: &[&str] = &["satanicZoneName", "satanic_zone_name"];
+const REGION_ID_FIELDS: &[&str] =
+    &["crossregion_identifier", "crossRegionIdentifier", "cross_region_identifier"];
+const ACCOUNT_ID_FIELDS: &[&str] = &["unique_account_id", "uniqueAccountId"];
 const ACCOUNT_SIGNATURE_FIELDS: &[&str] =
     &["name", "class", "class_id", "heroLevel", "herolevel", "season", "hardcore"];
 
@@ -593,6 +687,21 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
     // stands there. It arrives every few seconds, which is what makes it worth
     // reading — the character save, where most of these numbers also live,
     // arrives when the game feels like saving.
+    // The client's heartbeat, base64'd, in either of the two shapes it takes.
+    //
+    // One carries magic find and a satanic-zone flag; the other carries a
+    // session's telemetry — how long it has been logged in, how many pickups,
+    // which panel is open — and no magic find at all. They are not two versions
+    // of one packet, they are two reports about the same session, and which one
+    // arrives depends on where the character is: over a whole capture the first
+    // came 52 times from a town and once from anywhere else, while the second
+    // came 86 times and every single one of them from an act.
+    //
+    // So the second is the only thing that says where the player is while they
+    // are actually playing. Refusing it — which reading `reason_id` as "this is
+    // a crash report" did — leaves the whole zone panel waiting forever. Its
+    // `region` says "ERROR" and its `season` says 0, which is what made it look
+    // like wreckage; its room and its levels track the real ones exactly.
     if let Some(Value::String(blob)) = field(d, &["game_state", "gameState"]) {
         if let Some(state) = b64_json(&blob) {
             if let Some(room) = field_ref(&state, &["room"]).and_then(|v| v.as_str()) {
@@ -600,17 +709,22 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
                     events.push(GameEvent::Room(room.to_string()));
                 }
             }
-            let mf = int_field(&state, &["mf"]);
+            // Only what this packet actually carries. A field it does not
+            // mention is `None`, not zero: the heartbeat has grown a second
+            // shape before and it will again, and a missing number must leave
+            // the last real one standing rather than erase it.
+            let mf = has(&state, &["mf"]).then(|| int_field(&state, &["mf"]));
             let level = int_field(&state, &["level"]);
             let hlevel = int_field(&state, &["hlevel", "heroLevel", "herolevel"]);
-            if mf > 0 || level > 0 || hlevel > 0 {
+            if mf.is_some() || level > 0 || hlevel > 0 {
                 events.push(GameEvent::Vitals {
                     mf,
                     level,
                     hlevel,
                     // the game says outright whether this room is the satanic
                     // one; comparing zone codes was always a guess at it
-                    satanic_here: int_field(&state, &["sz"]) == 1,
+                    satanic_here: has(&state, &["sz"])
+                        .then(|| as_bool(field_ref(&state, &["sz"]))),
                 });
             }
         }
@@ -627,6 +741,9 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
         events.push(GameEvent::Found { finder, name });
     }
     events.extend(item_events(d));
+    if let Some(region) = zone_request_region(d) {
+        events.push(GameEvent::ZoneRegion(region));
+    }
     if has(d, SATANIC_ZONE_FIELDS) {
         events.push(satanic_event(d));
     }
@@ -655,6 +772,7 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
             herolevel: int_field(d, &["heroLevel", "herolevel"]),
             difficulty: int_field(d, &["difficulty"]),
             hell_sub: int_field(d, &["hell_subdifficulty", "hellSubdifficulty"]),
+            act: act_of(d),
             kills: int_field(
                 d,
                 &[
@@ -666,7 +784,28 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
             ),
             tallies: tallies(d),
         });
-    } else if !full_account && !identity_account && has(d, XP_GAIN_FIELDS) && !has(d, XP_TOTAL_FIELDS) {
+    // The guild share of somebody else's experience, and the one event here
+    // with no shape of its own to check against: a single field called `xp`.
+    //
+    // Field names are matched with the punctuation and case stripped out, which
+    // is what lets `experience_gained` and `experienceGained` be one rule — and
+    // it also means any two-letter key that normalises to `xp` matches. The
+    // capture filter takes every plaintext message this machine sends or
+    // receives, so that is not only the game: a junk packet from another device
+    // on the same network carried `"Xp\u{fffd}"`, matched, and was the only
+    // experience event in twenty-three thousand messages. It came to nothing
+    // because its value was not a number, but a number would have been divided
+    // by the guild share and credited.
+    //
+    // So this one is held to the same standard as the item path: it has to
+    // arrive in something shaped like a game message. Every one of them carries
+    // a `status` or a `message`; the junk packet carried two fields and neither.
+    } else if !full_account
+        && !identity_account
+        && (has(d, &["status"]) || !msg_text(d).is_empty())
+        && has(d, XP_GAIN_FIELDS)
+        && !has(d, XP_TOTAL_FIELDS)
+    {
         events.push(GameEvent::XpGain(xp_gain(d)));
     }
     events
@@ -802,6 +941,7 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         return candidates
             .into_iter()
             .filter(|(_, item)| int_field(item, &["c"]) == 1)
+            .filter(|(_, item)| !belongs_to_a_player(item))
             .map(|(fp, item)| (fp, item, true))
             .collect();
     }
@@ -815,6 +955,31 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         return vec![(own_fp, d.clone(), false)];
     }
     vec![]
+}
+
+/// Whether this item is in somebody's slot rather than lying on the ground.
+///
+/// The server answers "here is what dropped" and "here is what the merchant has"
+/// in the same shape, down to the message, which is `ok` for both. What tells
+/// them apart is what the item says about where it is: a thing on the ground has
+/// a place on the map, and a thing in a shop window has a player.
+///
+/// ```text
+///   on the ground   "gd": {"pos": [11, 0]}       (or {"bits", "pos"})
+///   in a shop       "gd": {"player": 0}
+/// ```
+///
+/// Opening the Black Market poured its whole stock into the journal as a
+/// cascade of finds at the player's feet — twenty-five named items in one
+/// packet, none of which had dropped. Over a session's capture the two never
+/// mix: every `{player}` sits in one of the two merchant listings and every
+/// `{pos}` in one of the three drop answers.
+///
+/// Refuses only what is provably a slot. An item that says nothing about where
+/// it is keeps being read as a drop, which is how the ordinary drop answer has
+/// always arrived.
+fn belongs_to_a_player(item: &Value) -> bool {
+    matches!(field_ref(item, &["gd"]), Some(Value::Object(map)) if map.contains_key("player"))
 }
 
 fn item_events(d: &Value) -> Vec<GameEvent> {
@@ -833,8 +998,19 @@ fn fingerprint_type(fingerprint: Option<&str>) -> Option<i64> {
 
 /// Packet rarity is unreliable (inventory syncs report Common/Rare for
 /// Satanic gear); the wiki-sourced rarity of the resolved NAME wins over it.
-pub fn resolve_rarity(packet: &Value, name: &str) -> String {
-    let known = if name.is_empty() { None } else { crate::items::rarity_by_name(name) };
+pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool) -> String {
+    // An item off a scale these tables do not read claims nothing at all.
+    //
+    // This used to fall out by accident: the name table held only the five
+    // rarities worth announcing, so an ordinary item found nothing there and
+    // the packet — already refused for Odyssey — left it Unknown. Filling the
+    // table in for every item turned that accident into a claim, and an
+    // Odyssey rune came back as a seasonal Common.
+    let known = if name.is_empty() || unscaled {
+        None
+    } else {
+        crate::items::rarity_by_name(name)
+    };
     // A named item's grade is a fact about that item, and the tables carry it
     // from the game's own data. The packet does not: over the 6,617 rolls one
     // session's capture recorded, its rarity field took two values, and one of
@@ -909,7 +1085,27 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // recognised covers the keys, potions and white bases whatever mode made
     // them, and leaves the grades an ordinary base really can carry alone.
     let plain_base = has(obj, &["c"]) && int_field(obj, &["c"]) == 0;
-    let named_only = matches!(as_int(&claimed), Some(7) | Some(10));
+    // Any rarity only a named item can carry, not just two of them.
+    //
+    // This listed 7 and 10 by hand — Angelic and Unholy — on the reasoning that
+    // an ordinary base cannot be either. The reasoning was right and the list
+    // was short: 9 is Heroic, no ordinary base is Heroic either, and Heroic is
+    // in `JOURNAL_RARITIES`, so a base claiming it was named, announced,
+    // chimed and counted. `Wind Token` is the one that showed it — a white
+    // charm with `b: 17` and `c: 0`, which the tables answer for as the Satanic
+    // charm sharing that triple, because the game numbers bases and named items
+    // in two independent spaces.
+    //
+    // On 22,205 base sightings across two captures the field takes every value
+    // from 1 to 43 — 6,985 of them 9, and 92 of them 24, which is not a rarity
+    // at all — against 8,295 that say Superior. It is not a rarity on a base;
+    // it is only ever believed here where believing it is harmless.
+    //
+    // Derived from the journal list rather than written out again, so the two
+    // cannot drift apart: those five are exactly the rarities that make an item
+    // worth naming below.
+    let named_only = crate::stats::rarity_from_packet(&claimed)
+        .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
     let rarity = if odyssey || (plain_base && named_only) { Value::Null } else { claimed };
     // A name read out of the tables is a guess about which item this is, and a
     // guess must not become evidence about what it is worth. `resolve_rarity`
@@ -939,6 +1135,30 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // Type 18 is NOT in the list, on purpose: slot 18:8 is an Angelic potion,
     // and reading ordinary potions through it is the exact bug the rule above
     // exists to stop.
+    // The grade, on the same terms as the rarity above.
+    //
+    // Odyssey keeps its own item space and its `d` is already refused as
+    // unreadable there. Its `n` is no more ours to read, and it says 6 — the
+    // top grade — on ordinary white bases: ten of them in one capture, every
+    // one `c == 0` and nameless, against not a single `n == 6` in the 235
+    // seasonal pickups from the same session. Those ten were the SS column.
+    //
+    // Refusing it does not lose the grade. A named item's grade comes from the
+    // item table by name, which is this program's own reading of the game and
+    // is right whatever mode dropped the thing; `GameStats` already looks it up
+    // whenever the packet offers nothing. So refusing a number we cannot read
+    // is what lets the number we can read be used.
+    //
+    // The range check is separate and applies to every mode: `n` also arrives
+    // as 6666 — five times in that capture, in both modes — which is not a
+    // grade at all. It was counted as one because the only test it had to pass
+    // was being greater than zero.
+    let claimed_tier = int_field(obj, &["tier", "n"]);
+    let tier = if odyssey || !(1..=crate::stats::SS_TIER).contains(&claimed_tier) {
+        0
+    } else {
+        claimed_tier
+    };
     let named_flag = int_field(obj, &["c"]) == 1;
     let resource = RESOURCE_TYPES.contains(&item_type);
     let worth_naming = crate::stats::rarity_from_packet(&rarity)
@@ -952,8 +1172,9 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     };
     GameEvent::ItemAdded {
         rarity,
+        unscaled: odyssey && !named_flag,
         mf: int_field(obj, &["mf_drop", "mfDrop", "m"]) == 1,
-        tier: int_field(obj, &["tier", "n"]),
+        tier,
         item_type,
         item_id,
         weapon_type,
@@ -1052,6 +1273,27 @@ fn effect_ids(raw: Option<Value>) -> Vec<u8> {
     }
 }
 
+/// The client's zone question, told apart from every other packet that
+/// carries the same identifier by being nothing else: two fields, no message,
+/// no payload. The login packet names the region too, and reading that one as a
+/// question would move the answer to whichever region logged in last.
+///
+/// `_src` is the capture writer's own annotation and is not part of the packet.
+fn zone_request_region(d: &Value) -> Option<String> {
+    let o = d.as_object()?;
+    if o.keys().filter(|k| k.as_str() != "_src").count() != 2 {
+        return None;
+    }
+    if !has(d, ACCOUNT_ID_FIELDS) {
+        return None;
+    }
+    match field(d, REGION_ID_FIELDS)? {
+        Value::String(s) if !s.is_empty() => Some(s),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 fn satanic_event(d: &Value) -> GameEvent {
     let zone = match field(d, SATANIC_ZONE_FIELDS) {
         Some(Value::String(s)) => s,
@@ -1071,6 +1313,258 @@ fn satanic_event(d: &Value) -> GameEvent {
 
 #[cfg(test)]
 mod tests {
+
+    /// The save says which act, and it is the only thing that says so often.
+    ///
+    /// Shape and values out of a capture taken 2026-08-22, where the player was
+    /// in Act 6 and the game had not sent a heartbeat for over a thousand
+    /// packets. `act_previous[1]` tracked every room the same capture reported
+    /// — [1,7,..] before Act_07_05, [1,5,..] before Act_05_03, [1,4,..] before
+    /// Town_04_rm — without an exception.
+    #[test]
+    fn the_save_says_which_act() {
+        let bare = json!({
+            "name": "Babazeya2", "level": 100, "herolevel": 26, "difficulty": 1,
+            "season": 0, "hardcore": 0, "experience": 2370181,
+            "act_previous": [1, 6, 0, 0],
+            "act_zones_6": [0, 2, 1, 1, 1, 0, 0, 0, 0, 0]
+        });
+        let act = events_from_messages(std::slice::from_ref(&bare)).into_iter().find_map(|e| match e {
+            GameEvent::Account { act, .. } => Some(act),
+            _ => None,
+        });
+        assert_eq!(act, Some(6), "the second element is the act");
+
+        // and the same save arrives wrapped in a slot as well
+        let wrapped = json!({
+            "account_id": "49646", "slot": "9", "save_counter": "1074",
+            "name": "Babazeya2", "level": 100, "herolevel": 26, "difficulty": 1,
+            "season": 0, "hardcore": 0, "experience": 2370181,
+            "slot_data": { "act_previous": [1, 6, 0, 0] }
+        });
+        let act = events_from_messages(std::slice::from_ref(&wrapped)).into_iter().find_map(|e| match e {
+            GameEvent::Account { act, .. } => Some(act),
+            _ => None,
+        });
+        assert_eq!(act, Some(6));
+    }
+
+    /// Both shapes of the heartbeat say where the character is; only one of
+    /// them says what its magic find is.
+    ///
+    /// Both packets are out of a capture taken 2026-08-21. The telemetry one is
+    /// the only report that arrives while the character is in an act — 86 of
+    /// them, every one from an act, against 52 of the other from a town — so
+    /// refusing it leaves the zone panel with nothing to show. It carries no
+    /// magic find, which is what must not be read as a zero.
+    #[test]
+    fn a_heartbeat_without_magic_find_still_says_where_we_are() {
+        // region "ERROR", season 0, room Act_07_05, no mf
+        let telemetry = json!({
+            "checksum": "d5", "description": "x", "reason_id": 3, "region_id": 1, "slot": "9",
+            "game_state": "eyJyZWdpb24iOiJFUlJPUiIsImhsZXZlbCI6Niwic2xvdCI6OSwibG9naW5fc2Vzc2lvbl90aW1lIjoiMzowNjoxMiIsImxhc3RfdWkiOiJVSV9IdWRfVGFsZW50X29iaiIsImxhc3RfdWlfbm9kZSI6Ik1hcFpvbmUiLCJzZWFzb24iOjAsInJvb20iOiJBY3RfMDdfMDUiLCJwaWNrdXBzIjo4NjM5LCJnYW1lX3Nlc3Npb25fdGltZSI6IjE6MDA6MzMiLCJoYXJkY29yZSI6MCwibGV2ZWwiOjEwMCwicHJldl9yb29tIjoiVG93bl8wN19ybSJ9"
+        });
+        let events = events_from_messages(std::slice::from_ref(&telemetry));
+        assert!(
+            matches!(events.first(), Some(GameEvent::Room(r)) if r == "Act_07_05"),
+            "the act room comes only from this one: {events:?}"
+        );
+        assert!(
+            matches!(events.get(1), Some(GameEvent::Vitals { mf: None, .. })),
+            "and it says nothing about magic find: {events:?}"
+        );
+
+        // the other one says everything it says
+        let beat = json!({
+            "account_id": "49646", "checksum": "d5", "identifier": "dtt",
+            "game_state": "eyJzbG90Ijo5LCJobGV2ZWwiOjIsIm1mIjoxNDQ3LCJyb29tIjoiVG93bl8wMV9ybSIsInNlc1RpbWUiOjI3MTcsImxldmVsIjoxMDAsInN6IjpmYWxzZX0="
+        });
+        let events = events_from_messages(std::slice::from_ref(&beat));
+        assert!(matches!(events.first(), Some(GameEvent::Room(r)) if r == "Town_01_rm"));
+        assert!(matches!(
+            events.get(1),
+            Some(GameEvent::Vitals { mf: Some(1447), level: 100, hlevel: 2, satanic_here: Some(false) })
+        ), "{events:?}");
+
+        // `sz` is a JSON boolean now and was a number once. It was still being
+        // compared against 1, which a boolean never equals, so the game's own
+        // word for "this room is the Satanic Zone" had stopped being read.
+        let inside = json!({
+            "account_id": "49646", "checksum": "d5", "identifier": "dtt",
+            "game_state": "eyJzbG90Ijo5LCJobGV2ZWwiOjIyLCJtZiI6MjI2OSwicm9vbSI6IkFjdF8wMV8wNSIsInNlc1RpbWUiOjEsImxldmVsIjoxMDAsInN6Ijp0cnVlfQ=="
+        });
+        let events = events_from_messages(std::slice::from_ref(&inside));
+        assert!(matches!(
+            events.get(1),
+            Some(GameEvent::Vitals { satanic_here: Some(true), .. })
+        ), "{events:?}");
+    }
+
+    /// Leaving town and playing on, as the two packets really arrive.
+    ///
+    /// The town heartbeat states magic find; the one that comes from an act
+    /// does not, and it is the only one that says which act. Between them the
+    /// player must end up in the right room with the magic find they had — the
+    /// second packet answering "nothing" about a number is not the same as it
+    /// answering zero, and reading it as zero left a dash in the overlay for
+    /// most of a session.
+    #[test]
+    fn leaving_town_keeps_the_magic_find_and_takes_the_room() {
+        let in_town = json!({
+            "account_id": "49646", "checksum": "d5", "identifier": "dtt",
+            "game_state": "eyJzbG90Ijo5LCJobGV2ZWwiOjIsIm1mIjoxNDQ3LCJyb29tIjoiVG93bl8wMV9ybSIsInNlc1RpbWUiOjI3MTcsImxldmVsIjoxMDAsInN6IjpmYWxzZX0="
+        });
+        let in_an_act = json!({
+            "checksum": "d5", "description": "x", "reason_id": 3, "region_id": 1, "slot": "9",
+            "game_state": "eyJyZWdpb24iOiJFUlJPUiIsImhsZXZlbCI6Niwic2xvdCI6OSwibG9naW5fc2Vzc2lvbl90aW1lIjoiMzowNjoxMiIsImxhc3RfdWkiOiJVSV9IdWRfVGFsZW50X29iaiIsImxhc3RfdWlfbm9kZSI6Ik1hcFpvbmUiLCJzZWFzb24iOjAsInJvb20iOiJBY3RfMDdfMDUiLCJwaWNrdXBzIjo4NjM5LCJnYW1lX3Nlc3Npb25fdGltZSI6IjE6MDA6MzMiLCJoYXJkY29yZSI6MCwibGV2ZWwiOjEwMCwicHJldl9yb29tIjoiVG93bl8wN19ybSJ9"
+        });
+        let mut s = crate::stats::GameStats::default();
+        for e in events_from_messages(std::slice::from_ref(&in_town)) {
+            s.apply(&e);
+        }
+        assert_eq!(s.snapshot(String::new()).mf, 1447);
+
+        for e in events_from_messages(std::slice::from_ref(&in_an_act)) {
+            s.apply(&e);
+        }
+        let snap = s.snapshot(String::new());
+        assert_eq!(snap.room.as_deref(), Some("Act_07_05"), "the zone panel needs this");
+        assert_eq!(snap.mf, 1447, "silence about a number is not zero");
+    }
+
+    /// The merchant's window is not a pile of loot.
+    ///
+    /// Both packets are out of a capture taken 2026-08-21, the moment the Black
+    /// Market was opened: the same shape as a drop answer, the same `ok`, and
+    /// twenty-five named items that never dropped. The one difference is that a
+    /// thing on the ground has a position and a thing in a shop has a player.
+    #[test]
+    fn a_shop_window_is_not_the_ground() {
+        let stock = json!({
+            "status": 1,
+            "message": "ok",
+            "itemGenHash": "abc",
+            "operationTime": 1,
+            "itemData": {
+                "7-4964607-659930d6954b90001-3":
+                    {"a": 180867568, "b": 1, "c": 1, "d": 9, "e": 0, "gd": {"player": 0}, "j": 14, "sh": "0d734caaa919"},
+                "7-4964607-659930d695af90003-1":
+                    {"a": 337583057, "b": 80, "c": 1, "d": 9, "e": 0, "gd": {"player": 0}, "j": 0, "sh": "a62f096b3a4f"}
+            }
+        });
+        assert!(
+            events_from_messages(std::slice::from_ref(&stock)).is_empty(),
+            "nothing in a shop window has dropped"
+        );
+
+        // and the drop answer beside it still lands
+        let dropped = json!({
+            "status": 1,
+            "message": "ok",
+            "itemGenHash": "abc",
+            "operationTime": 1,
+            "itemData": {
+                "7-4964607-65991cc0616140001-18":
+                    {"a": 61067529, "b": 5, "c": 1, "d": 6, "e": 0, "gd": {"pos": [11, 0]}, "j": 0, "sh": "ecc3352481d6"}
+            }
+        });
+        let events = events_from_messages(std::slice::from_ref(&dropped));
+        assert!(
+            matches!(events.first(), Some(GameEvent::ItemAdded { ground: true, .. })),
+            "a thing with a place on the map is a drop: {events:?}"
+        );
+    }
+
+    /// A white charm is not the Satanic charm that shares its number.
+    ///
+    /// Straight out of a capture taken 2026-08-21, five times over. `c: 0` is
+    /// the game's own flag for an ordinary base and `10:17:0` is a triple two
+    /// items hold — the white charm the player actually picked up, and
+    /// `Wind Token`, which the tables answer with because bases are not in
+    /// them. The `d: 9` is what let it through: Heroic is a rarity worth
+    /// naming, so the base was named, announced and chimed as a find the
+    /// player never made.
+    #[test]
+    fn a_white_charm_is_not_wind_token() {
+        let msg = json!({
+            "status": 1,
+            "message": "Success on inventory update ext",
+            "operations": { "add": {
+                "99-4964607-1a02570a09d-10": {
+                    "a": 327060669, "b": 17, "c": 0, "d": 9, "e": 0,
+                    "gd": 2850811, "j": 0, "sh": "2a0bb624530e"
+                }
+            }}
+        });
+        let events = events_from_messages(std::slice::from_ref(&msg));
+        let GameEvent::ItemAdded { name, rarity, item_type, item_id, .. } = &events[0] else {
+            panic!("not an item: {events:?}")
+        };
+        assert_eq!((*item_type, *item_id), (10, 17), "it is the charm at 10:17:0");
+        assert_eq!(
+            crate::items::item_name(10, 17, 0),
+            Some("Wind Token"),
+            "and the tables do answer for that triple"
+        );
+        assert_eq!(rarity, &Value::Null, "but a base claims no rarity");
+        assert!(name.is_empty(), "so it is left nameless, not called Wind Token");
+    }
+
+    /// A relic is Common and D-graded, and the packet is not allowed to say
+    /// otherwise.
+    ///
+    /// The name table used to hold a rarity only for the five worth
+    /// announcing, so everything else — relics, runes, potions, keys — found
+    /// nothing there and `resolve_rarity` fell back to the packet. That field
+    /// takes two values over thousands of rolls and one of them reads as
+    /// Angelic here, which is how a Common relic was announced, chimed and
+    /// filed as an Angelic find.
+    #[test]
+    fn a_relic_is_what_the_tables_say_it_is() {
+        let relic = "Jungle Vial";
+        assert_eq!(crate::items::rarity_by_name(relic), Some("Common"), "the table is right");
+        assert_eq!(crate::items::tier_by_name(relic), 1, "tier D");
+        for claim in [json!(7), json!(10), json!(2), Value::Null] {
+            assert_eq!(
+                resolve_rarity(&claim, relic, false),
+                "Common",
+                "a packet claiming {claim} must not outrank the tables"
+            );
+        }
+        // and an item off a scale these tables do not read still claims nothing
+        assert_eq!(resolve_rarity(&json!(7), relic, true), "Angelic");
+    }
+
+    /// The client's heartbeat, as one really arrived on 2026-08-21 — the
+    /// packet's own base64, not a hand-written one.
+    ///
+    /// It is the only place magic find comes from, and it rides on a packet
+    /// carrying the session credentials, which the item path throws away
+    /// wholesale. This pins the field names against a real packet so a patch
+    /// that renames one of them fails here rather than quietly emptying the
+    /// top row of the overlay.
+
+
+    #[test]
+    fn the_heartbeat_reports_magic_find() {
+        // a real packet out of a capture taken 2026-08-21
+        let packet = json!({
+            "_src": "10.8.1.2",
+            "account_id": "49646",
+            "checksum": "d5996db42bdba7d1",
+            "identifier": "dttIzbvwpWWqbgmBOQlDr1SjoQKkaHLB",
+            "game_state": "eyJzbG90Ijo5LCJobGV2ZWwiOjIsIm1mIjoxNDQ3LCJyb29tIjoiVG93bl8wMV9ybSIsInNlc1RpbWUiOjI3MTcsImxldmVsIjoxMDAsInN6IjpmYWxzZX0=",
+            "slot": "9"
+        });
+        let events = events_from_messages(std::slice::from_ref(&packet));
+        let vitals = events.iter().find_map(|e| match e {
+            GameEvent::Vitals { mf, level, hlevel, satanic_here } => {
+                Some((*mf, *level, *hlevel, *satanic_here))
+            }
+            _ => None,
+        });
+        assert_eq!(vitals, Some((Some(1447), 100, 2, Some(false))), "events were {events:?}");
+    }
     /// The capture filter takes every plaintext TCP byte the machine sends or
     /// receives, so a bulk transfer on any other port arrives here as one
     /// buffer of up to `BUF_CAP`. Every opener used to be chased to the end of
@@ -1168,6 +1662,31 @@ mod tests {
     }
 
     #[test]
+    fn only_the_bare_question_names_the_region_the_zone_answers_for() {
+        // What the client sends just before the server names the zone. Two
+        // fields and nothing else, which is what tells it apart.
+        let ask = json!({"crossregion_identifier": "8909978777", "unique_account_id": "4964607"});
+        let events = events_from_messages(std::slice::from_ref(&ask));
+        assert!(
+            matches!(&events[0], GameEvent::ZoneRegion(id) if id == "8909978777"),
+            "the question carries the region it is asked on behalf of"
+        );
+
+        // The login packet names the same region and is not a question. Reading
+        // it as one moves the answer to whichever region logged in last.
+        let login = json!({
+            "account_id": "49646", "beta": "0", "crossregion_identifier": "4659145238",
+            "hardcore": "0", "season": "10", "unique_account_id": "4964607",
+        });
+        assert!(
+            !events_from_messages(std::slice::from_ref(&login))
+                .iter()
+                .any(|e| matches!(e, GameEvent::ZoneRegion(_))),
+            "a packet that merely mentions the region is not asking about the zone"
+        );
+    }
+
+    #[test]
     fn nested_payloads_are_flattened() {
         let payloads = vec![
             json!([
@@ -1234,8 +1753,9 @@ mod tests {
             })
             .collect();
         // fingerprint suffix carries the item type; `b` is then the id-in-category
-        assert!(parsed.contains(&("6".into(), true, 1, 71)));
-        assert!(parsed.contains(&("9".into(), false, 6, 8)));
+        assert!(parsed.contains(&("6".into(), true, 1, 71)), "a named item keeps its claim");
+        // and the base beside it does not: 9 is Heroic, which no base is
+        assert!(parsed.contains(&("null".into(), false, 6, 8)));
     }
 
     /// The same complaint as the Odyssey one, from packets that carry none of
@@ -1250,11 +1770,11 @@ mod tests {
         assert_eq!(crate::items::rarity_by_name(ring), Some("Satanic"), "the table is right");
         assert_eq!(crate::items::tier_by_name(ring), 1, "and grades it D");
         // whatever the packet claims about it
-        assert_eq!(resolve_rarity(&json!(7), ring), "Satanic", "a packet claiming Angelic");
-        assert_eq!(resolve_rarity(&json!(2), ring), "Satanic", "and one claiming Superior");
-        assert_eq!(resolve_rarity(&Value::Null, ring), "Satanic", "and one claiming nothing");
+        assert_eq!(resolve_rarity(&json!(7), ring, false), "Satanic", "a packet claiming Angelic");
+        assert_eq!(resolve_rarity(&json!(2), ring, false), "Satanic", "and one claiming Superior");
+        assert_eq!(resolve_rarity(&Value::Null, ring, false), "Satanic", "and one claiming nothing");
         // an item the tables have never heard of still keeps what it was sent
-        assert_eq!(resolve_rarity(&json!(7), "No Such Item"), "Angelic");
+        assert_eq!(resolve_rarity(&json!(7), "No Such Item", false), "Angelic");
     }
 
     /// Refusing the packet's rarity must not cost a resource its name: the dull
@@ -1287,7 +1807,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_base_is_never_angelic() {
+    fn an_ordinary_base_carries_no_named_rarity() {
         let pickup = |item: serde_json::Value| {
             let msg = json!({
                 "status": 1,
@@ -1302,13 +1822,65 @@ mod tests {
         let plain = json!({"a": 116892350, "b": 0, "c": 0, "d": 7, "e": 10, "j": 7, "n": 2, "sh": "cb"});
         assert_eq!(pickup(plain), Some(Value::Null), "an ordinary base claims no grade");
 
-        // the grades a base really can carry are still believed
+        // Heroic is no more a base's rarity than Angelic is.
+        //
+        // This asserted the opposite — that 9 on a base was "attested" — on the
+        // strength of having seen it in a capture. Seeing it is not evidence
+        // that it means Heroic: across 22,205 base sightings the field takes
+        // every value from 1 to 43, and 6,985 of them are 9. Nor is any
+        // ordinary base Heroic in the game's own data: all 413 items whose key
+        // marks them a base are Common, and not one is Heroic, Angelic,
+        // Satanic, Set or Unholy. Believing the 9 named a white charm
+        // `Wind Token` and announced it as a Satanic find.
         let ordinary = json!({"a": 1, "b": 8, "c": 0, "d": 9, "e": 10, "j": 0, "sh": "cb"});
-        assert_eq!(pickup(ordinary), Some(json!(9)), "Heroic on a base is attested and kept");
+        assert_eq!(pickup(ordinary), Some(Value::Null), "nor is a base Heroic");
+
+        // the grades a base really can carry are still believed
+        let white = json!({"a": 1, "b": 8, "c": 0, "d": 2, "e": 10, "j": 0, "sh": "cb"});
+        assert_eq!(pickup(white), Some(json!(2)), "Superior on a base is its own");
 
         // and a named item keeps its own claim, Angelic included
         let named = json!({"a": 1, "b": 71, "c": 1, "d": 7, "e": 10, "j": 0, "sh": "cb"});
         assert_eq!(pickup(named), Some(json!(7)), "a named item may be Angelic");
+    }
+
+    #[test]
+    fn a_grade_is_only_believed_when_it_is_one() {
+        let grade_of = |v: &Value| {
+            let events = events_from_messages(std::slice::from_ref(v));
+            match &events[0] {
+                GameEvent::ItemAdded { tier, .. } => *tier,
+                _ => panic!("not an item"),
+            }
+        };
+        let pickup = |body: serde_json::Value| {
+            json!({
+                "status": 1,
+                "message": "Success on inventory update ext",
+                "operations": { "add": { "7-4964607-6598765fd97540002-3": body } }
+            })
+        };
+
+        // Straight out of a capture: an Odyssey pickup, an ordinary base by its
+        // own `c`, with no name — claiming the top grade. Ten of these were the
+        // SS column on a practice run.
+        assert_eq!(
+            grade_of(&pickup(json!({"a": 1, "b": 0, "c": 0, "d": 3, "e": 0, "h": 1, "n": 6, "sh": "x"}))),
+            0,
+            "Odyssey's grade is on its own scale, like its rarity"
+        );
+
+        // And a number that is not a grade in any mode. Also from the capture,
+        // in both modes.
+        assert_eq!(
+            grade_of(&pickup(json!({"a": 1, "b": 0, "c": 0, "d": 7, "e": 10, "n": 6666, "sh": "x"}))),
+            0,
+            "6666 is not a grade; it only ever passed for being above zero"
+        );
+
+        // A seasonal grade is still read, including the top one.
+        assert_eq!(grade_of(&pickup(json!({"a": 1, "c": 1, "d": 2, "e": 10, "n": 4, "sh": "x"}))), 4);
+        assert_eq!(grade_of(&pickup(json!({"a": 1, "c": 1, "d": 2, "e": 10, "n": 6, "sh": "x"}))), 6);
     }
 
     #[test]
@@ -1324,8 +1896,8 @@ mod tests {
             }}
         });
         let events = events_from_messages(std::slice::from_ref(&odyssey));
-        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
-        assert_eq!(resolve_rarity(rarity, name), "Unknown", "its scale is not ours to read");
+        let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
+        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Unknown", "its scale is not ours to read");
 
         // the seasonal shape of the same capture keeps working
         let seasonal = json!({
@@ -1336,8 +1908,8 @@ mod tests {
             }}
         });
         let events = events_from_messages(std::slice::from_ref(&seasonal));
-        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
-        assert_eq!(resolve_rarity(rarity, name), "Superior");
+        let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
+        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Superior");
     }
 
     #[test]
@@ -1351,9 +1923,9 @@ mod tests {
             "operations": { "add": { "8-18": {"e": 10, "a": 42, "j": 0, "b": 8, "d": 2, "c": 0} } }
         });
         let events = events_from_messages(std::slice::from_ref(&payload));
-        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
+        let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
         assert_eq!(name, "", "an ordinary base is nameless; the table knows only uniques");
-        assert_eq!(resolve_rarity(rarity, name), "Superior", "and it keeps the rarity it was sent with");
+        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Superior", "and it keeps the rarity it was sent with");
 
         // the same slot, flagged by the game as a named item, still resolves
         let named = json!({
@@ -1362,9 +1934,9 @@ mod tests {
             "operations": { "add": { "8-18": {"e": 10, "a": 42, "j": 0, "b": 8, "d": 2, "c": 1} } }
         });
         let events = events_from_messages(std::slice::from_ref(&named));
-        let GameEvent::ItemAdded { name, rarity, .. } = &events[0] else { panic!("not an item") };
+        let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
         assert_eq!(name, "Gold Inlaid Mysterious Potion");
-        assert_eq!(resolve_rarity(rarity, name), "Angelic");
+        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Angelic");
     }
 
     #[test]
@@ -1526,6 +2098,45 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 5)),
             "capture stalled on a stray brace"
+        );
+    }
+
+    #[test]
+    fn a_message_cut_after_one_of_its_values_closes_is_still_carried() {
+        let mut asm = Reassembler::default();
+        let flow = flow_from("1.2.3.4");
+        // The shape every real drop answer has: an inner object that has
+        // already closed by the time the cut lands. Deciding the carry on
+        // "does anything complete follow the opener" read that inner object
+        // and called the whole message framing noise, so the drop was dropped.
+        asm.push(flow, 1, b"{\"itemData\":{\"7-1-1\":{\"n\":1}},\"currency_data\":{\"GSS\":7");
+        let first = asm.push(flow, 2, b"}}").unwrap();
+        assert!(extract_messages(&first).is_empty(), "half a message must not parse");
+        let second = asm.push(flow, 3, b"noise").unwrap();
+        let events = events_from_messages(&extract_messages(&second));
+        assert!(
+            events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 7)),
+            "a message cut after a closed inner value was thrown away"
+        );
+    }
+
+    #[test]
+    fn a_tail_longer_than_eight_kilobytes_is_still_carried() {
+        let mut asm = Reassembler::default();
+        let flow = flow_from("1.2.3.4");
+        // The biggest message in a real capture is 35 KB and the cap was 8 KB,
+        // so the tail of every large answer was refused on length alone.
+        let mut head = br#"{"pad":""#.to_vec();
+        head.extend(std::iter::repeat(b'x').take(20 << 10));
+        head.extend_from_slice(br#"","currency_data":{"GSS":9"#);
+        asm.push(flow, 1, &head);
+        let first = asm.push(flow, 2, b"}}").unwrap();
+        assert!(extract_messages(&first).is_empty());
+        let second = asm.push(flow, 3, b"noise").unwrap();
+        let events = events_from_messages(&extract_messages(&second));
+        assert!(
+            events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 9)),
+            "a 20 KB tail was refused"
         );
     }
 

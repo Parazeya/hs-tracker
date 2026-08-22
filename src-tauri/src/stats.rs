@@ -31,6 +31,16 @@ pub const JOURNAL_RARITIES: &[&str] = &["Satanic", "Set", "Heroic", "Angelic", "
 /// 1..6 and the interface writes them D, C, B, A, S, SS.
 pub const SS_TIER: i64 = 6;
 
+/// How long a bank balance step waits for the deposit packet that explains it.
+const IN_FLIGHT: Duration = Duration::from_secs(15);
+
+/// How long a run goes without a sign of life before it stops being a run.
+///
+/// Five minutes is long enough that a fight with a boss, a trip to town or a
+/// slow stretch of a map is not mistaken for a break, and short enough that a
+/// break does not end up divided into the per-hour figures.
+const IDLE_AFTER: Duration = Duration::from_secs(300);
+
 // stack resources by item type
 const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "materials"), (15, "socketables")];
 
@@ -55,9 +65,9 @@ fn is_container(name: &str) -> bool {
 const DULL_KEYS: [&str; 2] = ["basic key", "crystal key"];
 
 /// What the save counts besides kills, in the order it is shown: the bosses the
-/// character has put down, then the chests it has opened. The game sends all 33
-/// of its `statistic…` counters on every save, so a session's worth of each is
-/// the difference between two saves — exactly how kills already work.
+/// character has put down, then the chests it has opened. The game sends all of
+/// its `statistic…` counters on every save, so a session's worth of each is the
+/// difference between two saves — exactly how kills already work.
 ///
 /// Keys are the game's own names flattened to letters and digits. A name the
 /// game changes simply stops matching: the counter disappears from the panel
@@ -70,6 +80,7 @@ pub const TALLIES: &[(&str, &str, &str)] = &[
     ("statisticguragkills", "Gurag", "boss"),
     ("statisticmeviuskills", "Mevius", "boss"),
     ("statisticodinkills", "Odin", "boss"),
+    ("statisticcthulhukills", "Cthulhu", "boss"),
     ("statistickarpkingkills", "Karp King", "boss"),
     ("statisticuberdamienkills", "Uber Damien", "boss"),
     ("statisticuberreaperkills", "Uber Reaper", "boss"),
@@ -81,6 +92,10 @@ pub const TALLIES: &[(&str, &str, &str)] = &[
     ("statisticubersungleekills", "Uber Sung Lee", "boss"),
     ("statisticuberamunrakills", "Uber Amun Ra", "boss"),
     ("statisticuberarchitectkills", "Uber Architect", "boss"),
+    ("statisticuberpapalegbakills", "Uber Papa Legba", "boss"),
+    ("statisticubercaptaingrimtidekills", "Uber Captain Grimtide", "boss"),
+    ("statisticuberbloodmaidenkills", "Uber Blood Maiden", "boss"),
+    ("statisticuberphantomleviathankills", "Uber Phantom Leviathan", "boss"),
     ("statisticuberchaostowerkills", "Uber Chaos Tower", "boss"),
     ("statisticchaostowerfloorclears", "Chaos Tower floors", "boss"),
     ("statisticwormholeclears", "Wormholes", "boss"),
@@ -109,10 +124,12 @@ pub fn default_notable() -> Vec<(String, Vec<String>)> {
     };
     vec![
         group("Angelic Key", &["Angelic Key"]),
-        group("Satanic Key", &["Satanic Key"]),
         group("Satanic Dice", &["Satanic Dice"]),
         group("S runes", &["Qi", "Xo", "Sur", "Ber", "Jah", "Drax", "Zed"]),
-        group("SS runes", &["Fawn", "Flo", "Nju", "Jol"]),
+        // Sus, Kek and Jord came with the 2026-08-21 patch. "Satanic Key" used
+        // to sit above these and has been dropped: no item in the game carries
+        // that name, so the counter could never move.
+        group("SS runes", &["Fawn", "Flo", "Nju", "Jol", "Sus", "Kek", "Jord"]),
     ]
 }
 
@@ -142,6 +159,18 @@ pub struct SatanicZone {
     pub zone: String,
     pub buffs: Vec<u8>,
     pub debuffs: Vec<u8>,
+}
+
+/// The same ids in any order. Short lists — three or four — so sorting two
+/// copies costs less than the allocation a set would want.
+fn same_set(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let (mut a, mut b) = (a.to_vec(), b.to_vec());
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
 }
 
 #[derive(Clone, Serialize)]
@@ -273,16 +302,29 @@ pub struct GameStats {
     tally_earned: HashMap<&'static str, i64>,
     resources: HashMap<&'static str, i64>,
     satanic: Option<SatanicZone>,
+    /// When the server last named it, in unix milliseconds.
+    ///
+    /// The zone rotates on the half hour, and the game only asks the server as
+    /// part of saving — so between saves this app is repeating an answer it was
+    /// given, and after the game closes it goes on repeating it indefinitely.
+    /// Without the moment attached the panel states a zone from three hours ago
+    /// as this hour's, next to a countdown that has run out twice since.
+    satanic_at: Option<u64>,
     /// the character's magic find as the client last reported it, and whether
     /// the room it is standing in is the satanic one — both straight from the
     /// heartbeat rather than worked out from zone codes
     mf: i64,
     satanic_here: bool,
     room: Option<String>,
+    /// which act the save last said the character is in, or 0
+    act: i64,
     /// When the game last MOVED the satanic zone, waiting to be told. Not set
     /// by the first sighting of a zone: a tracker started mid-rotation learns
-    /// where the zone is from the next packet the client sends, and that is not
+    /// where the zone is from the next reply the server sends, and that is not
     /// the zone rotating.
+    ///
+    /// The client asks and the server answers — the zone is on neither the
+    /// heartbeat nor anything the client volunteers. See `GameEvent::ZoneRegion`.
     sz_changed: Option<Instant>,
     /// The zone above was carried over a reset and nothing has confirmed it
     /// since — so a packet that disagrees with it is this session catching up,
@@ -290,6 +332,52 @@ pub struct GameStats {
     /// zone does not hold still while the game is closed: without this, coming
     /// back after an hour away announced a rotation nobody was there for.
     stale_zone: bool,
+    /// Whose totals the experience, kill and tally marks are measured from.
+    ///
+    /// The game keeps those statistics per character, and one set of marks
+    /// cannot serve two. Without this, a visit to an alt and back diffed the
+    /// alt's whole lifetime against the main's and booked the difference as
+    /// this session's earnings — in one capture that was 98% of the kills and
+    /// 65 million experience, and the ruined run was then filed to runs.json,
+    /// where it stays.
+    baseline_for: Option<String>,
+    /// Gold credited by a rise in the bank balance that no deposit packet has
+    /// accounted for yet, and when it was credited.
+    ///
+    /// The client says it banked some coins and the server answers with the new
+    /// balance; they are the same coins, and `banked` cancels the second against
+    /// the first. That only ever worked in one direction — and the two do not
+    /// always arrive in that order. Forty-one of a hundred and eighty-two
+    /// deposits in one capture came after the balance they caused, and every one
+    /// of those was counted twice.
+    pending_step: i64,
+    pending_since: Option<Instant>,
+    /// The highest the bank has been this session, for the purse it is being
+    /// read on.
+    ///
+    /// A balance that falls and climbs back is not earnings, and there are two
+    /// ways it happens. The player withdraws and puts it back — nothing was
+    /// earned. Or a second character's purse is read in between: it arrives in
+    /// fields with the same names, so a visit to an alt with a hundred coins
+    /// and a return to a main with seventy-eight thousand looked like
+    /// seventy-five thousand earned, which is what it did in one capture.
+    ///
+    /// Only what the bank has never held before is credited. The deposits
+    /// themselves are counted where they are reported; this is the backstop for
+    /// when that packet is missed, and a backstop should not invent.
+    gold_high: i64,
+    /// Which region the zone we are holding was answered for, and which region
+    /// asked the question still in flight.
+    ///
+    /// The server answers the satanic zone per region, and one account moves
+    /// between them: in the capture on disk a single account asked under ten
+    /// different identifiers, and seven of the twenty-one times the zone code
+    /// changed, it changed because a different region was asking — not because
+    /// anything rotated. Announcing those is announcing another region's zone
+    /// as news, and under a filter that alerts on buffs it is another region's
+    /// buffs the player is being called away from a fight for.
+    zone_region: Option<String>,
+    zone_asked_by: Option<String>,
     season_mode: Option<&'static str>,
     gold_mode: Option<&'static str>,
     last_currency: Option<crate::parser::Currency>,
@@ -349,6 +437,9 @@ pub struct Prefs {
     pub notable_defs: Vec<(String, Vec<String>)>,
     /// (sound key, item names) — an item on one of these is announced by it
     pub sound_lists: Vec<(String, Vec<String>)>,
+    /// Satanic zone buffs worth an alert. Empty means every rotation — see
+    /// `take_zone_change`.
+    pub zone_buffs: Vec<u8>,
 }
 
 impl Default for Prefs {
@@ -362,6 +453,8 @@ impl Default for Prefs {
             fx_listed: false,
             notable_defs: default_notable(),
             sound_lists: Vec::new(),
+            // every rotation, until the player narrows it
+            zone_buffs: Vec::new(),
         }
     }
 }
@@ -390,11 +483,19 @@ impl Default for GameStats {
             tally_earned: HashMap::new(),
             resources: RESOURCES.iter().map(|(_, name)| (*name, 0)).collect(),
             satanic: None,
+            satanic_at: None,
             mf: 0,
             satanic_here: false,
             room: None,
+            act: 0,
             sz_changed: None,
             stale_zone: false,
+            baseline_for: None,
+            pending_step: 0,
+            pending_since: None,
+            gold_high: 0,
+            zone_region: None,
+            zone_asked_by: None,
             season_mode: None,
             gold_mode: None,
             last_currency: None,
@@ -420,12 +521,38 @@ impl Default for GameStats {
     }
 }
 
+/// Which act a room name belongs to, where the name says so.
+///
+/// `Act_08_02` is act 8 and `Town_04_rm` is act 4 — the game numbers its towns
+/// by the act they serve. Everything else, the Shadow Realm and the wormholes
+/// and the arenas, belongs to no act and answers `None`.
+fn act_of_room(room: &str) -> Option<i64> {
+    let rest = room
+        .strip_prefix("Act_")
+        .or_else(|| room.strip_prefix("act_"))
+        .or_else(|| room.strip_prefix("Town_"))
+        .or_else(|| room.strip_prefix("town_"))?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok().filter(|n| *n > 0)
+}
+
+
 impl GameStats {
     /// Character, zone and the diff baselines survive a session reset — only
     /// the earned counters restart, so the next packet still yields a diff.
     pub fn reset(&mut self) {
         let revision = self.revision;
         let extra_rev = self.extra_rev;
+        // These travel with `satanic` below rather than in the carry tuple,
+        // which is long enough: a zone without the region it was answered for
+        // reads as though a different region had asked, and the next reply is
+        // swallowed for a reason that is not true.
+        let zone_region = self.zone_region.take();
+        let zone_asked_by = self.zone_asked_by.take();
+        // The zone is carried, so the moment it was answered is carried with
+        // it: without that a reset makes an hours-old zone look freshly
+        // confirmed, which is the one thing this field exists to prevent.
+        let satanic_at = self.satanic_at.take();
         let carry = (
             self.character.take(),
             self.satanic.take(),
@@ -457,6 +584,13 @@ impl GameStats {
             // the marks the boss and chest counters are measured from: a reset
             // starts the tally again, it does not make the game recount
             std::mem::take(&mut self.tally_base),
+            // Where the character is standing, whether there is mail waiting,
+            // and whose marks these are. None of the three is a thing the run
+            // earned, and dropping them made the panel go blank on a reset and
+            // fill in again only when the game next mentioned them.
+            self.room.take(),
+            self.has_mail,
+            self.baseline_for.take(),
         );
         *self = Self::default();
         (
@@ -480,13 +614,39 @@ impl GameStats {
             self.stale_save,
             self.prefs,
             self.tally_base,
+            self.room,
+            self.has_mail,
+            self.baseline_for,
         ) = carry;
-        // the zone came across with the character; what has not come across is
-        // any guarantee that it is still the zone
-        self.stale_zone = self.satanic.is_some();
+        // The room travels; without this its clock does not, and the room the
+        // next session starts in banks no time at all. Reset while standing in
+        // one place and farm there for half an hour, and the run card's "where
+        // it happened" is empty for a run that happened entirely in one room.
+        self.room_since = self.room.is_some().then(Instant::now);
+        self.satanic_at = satanic_at;
+        self.zone_region = zone_region;
+        self.zone_asked_by = zone_asked_by;
         self.revision = revision + 1;
         // the journal, the series and the character all just went
         self.extra_rev = extra_rev + 1;
+    }
+
+    /// A reset taken across a stretch we were not watching: the game starting,
+    /// which is also the app starting beside a game already running.
+    ///
+    /// The zone travels with the character, but nothing says it is still the
+    /// zone — the game has been shut for an hour and the rotation does not wait
+    /// for us. So the next packet is this session catching up, not news, and it
+    /// is swallowed once.
+    ///
+    /// A plain `reset` must not do this. The Reset button pressed mid-farm
+    /// leaves the game running and the zone exactly as it was; arming the guard
+    /// there swallowed the next zone packet instead — and since a zone packet
+    /// arrives only every few minutes, the one swallowed was often the rotation
+    /// the player was waiting for.
+    pub fn reset_after_blackout(&mut self) {
+        self.reset();
+        self.stale_zone = self.satanic.is_some();
     }
 
     /// Totals from the previous run, so a restart shows the last known bank
@@ -518,10 +678,22 @@ impl GameStats {
         self.has_mail
     }
 
-    /// Has the satanic zone moved since this was last asked? Taken rather than
-    /// read, so one rotation is announced once however often the pusher looks.
-    pub fn take_zone_change(&mut self) -> bool {
-        self.sz_changed.take().is_some()
+    /// The satanic zone has moved and this rotation is worth telling the player
+    /// about. Taken rather than read, so one rotation is announced once however
+    /// often the pusher looks.
+    ///
+    /// The zone comes back with it: the snapshot only travels to windows that
+    /// are on screen, so a player who has hidden the overlay — the case the
+    /// chime exists for — would otherwise have the alert read from a stale one.
+    ///
+    /// An empty pick is not "nothing", it is every rotation. The list narrows
+    /// the alert, and a player who has narrowed it to nothing has narrowed
+    /// nothing. Reading it the other way makes the picker's own "clear" button
+    /// a mute switch that nothing on the page admits to.
+    pub fn take_zone_change(&mut self) -> Option<SatanicZone> {
+        let zone = self.sz_changed.take().and_then(|_| self.satanic.clone())?;
+        let wanted = &self.prefs.zone_buffs;
+        (wanted.is_empty() || zone.buffs.iter().any(|b| wanted.contains(b))).then_some(zone)
     }
 
     /// Add the time spent in the current room to its total and start counting
@@ -618,6 +790,18 @@ impl GameStats {
             self.bank_room_time_at(since);
             self.room_since = None;
             self.paused_at = Some(since);
+            // The idle watch notices a pause five minutes after it began and
+            // back-dates it, so the session clock steps backwards — and the
+            // graph's points are stamped with that clock. Points recorded
+            // during those five minutes now sit beyond the end of the series,
+            // and the line drawn from them doubles back on itself and runs off
+            // the right edge of the canvas. They were never real time anyway:
+            // the run was not running while they were taken.
+            let cut = self.active().as_secs();
+            if self.series.iter().any(|p| p.t > cut) {
+                self.series.retain(|p| p.t <= cut);
+                self.extra_rev += 1;
+            }
             self.revision += 1;
         }
         self.by_hand |= by_hand;
@@ -641,6 +825,23 @@ impl GameStats {
         } else {
             self.release();
         }
+    }
+
+    /// Quiet for long enough to stop the clock. Asked once a tick by the
+    /// pusher, which is the only thing here with a heartbeat.
+    ///
+    /// All of this existed already — `hold` takes a `by_hand` of false, and
+    /// `progressed` lifts exactly the pause that sets it — and nothing ever
+    /// called it. The README, the field doc on `last_progress` and two comments
+    /// beside it all described a feature that was never wired up, and the
+    /// per-hour figures quietly counted every break.
+    pub fn watch_idle(&mut self) {
+        if self.paused() || self.last_progress.elapsed() < IDLE_AFTER {
+            return;
+        }
+        // Stopped as of the last sign of life rather than as of now: the five
+        // minutes it took to notice were not part of the run either.
+        self.hold(self.last_progress, false);
     }
 
     /// The run moved. Anything that lifts an idle pause goes through here.
@@ -804,6 +1005,7 @@ impl GameStats {
                 }
                 return self.apply(&GameEvent::ItemAdded {
                     rarity: serde_json::Value::Null,
+                    unscaled: false,
                     mf: false,
                     tier: 0,
                     item_type: 0,
@@ -842,6 +1044,7 @@ impl GameStats {
                 season,
                 hardcore,
                 blood_pact,
+                act,
                 name,
                 level,
                 herolevel,
@@ -852,6 +1055,37 @@ impl GameStats {
             } => {
                 if *has_experience {
                     self.last_save = Some(Instant::now());
+                }
+                // A save from a different character than the marks were taken
+                // from. Its totals are not a continuation of anything: they are
+                // another character's life, and the difference between the two
+                // is not something this session earned.
+                //
+                // So the marks are thrown away and taken again from this save,
+                // which is exactly what the tracker does on its first save of a
+                // run — the same path, for the same reason. Nothing is credited
+                // by the packet that re-anchors.
+                let switched = *has_experience
+                    && !name.is_empty()
+                    && self.baseline_for.as_deref().is_some_and(|had| had != name);
+                if switched {
+                    self.stale_save = true;
+                    self.xp_authoritative = false;
+                    self.total_kills = 0;
+                    self.tally_base.clear();
+                    // The purse travels with the character too, and two of them
+                    // can be on the same mode: comparing a balance against one
+                    // that belongs to somebody else invented 75,541 gold in a
+                    // single event. `stale_bank` re-anchors on the next balance
+                    // without claiming the step.
+                    self.stale_bank = true;
+                    self.banked = 0;
+                    self.pending_step = 0;
+                    self.pending_since = None;
+                    self.gold_high = 0;
+                }
+                if *has_experience && !name.is_empty() {
+                    self.baseline_for = Some(name.clone());
                 }
                 if self.stale_save && *has_experience && *experience > 0 {
                     self.total_xp = *experience;
@@ -901,6 +1135,39 @@ impl GameStats {
                         std::collections::hash_map::Entry::Vacant(fresh) => {
                             fresh.insert(now);
                         }
+                    }
+                }
+                // Where the character is, coarsely. The save says which act;
+                // the room itself only ever comes with the heartbeat, and that
+                // arrives when the game feels like it. A login-identity packet
+                // carries no act at all, and a zero is not a place.
+                if *act > 0 && self.act != *act {
+                    self.act = *act;
+                    self.revision += 1;
+                }
+                // A room in another act is not where the character is.
+                //
+                // The room only ever arrives with the game's own state packet,
+                // and since the August 2026 patch that packet comes about
+                // twenty times less often than it used to — a couple of
+                // hundred lines of traffic apart at best, and thousands at
+                // worst. So the last room heard is often long out of date, and
+                // it was outranking the act, which the save states on every
+                // write: the panel sat on `Flooded Plains` through visits to
+                // three other acts.
+                //
+                // The save cannot say which zone, so this does not replace the
+                // room with a better one — it retires a room that has been
+                // outlived, and the act stands alone until the game names a
+                // zone again. A room whose name says nothing about an act, the
+                // Shadow Realm and its like, is left where it is: there is
+                // nothing to contradict it with.
+                if let (Some(room), true) = (self.room.as_deref(), *act > 0) {
+                    if matches!(act_of_room(room), Some(was) if was != *act) {
+                        self.bank_room_time();
+                        self.room = None;
+                        self.room_since = None;
+                        self.revision += 1;
                     }
                 }
                 // a login-identity packet carries no experience and may report
@@ -972,11 +1239,17 @@ impl GameStats {
                 }
             }
             GameEvent::Vitals { mf, level, hlevel, satanic_here } => {
-                if *mf != self.mf || *satanic_here != self.satanic_here {
+                // What the packet did not state is left where it was. The
+                // client files crash reports carrying the same shape with no
+                // magic find in them, and taking those as zero left the number
+                // reading nothing for most of a session.
+                let mf = mf.unwrap_or(self.mf);
+                let satanic_here = satanic_here.unwrap_or(self.satanic_here);
+                if mf != self.mf || satanic_here != self.satanic_here {
                     self.revision += 1;
                 }
-                self.mf = *mf;
-                self.satanic_here = *satanic_here;
+                self.mf = mf;
+                self.satanic_here = satanic_here;
                 // The save carries these too, but it arrives when the game
                 // decides to save; the heartbeat is a few seconds old at worst.
                 // Only what the heartbeat actually reported is taken.
@@ -995,6 +1268,7 @@ impl GameStats {
             }
             GameEvent::ItemAdded {
                 rarity,
+                unscaled,
                 mf,
                 tier,
                 item_type,
@@ -1050,6 +1324,12 @@ impl GameStats {
                 // A named item always drops at its own grade, which the packet
                 // never states — the wiki table does. Unnamed drops carry their
                 // grade themselves, and their pickup inherits it.
+                //
+                // Proven against two captures: over every named sighting in
+                // them the packet's grade field is zero, and no named identity
+                // ever carries two different grades. Ordinary bases do — they
+                // arrive at every grade from 1 to 6, and at 6666 — which is why
+                // this stays a fallback rather than becoming an override.
                 let mut tier = *tier;
                 if tier == 0 && !name.is_empty() {
                     tier = crate::items::tier_by_name(name);
@@ -1064,11 +1344,17 @@ impl GameStats {
                         self.tier_seen.clear();
                     }
                 }
-                let rarity_key = crate::parser::resolve_rarity(rarity, name);
+                let rarity_key = crate::parser::resolve_rarity(rarity, name, *unscaled);
                 let is_resource =
                     RESOURCES.iter().any(|(t, _)| t == item_type) || is_container(name);
-                // ground rolls are the drop moment, not an acquisition: they
-                // drive the ticker and sounds, never the counters
+                // A sighting counts once, whichever of the two got here first:
+                // `counted` is keyed on the item's identity, not on how it was
+                // seen. So a roll on the floor does reach the counters — an
+                // item is found when it lands, and a player who leaves a
+                // Satanic base on the ground still found it. It was this
+                // comment that was wrong, not the code: it claimed rolls
+                // "never" reach the counters, and in one capture they were 93%
+                // of the Set column and 42% of the Satanic one.
                 if !announced && first {
                     let n = (*amount).max(1);
                     // Gear only. Counting by grade alone put Angelic keys and
@@ -1095,19 +1381,31 @@ impl GameStats {
                     self.progressed();
                 }
                 // One notification per item: either when it hits the ground or
-                // when it lands in the bag, never both. The drop on the ground
-                // carries no tier — only the pickup does — so a minimum tier
-                // makes the alert wait for the pickup, which can prove it.
+                // when it lands in the bag, never both. That is what `told`
+                // below is for, and it is enough on its own — an item is
+                // announced by whichever sighting gets here first and passes.
+                //
+                // So preferring the drop moment means preferring it, not
+                // requiring it. Requiring it is what this used to do, and since
+                // the ground is the default it meant a pickup could never
+                // announce anything at all: in one capture, two hundred rolls
+                // announced and none of the thousand pickups did, and the two
+                // sets barely overlapped — a hundred and seventeen of the rolls
+                // were items left on the floor, and nine hundred of the pickups
+                // had no roll this app ever saw.
+                //
+                // It also cost the case the old comment promised: a roll on the
+                // ground carries no grade, so under a minimum grade it fails,
+                // and the pickup that could have proved the grade was refused a
+                // hearing. Now it gets one, because the roll never reached
+                // `told`.
+                //
+                // The other way round still means only the bag: an item nobody
+                // picks up is not something the player asked to be told about.
                 // a list the user built outranks every switch below it
                 let listed = self.listed_sound(name);
                 let listed_hit = listed.is_some();
-                let wanted = if *announced || listed.is_some() {
-                    true
-                } else if self.prefs.prefer_ground {
-                    *ground
-                } else {
-                    !*ground
-                };
+                let wanted = *announced || listed_hit || self.prefs.prefer_ground || !*ground;
                 let announce = *announced
                     || listed_hit
                     || (!is_resource && self.passes_filter(&rarity_key, tier));
@@ -1187,21 +1485,45 @@ impl GameStats {
                     return Some(entry);
                 }
             }
+            GameEvent::ZoneRegion(id) => {
+                self.zone_asked_by = Some(id.clone());
+            }
             GameEvent::SatanicZone { zone, buffs, debuffs } => {
-                // A zone we already had and no longer have is the rotation; a
-                // zone where there was none is this process finding out where
-                // the zone is, which is not news the player asked to hear. Nor
-                // is the first packet after a reset — see `stale_zone`.
-                let moved = self.satanic.as_ref().is_some_and(|s| s.zone != *zone);
+                // A roll different from the one we are holding is the
+                // rotation; a zone where there was none is this process finding
+                // out where the zone is, which is not news the player asked to
+                // hear. Nor is the first reply after a blackout — see
+                // `stale_zone`, and note that a plain reset is not one.
+                //
+                // The buffs decide it as much as the code does. There are forty
+                // rooms and the roll can land on the one it just left, with a
+                // different set on it — and under a filter that alerts on the
+                // buffs, that is exactly the rotation the player asked to hear
+                // about. The order the server lists them in is its own business,
+                // so they are compared as sets.
+                let rerolled = |s: &SatanicZone| {
+                    s.zone != *zone || !same_set(&s.buffs, buffs) || !same_set(&s.debuffs, debuffs)
+                };
+                // Only against the zone the same region gave us. A reply for
+                // another region is a different question's answer: it replaces
+                // what we hold, because it is where the player now is, and it
+                // announces nothing, because nothing rotated.
+                //
+                // Both unknown compares equal, which is what a capture with no
+                // request in it gets — the old behaviour, rather than silence.
+                let same_region = self.zone_region == self.zone_asked_by;
+                let moved = same_region && self.satanic.as_ref().is_some_and(rerolled);
                 if moved && !self.stale_zone {
                     self.sz_changed = Some(Instant::now());
                 }
                 self.stale_zone = false;
+                self.zone_region = self.zone_asked_by.clone();
                 self.satanic = Some(SatanicZone {
                     zone: zone.clone(),
                     buffs: buffs.clone(),
                     debuffs: debuffs.clone(),
                 });
+                self.satanic_at = Some(now_ms());
             }
         }
         None
@@ -1215,10 +1537,26 @@ impl GameStats {
         // answers with the new balance. The deposit is counted straight away —
         // it is the only earnings signal that survives a tracker restart — and
         // then subtracted from the balance step so the same coins count once.
+        // A step credited a moment ago is only in flight for as long as it
+        // takes the other packet to arrive. Past that it was something else —
+        // a quest paying into the bank, a sale — and it must not swallow a real
+        // deposit later in the session.
+        if self.pending_since.is_some_and(|at| at.elapsed() > IN_FLIGHT) {
+            self.pending_step = 0;
+            self.pending_since = None;
+        }
         if c.delta > 0 {
-            self.gold_earned += c.delta;
-            self.progressed();
-            self.banked += c.delta;
+            // Whichever of the two arrived first, the coins count once. Only
+            // the forward direction used to cancel, so a balance that beat its
+            // own deposit was credited and then credited again.
+            let already = self.pending_step.min(c.delta);
+            self.pending_step -= already;
+            let fresh = c.delta - already;
+            if fresh > 0 {
+                self.gold_earned += fresh;
+                self.progressed();
+                self.banked += fresh;
+            }
             self.last_bank = Some(Instant::now());
         }
         // the save names the purse; before it arrives, an unambiguous packet
@@ -1233,23 +1571,45 @@ impl GameStats {
             // carried over from the last run: only the deposits seen since the
             // tracker started are ours to claim
             self.total_gold = current;
+            self.gold_high = current;
             self.gold_mode = Some(mode);
             self.stale_bank = false;
             self.banked = 0;
             return;
         }
         if self.total_gold != 0 && self.gold_mode == Some(mode) {
-            let diff = current - self.total_gold;
+            // Measured from the highest it has been, not from where it last
+            // was: climbing back to a level the bank has already held is a
+            // return, not an income.
+            let diff = current - self.total_gold.max(self.gold_high);
             if diff > 0 {
                 let already = self.banked.min(diff);
                 self.banked -= already;
                 if diff > already {
-                    self.gold_earned += diff - already;
+                    let fresh = diff - already;
+                    self.gold_earned += fresh;
+                    // Remembered in case the deposit that caused it has not
+                    // arrived yet; the branch above cancels against this.
+                    self.pending_step += fresh;
+                    self.pending_since = Some(Instant::now());
                     self.progressed();
                 }
             }
         }
         self.total_gold = current;
+        // A different purse is a different balance, and the mark that stops a
+        // return being counted as income has nothing to say about it.
+        //
+        // Left standing it says the wrong thing for the whole session. A
+        // returning player's seasonal purse is empty while the blood-pact one
+        // still holds a million and a half, so the first save names the funded
+        // purse and the mark anchors there; the next save names the seasonal
+        // one and the balance drops to a few thousand. From then on every climb
+        // is measured against the abandoned peak, `diff` is always negative,
+        // and vendor income, mail and quest gold all register as exactly zero —
+        // silently, and persisted into runs.json as a run that earned nothing.
+        self.gold_high =
+            if self.gold_mode == Some(mode) { self.gold_high.max(current) } else { current };
         self.gold_mode = Some(mode);
     }
 
@@ -1345,7 +1705,9 @@ impl GameStats {
                 .collect(),
             items,
             satanic_zone: self.satanic.clone(),
+            satanic_at: self.satanic_at,
             room: self.room.clone(),
+            act: self.act,
             mf: self.mf,
             satanic_here: self.satanic_here,
             character: self.character.clone(),
@@ -1442,8 +1804,14 @@ pub struct Snapshot {
     pub notable: Vec<NotableCount>,
     pub items: HashMap<String, ItemStats>,
     pub satanic_zone: Option<SatanicZone>,
+    /// unix milliseconds; see `GameStats::satanic_at`
+    pub satanic_at: Option<u64>,
     /// where the character is standing, e.g. "Act_08_02"
     pub room: Option<String>,
+    /// Which act the character is in, from the save, where the room is not
+    /// known. The room comes only with the heartbeat and the heartbeat is
+    /// occasional; this arrives with every save.
+    pub act: i64,
     /// magic find, live off the heartbeat, and whether this room is the
     /// satanic zone — the game says so itself
     pub mf: i64,
@@ -1476,6 +1844,7 @@ mod tests {
     fn named_item(rarity: serde_json::Value, mf: bool, name: &str, fingerprint: &str) -> GameEvent {
         GameEvent::ItemAdded {
             rarity,
+            unscaled: false,
             mf,
             tier: 3,
             item_type: 0,
@@ -1495,8 +1864,8 @@ mod tests {
         match named_item(json!(6), false, "", fingerprint) {
             GameEvent::ItemAdded { rarity, mf, item_type, item_id, weapon_type, seed, name, announced, amount, fingerprint, ground, .. } => {
                 GameEvent::ItemAdded {
-                    rarity, mf, tier, item_type, item_id, weapon_type, seed, name, announced, amount,
-                    fingerprint, hash: String::new(), ground,
+                    rarity, unscaled: false, mf, tier, item_type, item_id, weapon_type, seed, name,
+                    announced, amount, fingerprint, hash: String::new(), ground,
                 }
             }
             other => other,
@@ -1504,12 +1873,17 @@ mod tests {
     }
 
     fn satanic_zone(zone: &str) -> GameEvent {
-        GameEvent::SatanicZone { zone: zone.into(), buffs: vec![1, 2, 3], debuffs: vec![4] }
+        rolled_zone(zone, vec![1, 2, 3])
+    }
+
+    fn rolled_zone(zone: &str, buffs: Vec<u8>) -> GameEvent {
+        GameEvent::SatanicZone { zone: zone.into(), buffs, debuffs: vec![4] }
     }
 
     fn notable_item(name: &str, item_type: i64, amount: i64) -> GameEvent {
         GameEvent::ItemAdded {
             rarity: json!(1),
+            unscaled: false,
             mf: false,
             tier: 0,
             item_type,
@@ -1528,6 +1902,7 @@ mod tests {
     fn ground_item(rarity: serde_json::Value, name: &str, seed: i64) -> GameEvent {
         GameEvent::ItemAdded {
             rarity,
+            unscaled: false,
             mf: false,
             tier: 0,
             item_type: 1,
@@ -1547,9 +1922,56 @@ mod tests {
         account_xp(season, hardcore, blood_pact, 0)
     }
 
+    fn in_act(act: i64) -> GameEvent {
+        match account_xp(1, 0, 0, 1) {
+            GameEvent::Account { experience, has_experience, season, hardcore, blood_pact, name, level, herolevel, difficulty, hell_sub, kills, tallies, .. } => {
+                GameEvent::Account {
+                    experience, act, has_experience, season, hardcore, blood_pact, name, level,
+                    herolevel, difficulty, hell_sub, kills, tallies,
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// A room the save has outlived is not where the character is.
+    ///
+    /// The game names the room about twenty times less often than it used to,
+    /// so the last one heard goes stale while the save keeps saying which act.
+    /// Left to outrank it, `Flooded Plains` sat in the panel through visits to
+    /// three other acts.
+    #[test]
+    fn a_room_from_another_act_is_retired() {
+        let mut s = GameStats::default();
+        s.apply(&in_act(8));
+        s.apply(&GameEvent::Room("Act_08_02".into()));
+        assert_eq!(s.snapshot(String::new()).room.as_deref(), Some("Act_08_02"));
+
+        // the save moves on; the room it belonged to does not survive it
+        s.apply(&in_act(6));
+        let snap = s.snapshot(String::new());
+        assert_eq!(snap.room, None, "the room was in act 8");
+        assert_eq!(snap.act, 6, "and the act is all that is known now");
+
+        // a town belongs to its act too
+        s.apply(&GameEvent::Room("Town_06_rm".into()));
+        s.apply(&in_act(2));
+        assert_eq!(s.snapshot(String::new()).room, None, "towns are numbered by act");
+
+        // and a room that names no act is left alone: nothing contradicts it
+        s.apply(&GameEvent::Room("Shadow_Realm_rm".into()));
+        s.apply(&in_act(9));
+        assert_eq!(
+            s.snapshot(String::new()).room.as_deref(),
+            Some("Shadow_Realm_rm"),
+            "the Shadow Realm belongs to no act"
+        );
+    }
+
     fn account_xp(season: i64, hardcore: i64, blood_pact: i64, experience: i64) -> GameEvent {
         GameEvent::Account {
             experience,
+            act: 0,
             has_experience: experience > 0,
             season,
             hardcore,
@@ -1629,6 +2051,7 @@ mod tests {
     fn account_packet(name: &str, kills: i64, experience: i64) -> GameEvent {
         GameEvent::Account {
             experience,
+            act: 0,
             has_experience: true,
             season: CURRENT_SEASON,
             hardcore: 0,
@@ -1772,6 +2195,7 @@ mod tests {
         s.set_sound_lists(vec![("list-chase".into(), vec!["AK-47".into()])]);
         let drop = |name: &str, hash: &str| GameEvent::ItemAdded {
             rarity: json!(2),
+            unscaled: false,
             mf: false,
             tier: 0,
             item_type: 3,
@@ -1794,8 +2218,8 @@ mod tests {
         let picked = match drop("AK-47", "a") {
             GameEvent::ItemAdded { rarity, mf, tier, item_type, item_id, weapon_type, seed, name, announced, amount, fingerprint, hash, .. } => {
                 GameEvent::ItemAdded {
-                    rarity, mf, tier, item_type, item_id, weapon_type, seed, name, announced,
-                    amount, fingerprint, hash, ground: false,
+                    rarity, unscaled: false, mf, tier, item_type, item_id, weapon_type, seed, name,
+                    announced, amount, fingerprint, hash, ground: false,
                 }
             }
             other => other,
@@ -1911,6 +2335,7 @@ mod tests {
             GameEvent::Account { experience, season, hardcore, blood_pact, name, level, herolevel, difficulty, hell_sub, kills, .. } => {
                 GameEvent::Account {
                     experience, has_experience: true, season, hardcore, blood_pact, name, level,
+                    act: 0,
                     herolevel, difficulty, hell_sub, kills,
                     tallies: HashMap::from([
                         ("statisticsatankills".to_string(), satan),
@@ -1972,6 +2397,7 @@ mod tests {
         s.set_filter(vec!["Satanic".into(), "Heroic".into()], 6);
         let drop = |name: &str, hash: &str| GameEvent::ItemAdded {
             rarity: json!(2),
+            unscaled: false,
             mf: false,
             tier: 0,
             item_type: 3,
@@ -2002,6 +2428,7 @@ mod tests {
         let announced = s
             .apply(&GameEvent::ItemAdded {
                 rarity: Value::Null,
+                unscaled: false,
                 mf: false,
                 tier: 0,
                 item_type: 0,
@@ -2021,6 +2448,7 @@ mod tests {
         // walking over it must not chime a second time
         let picked = s.apply(&GameEvent::ItemAdded {
             rarity: json!(4),
+            unscaled: false,
             mf: false,
             tier: 6,
             item_type: 13,
@@ -2043,6 +2471,7 @@ mod tests {
         // it — so it can only narrow alerts that fire when an item is picked up
         let ak = |tier: i64, ground: bool, fp: &str| GameEvent::ItemAdded {
             rarity: json!(2),
+            unscaled: false,
             mf: true,
             tier,
             item_type: 3,
@@ -2080,6 +2509,7 @@ mod tests {
         s.set_filter(vec!["Heroic".into()], 0);
         let entry = s.apply(&GameEvent::ItemAdded {
             rarity: json!(2),
+            unscaled: false,
             mf: true,
             tier: 0,
             item_type: 3,
@@ -2112,6 +2542,39 @@ mod tests {
         // the rollback only re-anchors; the 298 kills made after it still count
         assert_eq!(snap.kills.earned, 906_286 - 905_988);
         assert_eq!(snap.kills.total, 906_286);
+    }
+
+    #[test]
+    fn income_on_the_new_purse_survives_the_purse_changing() {
+        // A returning player: the seasonal purse is empty and only the blood
+        // pact one is funded, so the first packet has to guess and guesses that
+        // one. The save then names the seasonal purse and the balance drops by
+        // a million and a half. Everything earned from there on was measured
+        // against the abandoned peak and came out negative, so gold earned read
+        // exactly zero for the rest of the session.
+        let mut s = GameStats::default();
+        s.apply(&GameEvent::Gold(Currency { gbp: 1_706_231, ..Default::default() }));
+        assert_eq!(s.gold_mode, Some("GBP"), "one funded purse names itself");
+
+        s.apply(&account_packet("x", 0, 0));
+        s.apply(&GameEvent::Gold(Currency { gss: 5_000, gbp: 1_706_231, ..Default::default() }));
+        assert_eq!(s.gold_mode, Some("GSS"), "the save outranks the guess");
+
+        s.apply(&GameEvent::Gold(Currency { gss: 6_000, gbp: 1_706_231, ..Default::default() }));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 1_000);
+    }
+
+    #[test]
+    fn the_room_a_reset_carries_starts_its_clock() {
+        // The room travels across a reset so the panel does not go blank. Its
+        // clock did not, so the room the next session opens in banked nothing:
+        // reset while standing somewhere, farm there for half an hour, and the
+        // run card's "where it happened" was empty.
+        let mut s = GameStats::default();
+        s.apply(&GameEvent::Room("Act_09_06".into()));
+        s.reset();
+        assert_eq!(s.room.as_deref(), Some("Act_09_06"));
+        assert!(s.room_since.is_some(), "the carried room is being timed");
     }
 
     #[test]
@@ -2198,6 +2661,7 @@ mod tests {
         s.set_prefer_ground(true);
         let sighting = |ground: bool, tier: i64| GameEvent::ItemAdded {
             rarity: json!(6),
+            unscaled: false,
             mf: false,
             tier,
             item_type: 8,
@@ -2227,6 +2691,7 @@ mod tests {
         let mut s = GameStats::default();
         let sighting = |ground: bool| GameEvent::ItemAdded {
             rarity: json!(3),
+            unscaled: false,
             mf: false,
             tier: 0,
             item_type: 8,
@@ -2252,6 +2717,7 @@ mod tests {
         s.set_filter(vec!["Satanic".into()], 5);
         let sighting = |ground: bool, tier: i64| GameEvent::ItemAdded {
             rarity: json!(6),
+            unscaled: false,
             mf: false,
             tier,
             item_type: 8,
@@ -2298,7 +2764,7 @@ mod tests {
         s.set_prefer_ground(false);
         let quiet = s.extra_revision();
         s.apply(&GameEvent::Room("Act_07_03".into()));
-        s.apply(&GameEvent::Vitals { mf: 120, level: 0, hlevel: 0, satanic_here: false });
+        s.apply(&GameEvent::Vitals { mf: Some(120), level: 0, hlevel: 0, satanic_here: Some(false) });
         s.apply(&GameEvent::Gold(Currency { gss: 500, ..Default::default() }));
         s.apply(&GameEvent::XpGain(15));
         assert_eq!(s.extra_revision(), quiet, "a heartbeat adds nothing to the journal");
@@ -2412,6 +2878,171 @@ mod tests {
     }
 
     #[test]
+    fn five_quiet_minutes_stop_the_clock() {
+        let mut s = GameStats::default();
+        s.watch_idle();
+        assert!(!s.paused(), "a run that has just started is not idle");
+
+        s.last_progress = Instant::now() - IDLE_AFTER - Duration::from_secs(1);
+        s.watch_idle();
+        assert!(s.paused(), "quiet for longer than the limit");
+
+        // Anything the run does lifts it, without being asked to.
+        s.progressed();
+        assert!(!s.paused(), "a kill, a drop or a coin is a sign of life");
+
+        // A pause the player asked for is a different thing and outranks it.
+        s.set_paused(true);
+        s.progressed();
+        assert!(s.paused(), "a hand-made pause lasts until the same hand lifts it");
+        s.set_paused(false);
+        assert!(!s.paused());
+    }
+
+    #[test]
+    fn a_pickup_is_heard_when_the_roll_that_preceded_it_was_not() {
+        // One sighting of an item, either half of the pair, with a shared
+        // fingerprint so both are the same item.
+        fn sighting(ground: bool, tier: i64, print: &str) -> GameEvent {
+            GameEvent::ItemAdded {
+                rarity: json!(6),
+                unscaled: false,
+                mf: false,
+                tier,
+                item_type: 0,
+                item_id: 0,
+                weapon_type: 0,
+                seed: 0,
+                // no name: nothing for the item table to grade it by, which is
+                // the case a minimum grade actually bites on
+                name: String::new(),
+                announced: false,
+                amount: 1,
+                fingerprint: print.into(),
+                hash: String::new(),
+                ground,
+            }
+        }
+
+        // The default, and the case that was broken: preferring the drop moment
+        // used to mean refusing the bag outright, so an item whose roll this app
+        // never saw — or whose roll had no grade to pass the minimum — was never
+        // announced at all.
+        let mut s = GameStats::default();
+        assert!(s.prefs.prefer_ground);
+        s.prefs.min_tier = 3;
+
+        assert!(s.apply(&sighting(true, 0, "a")).is_none(), "no grade on the floor, no alert");
+        assert!(
+            s.apply(&sighting(false, 5, "a")).is_some(),
+            "the bag proves the grade, and the roll never reached `told`"
+        );
+
+        // Most pickups have no roll this app saw at all. They are announced.
+        let mut t = GameStats::default();
+        assert!(t.apply(&sighting(false, 5, "b")).is_some());
+
+        // And never twice: announced as it lands, quiet as it is taken.
+        let mut u = GameStats::default();
+        assert!(u.apply(&sighting(true, 5, "c")).is_some(), "announced as it lands");
+        assert!(u.apply(&sighting(false, 5, "c")).is_none(), "and not again in the bag");
+
+        // Asking for the bag alone still means the bag alone.
+        let mut v = GameStats::default();
+        v.set_prefer_ground(false);
+        assert!(v.apply(&sighting(true, 5, "d")).is_none(), "the floor is not what was asked for");
+        assert!(v.apply(&sighting(false, 5, "d")).is_some());
+    }
+
+    #[test]
+    fn another_characters_lifetime_is_not_this_sessions_earnings() {
+        fn save(name: &str, xp: i64, kills: i64, chests: i64) -> GameEvent {
+            let mut tallies = HashMap::new();
+            tallies.insert("statisticcommonchestsopened".to_string(), chests);
+            GameEvent::Account {
+                experience: xp,
+                act: 0,
+                has_experience: true,
+                season: CURRENT_SEASON,
+                hardcore: 0,
+                blood_pact: 0,
+                name: name.into(),
+                level: 100,
+                herolevel: 100,
+                difficulty: 2,
+                hell_sub: 0,
+                kills,
+                tallies,
+            }
+        }
+
+        let mut s = GameStats::default();
+        s.apply(&save("Main", 1_000_000, 900_000, 5_000)); // the first save only marks
+        s.apply(&save("Main", 1_000_500, 900_010, 5_001));
+        // Character select, an alt, and back. The alt's totals are its own life.
+        s.apply(&save("Alt", 40, 3, 1));
+        s.apply(&save("Alt", 90, 5, 1));
+        s.apply(&save("Main", 1_001_000, 900_020, 5_002));
+
+        let snap = s.snapshot(String::new());
+        assert_eq!(snap.xp.earned, 550, "500 on the main, 50 on the alt, and nothing between them");
+        assert_eq!(snap.kills.earned, 12, "10 + 2, not nine hundred thousand");
+        let chests = snap.tallies.iter().find(|t| t.label == "Common").map(|t| t.total);
+        assert_eq!(chests, Some(1), "one chest on the main; the alt opened none after its mark");
+    }
+
+    #[test]
+    fn climbing_back_to_a_balance_the_bank_has_held_is_not_income() {
+        let balance = |gns: i64| GameEvent::Gold(crate::parser::Currency {
+            gss: 0, gsh: 0, gns, gnh: 0, gbp: 0, delta: 0,
+        });
+        let mut s = GameStats::default();
+        s.apply(&account(0, 0, 0));
+        s.apply(&balance(78_101)); // the run starts on the main's purse
+
+        // A visit to another character. Its purse arrives in the very same
+        // fields, and it holds a hundred coins.
+        s.apply(&balance(107));
+        // And back. This used to read as seventy-eight thousand earned.
+        s.apply(&balance(78_101));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 0, "nothing was earned by walking there and back");
+
+        // Past the high-water mark is earnings again.
+        s.apply(&balance(80_101));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 2_000);
+    }
+
+    #[test]
+    fn a_deposit_and_the_balance_that_answers_it_are_one_lot_of_coins() {
+        // The client says it banked ten thousand and the server says the bank
+        // now holds ten thousand more. Both orders, same answer.
+        let deposit = |amount: i64| GameEvent::Gold(crate::parser::Currency {
+            gss: 0, gsh: 0, gns: 0, gnh: 0, gbp: 0, delta: amount,
+        });
+        let balance = |gns: i64| GameEvent::Gold(crate::parser::Currency {
+            gss: 0, gsh: 0, gns, gnh: 0, gbp: 0, delta: 0,
+        });
+
+        for order in ["deposit first", "balance first"] {
+            let mut s = GameStats::default();
+            s.apply(&account(0, 0, 0)); // non-seasonal: the GNS purse
+            s.apply(&balance(100_000)); // the run starts with what is already there
+            if order == "deposit first" {
+                s.apply(&deposit(10_000));
+                s.apply(&balance(110_000));
+            } else {
+                s.apply(&balance(110_000));
+                s.apply(&deposit(10_000));
+            }
+            assert_eq!(
+                s.snapshot(String::new()).gold.earned,
+                10_000,
+                "{order}: the same ten thousand, counted once"
+            );
+        }
+    }
+
+    #[test]
     fn a_reset_clears_the_session_but_keeps_the_character() {
         let mut s = GameStats::default();
         s.apply(&account(CURRENT_SEASON, 1, 0));
@@ -2425,26 +3056,126 @@ mod tests {
     #[test]
     fn only_a_real_rotation_announces_the_satanic_zone() {
         let mut s = GameStats::default();
-        // The client repeats the zone in every heartbeat, so this is what a
-        // tracker started between rotations sees: the same zone, over and over.
+        // The zone is not on the heartbeat: it is a reply the server sends when
+        // the client asks, which it does on an area load. So this is a session's
+        // whole diet of zone packets — a handful, minutes apart, and the same
+        // zone repeated whenever the player reloads without a rotation between.
         s.apply(&satanic_zone("Act_08_02"));
-        assert!(!s.take_zone_change(), "learning where the zone is is not it moving");
+        assert!(s.take_zone_change().is_none(), "learning where the zone is is not it moving");
         s.apply(&satanic_zone("Act_08_02"));
-        assert!(!s.take_zone_change(), "the same zone said twice is one zone");
+        assert!(s.take_zone_change().is_none(), "the same zone said twice is one zone");
 
         s.apply(&satanic_zone("Act_03_01"));
-        assert!(s.take_zone_change(), "the zone moved");
-        assert!(!s.take_zone_change(), "and it is announced once, not until the next look");
+        let moved = s.take_zone_change().expect("the zone moved");
+        assert_eq!(moved.zone, "Act_03_01", "and it says which zone it moved to");
+        assert!(s.take_zone_change().is_none(), "announced once, not until the next look");
+    }
 
-        // A reset is the player starting a new session — and the game starting
-        // is one too, which is the case that matters: the zone travels across
-        // it, the game has been closed for an hour, and where the zone has got
-        // to in the meantime is news to this app rather than news to tell.
-        s.reset();
+    #[test]
+    fn a_blackout_swallows_one_packet_and_a_plain_reset_does_not() {
+        let mut s = GameStats::default();
+        s.apply(&satanic_zone("Act_03_01"));
+        s.take_zone_change();
+
+        // The game closing and opening again. The zone travels across it, the
+        // game has been shut for an hour, and where the rotation has got to in
+        // the meantime is news to this app rather than news to tell.
+        s.reset_after_blackout();
         s.apply(&satanic_zone("Act_11_01"));
-        assert!(!s.take_zone_change(), "a reset must not be reported as a rotation");
-        // and the zone that packet named is the zone from then on
+        assert!(s.take_zone_change().is_none(), "a blackout must not be reported as a rotation");
         s.apply(&satanic_zone("Act_02_04"));
-        assert!(s.take_zone_change(), "the first packet after a reset re-arms it");
+        assert!(s.take_zone_change().is_some(), "the packet after it re-arms the guard");
+
+        // The Reset button, pressed mid-farm. Nothing went dark: the game has
+        // been up all along and the zone is exactly where we last saw it. This
+        // used to arm the same guard, and because a zone packet arrives only
+        // every few minutes, the packet it swallowed was often the rotation the
+        // player pressed Reset to start counting.
+        s.reset();
+        s.apply(&satanic_zone("Act_05_05"));
+        assert!(s.take_zone_change().is_some(), "a session reset must not swallow a rotation");
+    }
+
+    #[test]
+    fn another_regions_answer_is_not_a_rotation() {
+        let mut s = GameStats::default();
+        s.apply(&GameEvent::ZoneRegion("8909978777".into()));
+        s.apply(&rolled_zone("Act_04_05", vec![15, 23, 9]));
+        s.take_zone_change();
+
+        // The same account, asking on another region's behalf. The zone it
+        // gets back is a different question's answer: it is where the player
+        // now is, and it is not something that rotated. Seven of the twenty-one
+        // zone changes in the capture on disk are this.
+        s.apply(&GameEvent::ZoneRegion("2029974116".into()));
+        s.apply(&rolled_zone("Act_04_05", vec![2, 5, 7]));
+        assert!(s.take_zone_change().is_none(), "another region answering is not news");
+
+        s.apply(&GameEvent::ZoneRegion("8917481016".into()));
+        s.apply(&rolled_zone("Act_02_01", vec![1]));
+        assert!(s.take_zone_change().is_none(), "nor is the next one, on a third region");
+
+        // and once it settles, that region's own rotation still lands
+        s.apply(&GameEvent::ZoneRegion("8917481016".into()));
+        s.apply(&rolled_zone("Act_07_02", vec![1]));
+        assert!(s.take_zone_change().is_some(), "the region that asked before is the one that moved");
+    }
+
+    #[test]
+    fn a_capture_with_no_question_in_it_behaves_as_it_always_did() {
+        // Nothing in the older captures carries the request, and a rule that
+        // needs one would report no rotation at all for them.
+        let mut s = GameStats::default();
+        s.apply(&satanic_zone("Act_01_01"));
+        s.take_zone_change();
+        s.apply(&satanic_zone("Act_02_02"));
+        assert!(s.take_zone_change().is_some(), "both regions unknown compares equal");
+    }
+
+    #[test]
+    fn a_reroll_onto_the_same_zone_is_still_a_rotation() {
+        let mut s = GameStats::default();
+        s.apply(&rolled_zone("Act_08_02", vec![1, 2, 3]));
+        s.take_zone_change();
+
+        s.apply(&rolled_zone("Act_08_02", vec![3, 2, 1]));
+        assert!(s.take_zone_change().is_none(), "the same buffs in another order are the same roll");
+
+        s.apply(&rolled_zone("Act_08_02", vec![1, 2, 14]));
+        assert!(
+            s.take_zone_change().is_some(),
+            "the same room with a different set on it is a new rotation, and under a              filter that alerts on the buffs it is exactly the one worth hearing"
+        );
+    }
+
+    #[test]
+    fn the_buff_pick_narrows_the_alert_and_an_empty_pick_narrows_nothing() {
+        let mut s = GameStats::default();
+        s.apply(&rolled_zone("Act_01_01", vec![7]));
+        s.take_zone_change();
+
+        // Nothing picked: every rotation. This is the default, and it is what
+        // an upgrade from a settings file with no list in it must keep doing.
+        assert!(s.prefs.zone_buffs.is_empty());
+        s.apply(&rolled_zone("Act_02_02", vec![7]));
+        assert!(s.take_zone_change().is_some(), "an empty pick lets every rotation through");
+        s.apply(&rolled_zone("Act_02_03", vec![]));
+        assert!(s.take_zone_change().is_some(), "including one the game gave no buffs at all");
+
+        s.prefs.zone_buffs = vec![14, 15, 16];
+        s.apply(&rolled_zone("Act_03_01", vec![7, 21]));
+        assert!(s.take_zone_change().is_none(), "none of the three: it passes in silence");
+        s.apply(&rolled_zone("Act_03_02", vec![]));
+        assert!(s.take_zone_change().is_none(), "and a zone with no buffs cannot match a pick");
+
+        s.apply(&rolled_zone("Act_04_01", vec![7, 15]));
+        let hit = s.take_zone_change().expect("one of the three is enough");
+        assert_eq!(hit.buffs, vec![7, 15], "and the alert carries what the zone rolled");
+
+        // A rotation ruled out is still a rotation dealt with: the flag goes
+        // either way, so the next look does not announce it late.
+        s.apply(&rolled_zone("Act_05_01", vec![21]));
+        assert!(s.take_zone_change().is_none());
+        assert!(s.take_zone_change().is_none(), "a filtered rotation is not left pending");
     }
 }

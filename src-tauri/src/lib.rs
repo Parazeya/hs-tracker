@@ -39,7 +39,7 @@ const SOUND_EXTS: [(&str, &str); 4] = [
 // and the web side measures that itself (see `fit_overlay`). The figures here
 // are only the opening bid, so the window is about right before the first frame
 // rather than resizing in front of the player.
-/// The panel's own width — the art, and everything the OBS page shows.
+/// The panel's own width, which is the art's.
 const PANEL_W: f64 = 444.0;
 /// The control strip beside it: the lock and four plates, each the height of a
 /// chip so the column keeps the panel's own rhythm, and flush against the frame
@@ -125,6 +125,14 @@ static LOCKED: AtomicBool = AtomicBool::new(false);
 static TRAY_OK: AtomicBool = AtomicBool::new(true);
 /// Set once any window has told us it painted; see `ui_ready`.
 static UI_READY: AtomicBool = AtomicBool::new(false);
+/// Set once the event loop is turning. Until then this thread IS the startup,
+/// and a window built on it is built the ordinary way; after it, this thread is
+/// the event loop, and see `ensure_flourish` for why that matters.
+static RUNNING: AtomicBool = AtomicBool::new(false);
+/// One builder at a time. Two commands in the same instant both find no window
+/// and both ask for one; the label is the same, so the second build fails and
+/// logs an error about a window that is in fact fine.
+static BUILDING_FLOURISH: AtomicBool = AtomicBool::new(false);
 static TICKER: AtomicBool = AtomicBool::new(true);
 /// The ticker is a transparent window pinned over the game: while it is on
 /// screen the compositor keeps blending it, empty or not. It is only shown
@@ -135,6 +143,9 @@ static TICKER_BUSY: AtomicBool = AtomicBool::new(false);
 static FLOURISH: AtomicBool = AtomicBool::new(false);
 /// leave the announcement window up so a capture has something to hold on to
 static FLOURISH_ALWAYS: AtomicBool = AtomicBool::new(false);
+/// Whether a rotation gets the pillar. Read on the pusher's thread, which has
+/// no settings of its own.
+static FLOURISH_ZONE: AtomicBool = AtomicBool::new(true);
 static SCALE_MILLI: AtomicU32 = AtomicU32::new(1000);
 /// The panel's own height in CSS pixels, as the overlay last measured it. Zero
 /// until the first frame has been drawn, when the guess below stands in.
@@ -206,6 +217,12 @@ pub struct Settings {
     /// The satanic zone rotating: its chime, its volume, and — because the two
     /// are one decision — whether the overlay's zone chip pulses with it.
     pub zone: SoundCfg,
+    /// Which of the satanic zone's buffs are worth the alert. Empty is every
+    /// rotation, not none of them: the list narrows the alert, so a list that
+    /// narrows nothing lets everything through. No `serde(default)` of its own
+    /// — the struct already carries one, and a second would outlive a change to
+    /// `Default` and quietly keep handing old files a list nobody chose.
+    pub zone_buffs: Vec<u8>,
     /// rarities worth announcing at all, and the tier they must reach
     pub alerts: Vec<String>,
     pub min_tier: i64,
@@ -230,10 +247,6 @@ pub struct Settings {
     /// does not quietly halve every per-hour figure
     /// which skin the windows wear: "default", or a season's own colours
     pub theme: String,
-    /// serve the overlay as a page for OBS to add as a Browser Source, and the
-    /// port to serve it on. Off by default and never off the loopback address.
-    pub stream: bool,
-    pub stream_port: u16,
     /// A window that plays the game's own loot pillar when something worth it
     /// drops. Off by default: it is a window over the game, and that is the
     /// player's screen to give away, not ours to take.
@@ -251,6 +264,10 @@ pub struct Settings {
     /// it again in the announcement's own switches is how a filter comes to
     /// look as though it does nothing.
     pub flourish_listed: bool,
+    /// Announce a rotation with the pillar as well as the chime. Its own
+    /// switch, and not one the chime can veto: the player with the game's audio
+    /// up wants to be shown, not told.
+    pub flourish_zone: bool,
     /// Keep the announcement window on screen between drops, drawing nothing.
     /// OBS can only capture a window that exists, and this one otherwise
     /// appears for a few seconds and is gone again. Off by default: a window
@@ -289,6 +306,8 @@ impl Default for Settings {
             // the player is meant to act on, and it happens while they are
             // looking at the fight rather than at us.
             zone: SoundCfg::default(),
+            // every rotation, until the player narrows it
+            zone_buffs: Vec::new(),
             alerts: stats::JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
             min_tier: 0,
             notable: stats::default_notable()
@@ -308,8 +327,6 @@ impl Default for Settings {
             debug_log: false,
             sound_on_ground: true,
             theme: "default".into(),
-            stream: false,
-            stream_port: 4600,
             // On out of the box. Off, with the narrowest band it has, it
             // announced nothing at all — which reads as a broken feature
             // rather than an unset one, and cost a bug report saying so.
@@ -324,6 +341,10 @@ impl Default for Settings {
             // grade 1 is D, which this slider reads as "any"
             flourish_tier: 1,
             flourish_listed: false,
+            // The rotation is the one thing on this panel the player is meant
+            // to act on, and it is rare enough that a pillar for it is not a
+            // pillar in the way. On, for the same reason the announcement is.
+            flourish_zone: true,
             flourish_always: false,
             discord: false,
             compact: false,
@@ -423,7 +444,7 @@ fn session_info() -> SessionInfo {
 /// the game itself runs through XWayland when it runs through Proton, so the
 /// two end up in the same X server where one can sit above the other. Rather
 /// than teach the user about `GDK_BACKEND`, the app relaunches itself.
-#[tauri::command]
+#[tauri::command(async)]
 fn restart_backend(app: AppHandle, x11: bool) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -555,8 +576,11 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
             }
             parser::GameEvent::Mail(has) => format!("mail  {has}"),
             parser::GameEvent::Room(room) => format!("room  {room}"),
+            parser::GameEvent::ZoneRegion(id) => format!("asks  zone, for region {id}"),
             parser::GameEvent::Vitals { mf, level, hlevel, satanic_here } => {
-                format!("vitals  mf {mf}  lv {level}  hlv {hlevel}  sz {satanic_here}")
+                let say = |v: &Option<i64>| v.map_or("-".into(), |n| n.to_string());
+                let sz = satanic_here.map_or("-".into(), |b| b.to_string());
+                format!("vitals  mf {}  lv {level}  hlv {hlevel}  sz {sz}", say(mf))
             }
             parser::GameEvent::ItemAdded { name, rarity, tier, ground, item_type, item_id, weapon_type, .. } => {
                 // an empty name means the item tables predate this item
@@ -663,7 +687,12 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
             Ok(()) => return Ok(()),
             Err(e) => {
                 last = Some(e);
-                std::thread::sleep(Duration::from_millis(20 * (attempt + 1)));
+                // Not after the last one: there is nothing left to wait for, and
+                // the 60 ms it used to sleep there was spent on the way to
+                // reporting the failure anyway.
+                if attempt < 2 {
+                    std::thread::sleep(Duration::from_millis(20 * (attempt + 1)));
+                }
             }
         }
     }
@@ -766,7 +795,7 @@ fn read_carried() -> stats::Carried {
 }
 
 fn save_carried(app: &AppHandle) {
-    let carried = app.state::<Shared>().stats.lock().unwrap().carried();
+    let carried = app.state::<Shared>().stats().carried();
     write_json(&carried_path(), &carried, false);
 }
 
@@ -841,7 +870,7 @@ fn spawn_position_saver(app: AppHandle) {
                 dirty_since = None;
                 save_window_positions(&app);
             }
-            let revision = app.state::<Shared>().stats.lock().unwrap().revision();
+            let revision = app.state::<Shared>().stats().revision();
             if revision != saved_revision && saved_at.elapsed() >= Duration::from_secs(20) {
                 saved_revision = revision;
                 saved_at = Instant::now();
@@ -1010,7 +1039,11 @@ fn spawn_stats_pusher(app: AppHandle) {
             // The mail chime is announced on its own, before anything about
             // visibility is decided: the counters may be behind a hidden window
             // all run, and the reminder is the point of them.
-            let mail = app.state::<Shared>().stats.lock().unwrap().has_mail();
+            // Five quiet minutes stop the clock, so a break does not end up
+            // divided into the per-hour figures. This is the only thread with a
+            // heartbeat, so it is the one that has to ask.
+            app.state::<Shared>().stats().watch_idle();
+            let mail = app.state::<Shared>().stats().has_mail();
             if mail && !had_mail {
                 let _ = app.emit("mail", ());
             }
@@ -1018,8 +1051,16 @@ fn spawn_stats_pusher(app: AppHandle) {
             // And the same for the zone moving on: the overlay is the window
             // that plays sounds whether it is on screen or not, and a player
             // who has hidden it still wants to know the drops got better.
-            if app.state::<Shared>().stats.lock().unwrap().take_zone_change() {
-                let _ = app.emit("zone-changed", ());
+            // Bound before the `if`, so the stats lock is let go on this line
+            // rather than held across the emit and the window work below.
+            let rotated = app.state::<Shared>().stats().take_zone_change();
+            if let Some(zone) = rotated {
+                // The zone travels with the event. The snapshot only goes to
+                // windows that are on screen, so a hidden overlay would read
+                // the alert off a stale one — and hidden is the case the chime
+                // is for.
+                let _ = app.emit("zone-changed", &zone);
+                maybe_zone_flourish(&app, &zone);
             }
 
             let (main, dashboard) = (visible("main"), visible("dashboard"));
@@ -1035,14 +1076,14 @@ fn spawn_stats_pusher(app: AppHandle) {
                 continue;
             }
             let shared = app.state::<Shared>();
-            let revision = shared.stats.lock().unwrap().revision();
+            let revision = shared.stats().revision();
 
             let due = |rev: u64, at: Instant, gap: Duration, beat: Duration| {
                 (rev != revision && at.elapsed() >= gap) || at.elapsed() >= beat
             };
             if due(snap_rev, snap_at, SNAP_MIN_GAP, SNAP_HEARTBEAT) {
-                let status = shared.status.lock().unwrap().text();
-                let snapshot = shared.stats.lock().unwrap().snapshot(status);
+                let status = shared.status().text();
+                let snapshot = shared.stats().snapshot(status);
                 for (label, on_screen) in [("main", main), ("dashboard", dashboard)] {
                     if on_screen {
                         let _ = app.emit_to(label, "stats", &snapshot);
@@ -1061,13 +1102,21 @@ fn spawn_stats_pusher(app: AppHandle) {
             // character changes, which is everything `extra()` carries.
             let reading_stats = dashboard && STATS_SECTION.load(Ordering::Relaxed);
             if reading_stats && extra_at.elapsed() >= EXTRA_MIN_GAP {
-                let stats = shared.stats.lock().unwrap();
+                // The clock is reset whether or not anything had changed.
+                //
+                // It used to move only when something did, so a dashboard with
+                // the statistics section open and nothing happening took the
+                // heaviest lock in the app on every pass of this loop —
+                // contending with the thread that is trying to parse packets,
+                // for an answer that was always "no change".
+                extra_at = Instant::now();
+                let stats = shared.stats();
                 let extra_now = stats.extra_revision();
                 if extra_rev != extra_now {
                     let extra = stats.extra();
                     drop(stats);
                     let _ = app.emit_to("dashboard", "stats-extra", &extra);
-                    (extra_rev, extra_at) = (extra_now, Instant::now());
+                    extra_rev = extra_now;
                 }
             }
         }
@@ -1097,9 +1146,11 @@ fn migrate_lists(settings: &mut Settings) {
 /// grades. A settings file still holding the guess is refreshed; anything the
 /// user has edited themselves is left alone.
 fn migrate_notable(settings: &mut Settings) {
-    const GUESSED: [&str; 2] = [
+    const GUESSED: [&str; 3] = [
         "gul rune,vex rune,qi rune,xo rune,sur rune",
         "ber rune,jah rune,drax rune,zed rune",
+        // the SS runes before the game added Sus, Kek and Jord
+        "fawn,flo,nju,jol",
     ];
     for group in &mut settings.notable {
         let joined = group.names.join(",").to_lowercase();
@@ -1140,6 +1191,9 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         fx_tier: settings.flourish_tier.clamp(1, 6),
         fx_listed: settings.flourish && settings.flourish_listed && settings.use_filter,
         notable_defs: notable,
+        // the rotation asks a different question again, of the zone rather
+        // than of a drop
+        zone_buffs: settings.zone_buffs.clone(),
         sound_lists: active
             .map(|f| {
                 f.lists
@@ -1154,7 +1208,7 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
             })
             .unwrap_or_default(),
     };
-    app.state::<Shared>().stats.lock().unwrap().set_prefs(prefs);
+    app.state::<Shared>().stats().set_prefs(prefs);
 }
 
 /// Everything a settings change touches outside the webviews.
@@ -1167,6 +1221,7 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     presence::set_enabled(settings.discord);
     FLOURISH.store(settings.flourish, Ordering::Relaxed);
     FLOURISH_ALWAYS.store(settings.flourish_always, Ordering::Relaxed);
+    FLOURISH_ZONE.store(settings.flourish_zone, Ordering::Relaxed);
     ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
     if let Some(w) = app.get_webview_window("main") {
         // Click-through is NOT set here, though it used to be, and the comment
@@ -1341,12 +1396,24 @@ fn apply_autostart(enabled: bool) {
     let _ = std::fs::write(entry, desktop);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_settings() -> Settings {
     read_settings()
 }
 
-#[tauri::command]
+/// `(async)`, like every other command here that touches a file.
+///
+/// A plain `#[tauri::command]` is run inline on the main thread, which on
+/// Windows is the thread that pumps window messages: while one is running,
+/// nothing on screen answers a click, a drag or the close button. That is
+/// affordable for reading an atomic, and it is not affordable for this — a save
+/// is a flush to the device and, when an antivirus or the indexer has the file
+/// open for a moment, up to another 60 ms of waiting on top. The word costs
+/// nothing and moves all of it to a worker thread.
+///
+/// Commands that borrow `State` are left as they are: that borrow cannot cross
+/// the hop, and none of them do I/O.
+#[tauri::command(async)]
 fn save_settings(app: AppHandle, mut settings: Settings) -> Result<(), String> {
     for cfg in [
         &mut settings.satanic,
@@ -1379,13 +1446,13 @@ fn save_settings(app: AppHandle, mut settings: Settings) -> Result<(), String> {
 
 #[tauri::command]
 fn snapshot(state: State<Shared>) -> stats::Snapshot {
-    let status = state.status.lock().unwrap().text();
-    state.stats.lock().unwrap().snapshot(status)
+    let status = state.status().text();
+    state.stats().snapshot(status)
 }
 
 #[tauri::command]
 fn get_extra(state: State<Shared>) -> stats::Extra {
-    state.stats.lock().unwrap().extra()
+    state.stats().extra()
 }
 
 /// Runs are kept next to the settings, newest first, and the file is bounded:
@@ -1404,8 +1471,8 @@ pub(crate) fn read_runs() -> Vec<stats::Run> {
 /// here — the button, the hotkey, the tray, the game closing and the app
 /// quitting — so a run is never lost and never counted twice.
 pub(crate) fn end_run(app: &AppHandle) {
-    let finished = app.state::<Shared>().stats.lock().unwrap().finish();
-    app.state::<Shared>().stats.lock().unwrap().reset();
+    let finished = app.state::<Shared>().stats().finish();
+    app.state::<Shared>().stats().reset();
     let Some(run) = finished else { return };
     let mut runs = read_runs();
     runs.insert(0, run);
@@ -1418,19 +1485,19 @@ fn close_session(app: &AppHandle) {
     end_run(app);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_runs() -> Vec<stats::Run> {
     read_runs()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_runs() -> Result<(), String> {
     // through the same staging as every other writer: a truncate in place is
     // what leaves a history that reads as nothing
     write_atomic(&runs_path(), b"[]").map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn reset_stats(app: AppHandle) {
     close_session(&app);
 }
@@ -1439,12 +1506,12 @@ fn reset_stats(app: AppHandle) {
 /// what a pause changes is what the run is divided by.
 #[tauri::command]
 fn set_paused(app: AppHandle, paused: bool) {
-    app.state::<Shared>().stats.lock().unwrap().set_paused(paused);
+    app.state::<Shared>().stats().set_paused(paused);
 }
 
 fn toggle_pause(app: &AppHandle) {
     let shared = app.state::<Shared>();
-    let mut stats = shared.stats.lock().unwrap();
+    let mut stats = shared.stats();
     let on = !stats.paused();
     stats.set_paused(on);
 }
@@ -1491,6 +1558,44 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
         }
         return;
     }
+    // Never built on the thread that asks for it, once the app is up.
+    //
+    // A window is built by the event loop, and the builder waits for it to be.
+    // A synchronous #[tauri::command] IS the event loop on Windows — Tauri runs
+    // one inline on the main thread — so a build started from inside one waits
+    // for a loop that is waiting for the command to return. Neither ever does.
+    // Every window stops answering, including the close button, and the only
+    // way out is the task manager. That is the report this app has had from a
+    // Windows user on 0.9.93, and it is what this file already records having
+    // done to itself once: see the comment above about tearing the window down
+    // and building another.
+    //
+    // The path is not exotic. `save_settings` is a synchronous command; so are
+    // `compact_mode` and `full_mode`, which call it through `set_face`; so is
+    // the hotkey that toggles the lock. Any of them reaches here, and all it
+    // takes is for the window not to exist yet — the player had the
+    // announcement off when the app started, or the build failed at startup and
+    // left nothing behind.
+    //
+    // Doing it on a thread of its own costs one thread for a few milliseconds
+    // and takes the whole class away, whoever calls it and however they got
+    // here. Before the loop is running there is nothing to deadlock against and
+    // nothing to gain, so startup builds the window where it stands.
+    if RUNNING.load(Ordering::Relaxed) {
+        if BUILDING_FLOURISH.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let app = app.clone();
+        std::thread::spawn(move || {
+            build_flourish(&app, size);
+            BUILDING_FLOURISH.store(false, Ordering::SeqCst);
+        });
+        return;
+    }
+    build_flourish(app, size);
+}
+
+fn build_flourish(app: &AppHandle, size: LogicalSize<f64>) {
     let built = tauri::WebviewWindowBuilder::new(app, "flourish", tauri::WebviewUrl::default())
         .title("HS Tracker Flourish")
         .inner_size(size.width, size.height)
@@ -1535,6 +1640,30 @@ pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
     }
     let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", drop);
+    show_flourish(app, &w);
+}
+
+/// The satanic zone has rotated onto something the player asked to be shown.
+///
+/// Decided here rather than in the window that draws it: whether a rotation is
+/// worth announcing is the same question the chime answers, and asking it twice
+/// in two languages is how the two come to disagree. `stats` has already ruled
+/// on the buffs; what is left is whether this player wants a pillar for it.
+fn maybe_zone_flourish(app: &AppHandle, zone: &stats::SatanicZone) {
+    if !FLOURISH.load(Ordering::Relaxed) || !FLOURISH_ZONE.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(w) = app.get_webview_window("flourish") else { return };
+    // The raw zone code, not a name. Turning `Satanic_5_5` into "Act 5 : Temple
+    // of Zamjo" needs a table of forty room names that the window already has
+    // and this side has no other use for.
+    let payload = serde_json::json!({
+        "kind": "zone",
+        "zone": zone.zone,
+        "buffs": zone.buffs,
+        "debuffs": zone.debuffs,
+    });
+    let _ = app.emit_to("flourish", "flourish-play", &payload);
     show_flourish(app, &w);
 }
 
@@ -1642,8 +1771,8 @@ pub struct About {
     version: String,
     platform: &'static str,
     repo: &'static str,
-    /// what the overlay measures, so a Browser Source can be given the same
-    /// numbers instead of being guessed at
+    /// what the overlay measures, so a capture source can be given the size
+    /// instead of it being guessed at
     overlay_w: u32,
     overlay_h: u32,
     /// where this process actually lives, so the setcap line the dashboard
@@ -1655,7 +1784,7 @@ const REPO: &str = "https://github.com/Parazeya/hs-tracker";
 
 /// The front end's own errors. A panel that throws while rendering goes blank
 /// and says nothing; this is how it says something.
-#[tauri::command]
+#[tauri::command(async)]
 fn report(level: String, message: String) {
     let level = match level.as_str() {
         "warn" => "warn",
@@ -1686,11 +1815,24 @@ fn reap(spawned: std::io::Result<std::process::Child>) -> std::io::Result<()> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn show_log() -> Result<(), String> {
     let file = log::path();
+    // Explorer's parser, not the one std uses.
+    //
+    // `arg` quotes the argument it is given, so explorer was handed
+    // `"/select,C:\...\HS Tracker\hs-tracker.log"` as one quoted token, did not
+    // recognise it, and opened Documents with nothing selected. The product's
+    // own name has a space in it, so that is every default install — and the
+    // button reported success while doing it, at exactly the moment someone is
+    // being asked to find their log.
     #[cfg(windows)]
-    let spawned = std::process::Command::new("explorer").arg(format!("/select,{}", file.display())).spawn();
+    let spawned = {
+        use std::os::windows::process::CommandExt as _;
+        std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", file.display()))
+            .spawn()
+    };
     #[cfg(not(windows))]
     let spawned = std::process::Command::new("xdg-open")
         .arg(file.parent().unwrap_or(&file))
@@ -1706,7 +1848,7 @@ fn about() -> About {
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: std::env::consts::OS,
         repo: REPO,
-        // what a browser source should be sized to: the page has no strip
+        // the panel without its strip: the size to give a window capture
         overlay_w: PANEL_W as u32,
         overlay_h: {
             let measured = PANEL_H.load(Ordering::Relaxed);
@@ -1726,7 +1868,7 @@ fn about() -> About {
 ///
 /// Only ever this project's own pages: the address arrives from the web side,
 /// and handing an arbitrary string to a shell is how a link becomes a command.
-#[tauri::command]
+#[tauri::command(async)]
 fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with(REPO) {
         return Err("that is not one of this project's pages".into());
@@ -1866,6 +2008,14 @@ pub(crate) fn hide_overlay(app: &AppHandle) {
 
 #[tauri::command]
 fn hide_dashboard(app: AppHandle) {
+    // With no tray to hide into and no overlay, this is the only window there
+    // is and the hotkeys that would bring it back were never registered. The
+    // button says "Close to tray"; where there is no tray, closing is what it
+    // has to mean.
+    if !TRAY_OK.load(Ordering::Relaxed) && !overlay_supported() {
+        app.exit(0);
+        return;
+    }
     hide_aux(&app, "dashboard");
 }
 
@@ -1891,12 +2041,12 @@ fn set_face(app: &AppHandle, compact: bool) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn compact_mode(app: AppHandle) {
     set_face(&app, true);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn full_mode(app: AppHandle) {
     set_face(&app, false);
 }
@@ -2006,7 +2156,7 @@ fn write_sound(dir: &std::path::Path, key: &str, snd: &ExportedSound) -> Result<
 /// so it cannot fight with the original — which left the copy mute while the
 /// button that made it promised "sounds and all". Silent when there is nothing
 /// to copy: most lists have no sound of their own.
-#[tauri::command]
+#[tauri::command(async)]
 fn copy_sound(app: AppHandle, from: String, to: String) -> Result<(), String> {
     if !sound_key(&from) || !sound_key(&to) || from == to {
         return Err("bad list".into());
@@ -2257,8 +2407,65 @@ fn log_environment() {
     );
 }
 
+/// The same, for the side that has actually had the bug.
+///
+/// Every Windows report this app has had arrived with two lines of log and
+/// nothing about the machine underneath them. The one freeze it has been told
+/// about could not be narrowed at all, because nothing written down said which
+/// Windows, which WebView2, or where the app was installed from — and the
+/// webview runtime is exactly the sort of thing that differs between a machine
+/// a bug happens on and one it does not.
 #[cfg(windows)]
-fn log_environment() {}
+fn log_environment() {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let windows = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        .map(|key| {
+            let text = |name: &str| key.get_value::<String, _>(name).unwrap_or_else(|_| "-".into());
+            let patch = key
+                .get_value::<u32, _>("UBR")
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "-".into());
+            format!(
+                "{} {} build {}.{}",
+                text("ProductName"),
+                text("DisplayVersion"),
+                text("CurrentBuild"),
+                patch
+            )
+        })
+        .unwrap_or_else(|e| format!("Windows (unreadable: {e})"));
+
+    // The runtime the whole interface is drawn by, and the one thing here that
+    // is not part of the app: it updates on its own schedule, and a player can
+    // be running a version nobody has ever tested against.
+    let webview = tauri::webview_version().unwrap_or_else(|e| format!("unreadable ({e})"));
+
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "-".into());
+
+    // Written to, not asked about. A folder can exist, list fine and still
+    // refuse a write — an install under Program Files does exactly that, and
+    // then the log the user is asked for is the one file that was never saved.
+    let dir = data_dir();
+    let probe = dir.join(".write-probe");
+    let writable = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+
+    log::say(
+        "env",
+        &format!(
+            "HS Tracker {} | {windows} | WebView2 {webview} | data {} ({}) | exe {exe} | overlay={}",
+            env!("CARGO_PKG_VERSION"),
+            dir.display(),
+            if writable { "writable" } else { "READ-ONLY" },
+            overlay_supported(),
+        ),
+    );
+}
 
 /// Nothing painted, and by now something would have. Says so where the user
 /// can find it, because on screen there is only an invisible window.
@@ -2268,10 +2475,21 @@ fn spawn_render_watchdog() {
         if UI_READY.load(Ordering::Relaxed) {
             return;
         }
+        // The advice differs by platform and used to be printed on both: a
+        // Windows user was told to try two WebKitGTK environment variables that
+        // do not exist on their machine, which reads as the app not knowing
+        // what it is running on.
+        #[cfg(windows)]
         log::error(
-            "no window has drawn anything after 20s - the web process is probably dead. 
-                   Try starting with WEBKIT_DISABLE_COMPOSITING_MODE=1, or with 
-                   WEBKIT_DISABLE_DMABUF_RENDERER=1 on an NVIDIA card.",
+            "no window has drawn anything after 20s - the web process is probably dead. \
+             The WebView2 runtime is the usual cause: repair or reinstall the Microsoft Edge \
+             WebView2 Runtime. The env line above says which version was in use.",
+        );
+        #[cfg(not(windows))]
+        log::error(
+            "no window has drawn anything after 20s - the web process is probably dead. \
+             Try starting with WEBKIT_DISABLE_COMPOSITING_MODE=1, or with \
+             WEBKIT_DISABLE_DMABUF_RENDERER=1 on an NVIDIA card.",
         );
     });
 }
@@ -2281,7 +2499,7 @@ fn ticker_busy(active: bool) {
     TICKER_BUSY.store(active, Ordering::Relaxed);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_shopping() -> Vec<String> {
     std::fs::read_to_string(shopping_path())
         .ok()
@@ -2289,7 +2507,7 @@ fn get_shopping() -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_shopping(items: Vec<String>) -> Result<(), String> {
     let items: Vec<String> = items.into_iter().filter(|s| !s.trim().is_empty()).take(200).collect();
     let json = serde_json::to_vec_pretty(&items).map_err(|e| e.to_string())?;
@@ -2341,7 +2559,7 @@ fn quit(app: AppHandle) {
 }
 
 /// Custom sound beside the exe: sounds\{satanic|heroic|angelic|mail}.{mp3,wav,ogg,flac}.
-#[tauri::command]
+#[tauri::command(async)]
 fn load_sound(rarity: String) -> Option<String> {
     if !sound_key(&rarity) {
         return None;
@@ -2358,7 +2576,7 @@ fn load_sound(rarity: String) -> Option<String> {
 
 /// Absolute path of the custom sound, for the asset protocol — streaming the
 /// file beats shipping a multi-megabyte data URL through the IPC bridge.
-#[tauri::command]
+#[tauri::command(async)]
 fn sound_path(rarity: String) -> Option<String> {
     if !sound_key(&rarity) {
         return None;
@@ -2370,7 +2588,7 @@ fn sound_path(rarity: String) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sound_status(rarity: String) -> Option<String> {
     if !sound_key(&rarity) {
         return None;
@@ -2431,7 +2649,7 @@ fn pick_sound(app: AppHandle, rarity: String) -> Result<Option<String>, String> 
     Ok(Some(name))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_sound(app: AppHandle, rarity: String) -> Result<(), String> {
     if !sound_key(&rarity) {
         return Err("bad rarity".into());
@@ -2597,9 +2815,10 @@ pub fn run() {
     let hk_pause: Shortcut = HK_PAUSE.parse().unwrap();
     let app = tauri::Builder::default()
         // First, before anything else can be built: a second copy has its own
-        // sniffer, its own writes to settings.json and runs.json, and loses the
-        // race for the stream port. It hands its arguments over and leaves,
-        // and the copy already running comes to the front instead.
+        // sniffer and its own writes to settings.json and runs.json, so both
+        // would count the same session and the loser's file would win. It hands
+        // its arguments over and leaves, and the copy already running comes to
+        // the front instead.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             let face = if read_settings().compact && overlay_supported() { "main" } else { "dashboard" };
             reveal(app, face, true);
@@ -2690,7 +2909,7 @@ pub fn run() {
                 log::say("info", "wayland session: running as the dashboard, without the overlay");
             }
             let settings = read_settings();
-            app.state::<Shared>().stats.lock().unwrap().restore(&read_carried());
+            app.state::<Shared>().stats().restore(&read_carried());
             apply_stats_settings(app.handle(), &settings);
             apply_settings_effects(app.handle(), &settings);
             restore_window_positions(app.handle());
@@ -2762,6 +2981,16 @@ pub fn run() {
                 // with no way back, and on Wayland it is the only face there
                 // is. Then let it close and take the app with it.
                 if label == "dashboard" && !TRAY_OK.load(Ordering::Relaxed) {
+                    // Letting it close is not the same as letting it go. The
+                    // overlay and the ticker keep the event loop alive, so what
+                    // was left was a process with nothing on screen, no tray and
+                    // no window to bring back — and the single-instance guard
+                    // then swallowed every relaunch, so the only way to start
+                    // the app again was to find it in a process list and kill
+                    // it. Going out through `exit` also files the run and saves
+                    // the window positions, which destroying the window skips.
+                    api.prevent_close();
+                    app.exit(0);
                     return;
                 }
                 api.prevent_close();
@@ -2772,6 +3001,9 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app, event| {
+        if let tauri::RunEvent::Ready = event {
+            RUNNING.store(true, Ordering::Relaxed);
+        }
         if let tauri::RunEvent::Exit = event {
             save_window_positions(app);
             save_carried(app);

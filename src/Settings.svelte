@@ -1,5 +1,5 @@
 <script>
-  import { invoke } from './bridge.js';
+  import { invoke, recall, remember } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
 
@@ -10,10 +10,10 @@
   // would flash a row of controls that then vanish.
   // Most of these are set once and never touched again. Keeping them all on
   // screen made the page long enough that the four people actually look for —
-  // theme, scale, autostart, the OBS port — were lost among them. Nothing is
+  // theme, scale, autostart, the overlay — were lost among them. Nothing is
   // removed; the rest is one click away and stays open once opened.
-  let advanced = $state(localStorage.getItem('settings-advanced') === '1');
-  $effect(() => localStorage.setItem('settings-advanced', advanced ? '1' : '0'));
+  let advanced = $state(recall('settings-advanced') === '1');
+  $effect(() => remember('settings-advanced', advanced ? '1' : '0'));
 
   let session = $state(null);
   let overlay = $derived(session?.overlay ?? false);
@@ -45,10 +45,34 @@
   // while this one is open. Without following along, the next save here would
   // write back the copy loaded on open and undo them.
   $effect(() => {
-    invoke('get_settings').then((s) => (settings = s));
+    invoke('get_settings').then((s) => {
+      settings = s;
+      base = JSON.parse(JSON.stringify(s));
+    });
     const unsubs = [
       listen('settings-changed', (e) => {
-        if (!saveTimer) settings = e.payload;
+        // A change from the tray, a hotkey or another panel, arriving while
+        // this one has an unsaved edit of its own.
+        //
+        // Taking it whole would undo the edit. Throwing it away — which is what
+        // this did — loses the other change for good, because nothing sends it
+        // again; the window was only 150ms wide, but a tray toggle lands inside
+        // it easily enough and then reads as a switch that did not stick.
+        //
+        // So every field is taken except the ones edited here, and "edited
+        // here" is whatever now differs from the copy the backend last handed
+        // over. That needs nothing from the controls themselves, which is the
+        // point: there are forty of them and any one that forgot to say would
+        // be the bug back again.
+        if (!saveTimer || !settings || !base) {
+          settings = e.payload;
+          base = JSON.parse(JSON.stringify(e.payload));
+          return;
+        }
+        const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+        for (const [k, v] of Object.entries(e.payload)) {
+          if (same(settings[k], base[k])) settings[k] = v;
+        }
       }),
     ];
     return () => unsubs.forEach((u) => u.then((f) => f()));
@@ -75,11 +99,15 @@
   }
 
   let saveTimer = null;
+  /// The settings as the backend last handed them over. Anything that differs
+  /// from this is an edit made here and not yet written.
+  let base = null;
   function save() {
     clearTimeout(saveTimer);
     const snapshot = $state.snapshot(settings);
     saveTimer = setTimeout(() => {
       saveTimer = null;
+      base = JSON.parse(JSON.stringify(snapshot));
       invoke('save_settings', { settings: snapshot }).catch(() => {});
     }, 150);
   }
@@ -406,7 +434,10 @@
     border: none;
     cursor: pointer;
   }
-  .more:hover { color: var(--edge-1); }
+  /* Lighter on hover, not darker. `--edge-1` is a shadow colour — over this
+     panel it took the label almost to the background, so the one control that
+     opens the rest of the page disappeared under the cursor. */
+  .more:hover { color: var(--bone-13); }
 
   .sechead {
     font-size: 10px;

@@ -21,6 +21,15 @@ pub enum Status {
     /// hand out a device elsewhere — which on Linux usually means the binary
     /// lacks cap_net_raw rather than that the library is missing
     NoCapture,
+    /// The driver is installed and will not let this process use it.
+    ///
+    /// These were one state, and the Windows half of it said "Npcap is not
+    /// installed" — so a player whose Npcap was installed with "Restrict
+    /// Npcap driver's access to Administrators only", which is a box in its own
+    /// installer, was told to go and install what they already had. One of them
+    /// said so: "It's telling me npcap not installed after i choose to install
+    /// it in the setup.exe".
+    NoAccess,
     NoInterface,
     WaitingForGame,
     Capturing { iface: String, hosts: usize, dropped: u32 },
@@ -33,6 +42,7 @@ impl Status {
             Status::NoCapture => "npcap-missing".into(),
             #[cfg(not(windows))]
             Status::NoCapture => "no-capture".into(),
+            Status::NoAccess => "no-access".into(),
             Status::NoInterface => "no-interface".into(),
             Status::WaitingForGame => "waiting-for-game".into(),
             Status::Capturing { iface, hosts, dropped } => format!("capturing|{iface}|{hosts}|{dropped}"),
@@ -70,6 +80,32 @@ struct Capture {
 pub struct Shared {
     pub stats: Arc<Mutex<GameStats>>,
     pub status: Arc<Mutex<Status>>,
+}
+
+impl Shared {
+    /// The statistics, whatever happened to the last thread that held them.
+    ///
+    /// Every one of these was `.lock().unwrap()`. A `Mutex` in Rust remembers
+    /// that a thread panicked while holding it and hands every later caller an
+    /// error instead of the data — so a single panic anywhere, in a packet
+    /// parse on the sniffer thread as easily as in a command, turned every
+    /// subsequent click into a panic of its own. The window stayed on screen
+    /// and stopped answering: no compact, no close, Task Manager.
+    ///
+    /// The data behind this lock is a session's statistics. It is not a bank
+    /// balance and it is not a file: the worst a half-written one can do is
+    /// count a drop twice, and the run is recoverable by resetting it. Refusing
+    /// to hand it over because a thread died once is a far worse outcome than
+    /// handing over what it left, so the poison is stepped over and the panic
+    /// that caused it is already in the log, where the panic hook put it.
+    pub fn stats(&self) -> std::sync::MutexGuard<'_, GameStats> {
+        self.stats.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The sniffer's own status, on the same terms.
+    pub fn status(&self) -> std::sync::MutexGuard<'_, Status> {
+        self.status.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 impl Default for Shared {
@@ -303,13 +339,79 @@ fn unoffload(data: &[u8], ip_start: usize) -> Option<Vec<u8>> {
     Some(patched)
 }
 
-/// The filter every capture shares: the addresses the game is actually using,
-/// or everything while it has not connected yet.
-fn scope_for(local: &BTreeSet<IpAddr>) -> String {
-    if local.is_empty() {
-        return "tcp".into();
+/// The filter every capture shares: traffic between this machine and the
+/// servers the game is talking to.
+///
+/// Take everything on the wire, rather than only what the game is talking to.
+///
+/// The filter is built from the game's own sockets, read out of the operating
+/// system every five seconds, so in principle it cannot miss a server the game
+/// is using. In principle is not the same as in fact — a split-tunnel engine
+/// re-injects packets and the local address they carry on the way through is
+/// not always the one the socket table names — and when something the game used
+/// to say stops arriving, "the filter is innocent" has to be a measurement
+/// rather than an argument.
+///
+/// So: `HS_WIDE_CAPTURE=1` and compare. It is deliberately an environment
+/// variable and not a setting: it is for answering one question on one run, and
+/// a wide filter on a busy machine hands this thread every plaintext byte the
+/// machine sends.
+fn wide_capture() -> bool {
+    matches!(std::env::var("HS_WIDE_CAPTURE").as_deref(), Ok("1") | Ok("true"))
+}
+
+/// Both ends, and the remote end matters most. This used to name only the local
+/// addresses — the ones the game's own sockets are bound to — and `host X` in a
+/// packet filter matches a packet with X at either end, so that came to "every
+/// TCP connection this machine holds on those interfaces". Everything else
+/// running on the same machine went through the parser with it, and in a debug
+/// build into debug-capture.jsonl: one capture on this machine is half a
+/// week of an unrelated project's traffic, and a junk packet from a third
+/// device on the network was the only experience event in twenty-three thousand
+/// messages.
+///
+/// A packet filter cannot ask which process a packet belongs to, so this is as
+/// close as it gets: the pair of ends. Another program talking to Hero Siege's
+/// own servers would still be caught, and nothing else is.
+///
+/// While the game has not connected there is nothing to name, and the answer is
+/// everything — the endpoints are re-read every five seconds and the capture
+/// restarted when they change, so that state does not last.
+fn scope_for(local: &BTreeSet<IpAddr>, remote: &BTreeSet<IpAddr>) -> String {
+    let hosts = |set: &BTreeSet<IpAddr>| {
+        set.iter().map(|ip| format!("host {ip}")).collect::<Vec<_>>().join(" or ")
+    };
+    // The far side is named by its neighbourhood rather than by the one address
+    // that happens to be answering. The game moves between servers inside a
+    // session — in one capture a second one joined halfway through and stayed —
+    // and the endpoints are only re-read every five seconds, so naming a single
+    // address means the first seconds of a new one are missed. A /24 costs
+    // nothing in precision that matters: the addresses seen are 172.104.128.x
+    // and 139.162.166.x, and nothing else on a home network lives there.
+    //
+    // v6 is left as a plain host: its addresses are not handed out in anything
+    // as tidy as a /24, and the game has not been seen using one.
+    let nets = |set: &BTreeSet<IpAddr>| {
+        let mut out: Vec<String> = set
+            .iter()
+            .map(|ip| match ip {
+                IpAddr::V4(v4) => {
+                    let [a, b, c, _] = v4.octets();
+                    format!("net {a}.{b}.{c}.0/24")
+                }
+                IpAddr::V6(_) => format!("host {ip}"),
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out.join(" or ")
+    };
+    match (local.is_empty(), remote.is_empty()) {
+        (true, true) => "tcp".into(),
+        (false, true) => hosts(local),
+        (true, false) => nets(remote),
+        (false, false) => format!("({}) and ({})", nets(remote), hosts(local)),
     }
-    local.iter().map(|ip| format!("host {ip}")).collect::<Vec<_>>().join(" or ")
 }
 
 pub fn spawn(shared: &Shared, app: tauri::AppHandle) {
@@ -319,7 +421,7 @@ pub fn spawn(shared: &Shared, app: tauri::AppHandle) {
 }
 
 fn set_status(status: &Arc<Mutex<Status>>, s: Status) {
-    *status.lock().unwrap() = s;
+    *status.lock().unwrap_or_else(|e| e.into_inner()) = s;
 }
 
 /// "No suitable interface" is the wrong story when the adapter is there and the
@@ -361,7 +463,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
     loop {
         tick += 1;
         if tick.is_multiple_of(30) {
-            stats.lock().unwrap().sample();
+            stats.lock().unwrap_or_else(|e| e.into_inner()).sample();
         }
         // `!can_capture ||` here re-probed on every pass through exactly the
         // case the cache exists for — a machine with no rights, which fails the
@@ -399,7 +501,10 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                 // per-hour figure by eleven idle hours, and filed that as the
                 // run's length when the game closed. Outside `if auto` on
                 // purpose: the same is true with the overlay switched off.
-                stats.lock().unwrap().reset();
+                // The game appearing is the one reset with a blackout behind
+                // it: the zone carried over from the last session, and nothing
+                // says it is still the zone.
+                stats.lock().unwrap_or_else(|e| e.into_inner()).reset_after_blackout();
                 if auto {
                     crate::show_overlay(&app);
                 }
@@ -422,7 +527,12 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let (local, remote) = game_endpoints(&pids);
             hosts = remote.len();
             wanted = capture_devices();
-            scope = scope_for(&local);
+            let narrow = scope_for(&local, &remote);
+            let next = if wide_capture() { "tcp".to_string() } else { narrow };
+            if next != scope {
+                crate::log::say("net", &format!("capture filter: {next}"));
+                scope = next;
+            }
         }
         if !running {
             wanted.clear();
@@ -495,7 +605,17 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                             "capture on {name} ended: {e}{}",
                             if refused { " - the binary needs cap_net_raw" } else { "" }
                         ));
-                        set_status(&status, if refused { Status::NoCapture } else { Status::NoInterface });
+                        // Refused is not the same as absent. If the driver is
+                        // there, the answer the user needs is about rights, not
+                        // about installing anything.
+                        set_status(
+                            &status,
+                            match (refused, capture_available()) {
+                                (true, true) => Status::NoAccess,
+                                (true, false) => Status::NoCapture,
+                                _ => Status::NoInterface,
+                            },
+                        );
                     }
                 })
             };
@@ -679,7 +799,7 @@ fn handle_flush(
     // the engine dedupes and resolves rarities, so it also decides what the
     // ticker and the sounds react to
     let fresh: Vec<_> = {
-        let mut stats = stats.lock().unwrap();
+        let mut stats = stats.lock().unwrap_or_else(|e| e.into_inner());
         events.iter().filter_map(|e| stats.apply(e)).collect()
     };
     for drop in fresh {
@@ -725,17 +845,56 @@ mod tests {
     /// to open a socket we can attribute.
     #[test]
     fn the_filter_is_wide_until_the_game_names_itself() {
-        assert_eq!(scope_for(&BTreeSet::new()), "tcp");
+        let none = BTreeSet::new();
+        assert_eq!(scope_for(&none, &none), "tcp");
 
         let one: BTreeSet<IpAddr> = ["10.8.1.8".parse().unwrap()].into_iter().collect();
-        assert_eq!(scope_for(&one), "host 10.8.1.8");
+        assert_eq!(scope_for(&one, &none), "host 10.8.1.8");
 
         let two: BTreeSet<IpAddr> =
             ["10.8.1.8".parse().unwrap(), "192.168.0.70".parse().unwrap()].into_iter().collect();
-        let filter = scope_for(&two);
+        let filter = scope_for(&two, &none);
         assert!(filter.contains("host 10.8.1.8"), "{filter}");
         assert!(filter.contains("host 192.168.0.70"), "{filter}");
         assert!(filter.contains(" or "), "{filter}");
+    }
+
+    /// And once it does name itself, the filter is both ends rather than one.
+    ///
+    /// `host X` matches a packet with X at either end, so naming only this
+    /// machine's own addresses came to "every connection this machine holds" —
+    /// which is how half a week of an unrelated project ended up in a capture
+    /// taken to debug the drop counters.
+    #[test]
+    fn once_the_game_is_talking_the_filter_names_both_ends() {
+        let local: BTreeSet<IpAddr> = ["10.8.1.2".parse().unwrap()].into_iter().collect();
+        let remote: BTreeSet<IpAddr> =
+            ["172.104.128.178".parse().unwrap(), "139.162.166.201".parse().unwrap()]
+                .into_iter()
+                .collect();
+        let filter = scope_for(&local, &remote);
+
+        assert_eq!(
+            filter,
+            "(net 139.162.166.0/24 or net 172.104.128.0/24) and (host 10.8.1.2)",
+            "the game's servers and their neighbours, this machine, and nothing else"
+        );
+
+        // A machine that talks to something else entirely is outside it now.
+        assert!(!filter.contains("192.168.0.226"));
+
+        // The remote side alone will do if the local one cannot be read.
+        let only_remote = scope_for(&BTreeSet::new(), &remote);
+        assert!(only_remote.contains("net 172.104.128.0/24"), "{only_remote}");
+        assert!(!only_remote.contains(" and "), "{only_remote}");
+
+        // Two servers in one range are one clause, so a third joining it is
+        // already covered without waiting for the endpoints to be re-read.
+        let pair: BTreeSet<IpAddr> =
+            ["172.104.128.178".parse().unwrap(), "172.104.128.9".parse().unwrap()]
+                .into_iter()
+                .collect();
+        assert_eq!(scope_for(&BTreeSet::new(), &pair), "net 172.104.128.0/24");
     }
 }
 
