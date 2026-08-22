@@ -739,7 +739,7 @@
                 style:--btn-down="url({art('button_down')})"
                 onclick={() => invoke('place_flourish', { placing: true })}
               >
-                Place it on the screen…
+                Change location
               </button>
             </div>
           {/if}

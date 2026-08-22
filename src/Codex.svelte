@@ -122,8 +122,8 @@
       {#if view === 'table'}
         <div class="head">
           <span class="hname">Item</span>
-          <span class="hkind">Kind</span>
-          <span class="hgrade">Grade</span>
+          <span class="hkind">Type</span>
+          <span class="hgrade">Tier</span>
           <span class="hrate">Chance</span>
           <span class="hchase">Drop location</span>
         </div>
