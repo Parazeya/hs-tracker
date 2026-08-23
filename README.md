@@ -81,8 +81,10 @@ Run the installer. It installs for the current user, so Windows never asks for
 administrator rights.
 
 HS Tracker needs [Npcap](https://npcap.com) to read the game's traffic. The
-installer checks for it and offers to fetch it when it is missing — its defaults
-are fine.
+installer checks for it and opens the download page when it is missing. Install
+it with the options it comes with, and in particular leave *Restrict Npcap
+driver's access to Administrators only* unticked — with that on, HS Tracker is
+refused the adapter and counts nothing.
 
 Everything the app writes lives next to the executable, so the folder can be
 copied to another machine as it is.

@@ -263,6 +263,23 @@
       {/if}
       {#if advanced}
       <div class="line" data-tauri-drag-region>
+        <button
+          class="check"
+          onclick={() => { settings.wide_capture = !settings.wide_capture; save(); }}
+          aria-label="read every connection"
+        >
+          <img src={settings.wide_capture ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="opt">Read every connection, not just the game's</span>
+      </div>
+      <div class="hint" data-tauri-drag-region>
+        Normally only the connections Windows says the game holds are read. A route
+        optimiser such as ExitLag redirects the game's packets underneath that, so those
+        connections are not the ones on the wire and nothing gets counted. This reads
+        everything instead — more work for the machine, and the only way to see the game
+        through one.
+      </div>
+      <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.debug_log = !settings.debug_log; save(); }} aria-label="debug">
           <img src={settings.debug_log ? art('check_on') : art('check_off')} alt="" />
         </button>
@@ -569,6 +586,17 @@
   .btn:hover { border-image-source: var(--btn-hover); }
   .btn:active { border-image-source: var(--btn-down); }
   .btn.wide { width: 100%; max-width: 380px; }
+
+  /* Why a switch is there, for the one switch whose reason is not obvious from
+     its label. Same size as `.notice` and not its colour: this is an
+     explanation, not a warning. */
+  .hint {
+    font-size: 10px;
+    line-height: 15px;
+    color: var(--bone-6);
+    padding: 0 2px 6px 30px;
+    max-width: 620px;
+  }
 
   .notice {
     font-size: 10px;

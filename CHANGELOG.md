@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.9.95 — 2026-08-23
+
+Everything here came out of players reporting that nothing was being counted —
+no error, no message, every number at zero. Three separate causes, all of them
+the same mistake: a rule that narrowed what gets captured, written on an
+assumption that is true on the machine it was written on.
+
+### Fixed
+
+- **The capture filter named this machine's own address.** It came from the
+  operating system's socket table, which reports the address a socket is *bound*
+  to — not necessarily the one on the frames going past. Behind a split-tunnel
+  VPN, or on a machine with more than one route, the two differ and the filter
+  then matches nothing whatever. It names the game's servers and stops there
+  now, which is what was doing the work anyway: the capture is not promiscuous,
+  so the adapter only ever hands over this machine's own frames.
+- **An adapter with no addresses was passed over.** The rule meant to skip
+  loopback was written as "keep a device with at least one address that is not
+  loopback", which is false for a device with no addresses at all — and the
+  adapter Npcap offers for dialup and VPN capture has none. On a machine whose
+  traffic goes through a VPN that is the one place the game could have been
+  seen, and it was excluded before Npcap was ever asked.
+- **The installer no longer downloads Npcap itself.** It ran PowerShell with the
+  execution policy switched off to pull an executable into the temp folder and
+  run it — the shape of a dropper whatever it happens to be fetching, and an app
+  that reads network traffic has enough working against it with antivirus
+  already. It says what is missing and opens the page instead, and says which
+  box in Npcap's own installer not to tick.
+
+### Added
+
+- **Read every connection, not just the game's** — a setting, under More
+  settings. A route optimiser such as ExitLag redirects the game's packets in a
+  driver below the TCP stack, so the connections Windows reports are not the
+  ones on the wire and the filter holds only addresses that never appear. This
+  takes the filter off, and takes off with it the assumption that port 443 is
+  encrypted and not worth reading. It is a setting rather than something the app
+  decides on its own: reading everything on the machine is the player's call.
+- **The app says when it has heard nothing.** Ninety seconds with the game
+  running and not one message decoded puts a banner on the dashboard — with the
+  switch above on it, so it can be turned on where the reader already is. When
+  everything is already being read the banner says that instead of offering a
+  switch that would not help.
+
+### Changed
+
+- The log answers the question it is asked for. It lists the adapters found and
+  the ones passed over, counts frames that got past the filter separately from
+  frames that decoded, and says how many were encrypted — which is what tells a
+  redirected game apart from one still sitting at the login screen. Every report
+  of nothing being counted has turned on facts like these and not one of them
+  arrived with them.
+
 ## 0.9.94 — 2026-08-22
 
 ### Fixed

@@ -109,7 +109,27 @@
     if (status === 'waiting-for-game')
       return { bad: false, title: 'Waiting for Hero Siege', detail: 'Counting starts a moment after the game is running.' };
     if (status.startsWith('capturing')) {
-      const [, iface, hosts] = status.split('|');
+      const [, iface, hosts, , packets, deaf] = status.split('|');
+
+      // Ninety seconds with the game up and not one message decoded. The
+      // backend decides when that is true, because it is the only side that
+      // knows when each capture started; `deaf` is 1 while only the game's own
+      // connections are being read and 2 when everything already is.
+      if (deaf === '1')
+        return {
+          bad: true,
+          title: 'Nothing has been counted for 90 seconds',
+          detail:
+            `Capturing on ${iface}: ${Number(packets).toLocaleString('en-GB')} packets read, none of them a game message. If you use a route optimiser — ExitLag and its kind — it redirects the game's packets, so the connections Windows reports are not the ones on the wire. Reading every connection is the way past that.`,
+          act: { label: 'Read every connection', on: true },
+        };
+      if (deaf === '2')
+        return {
+          bad: true,
+          title: 'Nothing has been counted for 90 seconds',
+          detail:
+            `Every connection on this machine is already being read — ${Number(packets).toLocaleString('en-GB')} packets on ${iface} — and none of it decoded as Hero Siege. Whatever carries the game's traffic here is not something this app can read from outside. The packet log in Settings and hs-tracker.log are what to send.`,
+        };
       // the game is up and adapters are open, but nothing of the game's own has
       // been seen — the usual causes are a sandbox around the game or a tunnel
       // its traffic takes that we are not on
@@ -120,13 +140,25 @@
           detail:
             `Capturing on ${iface}. The game is running, yet none of its connections can be seen. A Flatpak or Snap install of Steam hides the game from us; a VPN or a second network adapter can carry its traffic somewhere we are not listening.`,
         };
-      // hosts found, but the game has never once reported the character
+      // The game's connections are known and not one frame of them is
+      // arriving. This is the state that gets reported as "nothing works and
+      // there is no error": the line above is green, every number is zero, and
+      // until now nothing distinguished it from a quiet minute.
+      if (Number(hosts) > 0 && Number(packets) === 0 && snap.session_secs > 90)
+        return {
+          bad: true,
+          title: 'The game’s connections are known, but nothing is arriving',
+          detail:
+            `Capturing on ${iface}, and not one packet has come past the filter. The game’s traffic is taking a route this adapter cannot see — a VPN or split tunnel is the usual reason, and a second network adapter the next. Turning the VPN off for a minute is the quickest way to tell.`,
+        };
+      // hosts found, frames arriving, but the game has never once reported the
+      // character
       if (snap.save_age_secs == null && snap.bank_age_secs == null && snap.session_secs > 240)
         return {
           bad: false,
           title: 'Connected, still nothing from the game',
           detail:
-            'Its traffic is being read, but no character save has arrived yet. Gold, experience and kills travel only when the game saves; if this stays after a few minutes of fighting, the packet log in Settings is worth switching on.',
+            `Its traffic is being read${Number(packets) > 0 ? ` — ${Number(packets).toLocaleString('en-GB')} packets so far` : ''}, but no character save has arrived yet. Gold, experience and kills travel only when the game saves; if this stays after a few minutes of fighting, the packet log in Settings is worth switching on.`,
         };
     }
     return null;
@@ -187,6 +219,14 @@
           <div class="tt">{trouble.title}</div>
           <div class="td">{trouble.detail}</div>
           {#if trouble.fix}<code class="tf">{trouble.fix}</code>{/if}
+          {#if trouble.act}
+            <button
+              class="tact"
+              onclick={() => invoke('set_wide_capture', { on: trouble.act.on }).catch(() => {})}
+            >
+              {trouble.act.label}
+            </button>
+          {/if}
         </div>
       {/if}
       <!-- One section that throws must not take the window with it.
@@ -487,6 +527,20 @@
   .trouble .tt { font-size: 13px; color: var(--gold-2); }
   .trouble.bad .tt { color: #ff7a7a; }
   .trouble .td { font-size: 11px; color: var(--bone-7); line-height: 1.45; margin-top: 2px; }
+  /* The banner is where the reader already is when the app is not working;
+     making them find the same switch in Settings is one step too many. */
+  .trouble .tact {
+    font: inherit;
+    font-size: 11px;
+    margin-top: 6px;
+    padding: 4px 12px;
+    cursor: pointer;
+    color: var(--bone-11);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+  .trouble .tact:hover { background: rgba(255, 255, 255, 0.12); }
+
   .trouble .tf {
     display: block;
     margin-top: 4px;

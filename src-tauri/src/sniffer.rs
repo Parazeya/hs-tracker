@@ -32,7 +32,23 @@ pub enum Status {
     NoAccess,
     NoInterface,
     WaitingForGame,
-    Capturing { iface: String, hosts: usize, dropped: u32 },
+    Capturing { iface: String, hosts: usize, dropped: u32, packets: u32, deaf: Deaf },
+}
+
+/// Whether the capture has gone the whole of `DEAF_AFTER` without decoding a
+/// single message, and whether there is anything left to try.
+///
+/// The panel needs both: "nothing has been counted for a minute and a half, and
+/// there is a setting that would help" is a different thing to say from
+/// "nothing has been counted and everything is already being read".
+#[derive(Clone, Copy, PartialEq)]
+pub enum Deaf {
+    /// hearing things, or not silent long enough to say so
+    No,
+    /// silent, and only the game's own connections are being read
+    Narrow,
+    /// silent with every connection on the machine already being read
+    Wide,
 }
 
 impl Status {
@@ -45,10 +61,32 @@ impl Status {
             Status::NoAccess => "no-access".into(),
             Status::NoInterface => "no-interface".into(),
             Status::WaitingForGame => "waiting-for-game".into(),
-            Status::Capturing { iface, hosts, dropped } => format!("capturing|{iface}|{hosts}|{dropped}"),
+            Status::Capturing { iface, hosts, dropped, packets, deaf } => {
+                let deaf = match deaf {
+                    Deaf::No => 0,
+                    Deaf::Narrow => 1,
+                    Deaf::Wide => 2,
+                };
+                format!("capturing|{iface}|{hosts}|{dropped}|{packets}|{deaf}")
+            }
         }
     }
 }
+
+/// How long a capture may hear nothing before that is worth writing down. Long
+/// enough that a player sitting in a menu does not trip it, short enough to be
+/// in the log by the time they think to send it.
+const DEAF_AFTER: Duration = Duration::from_secs(90);
+/// The setting behind `wide_capture`. The environment variable still works and
+/// still wins: it is what a maintainer reaches for on a machine that is not
+/// theirs to configure.
+static WIDE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_wide_capture(on: bool) {
+    WIDE.store(on, Ordering::Relaxed);
+}
+/// and how long before saying it again, if it is still true
+const DEAF_AGAIN: Duration = Duration::from_secs(300);
 
 /// Whether Hero Siege is up. The watcher already looks for the process every
 /// second; anything else that needs to know reads it here rather than looking
@@ -70,6 +108,20 @@ struct Capture {
     /// messages this adapter has produced; one that yields nothing is dropped
     /// again, so the usual case costs a single capture
     hits: Arc<AtomicU32>,
+    /// Frames that got past the filter, whether or not anything was decoded
+    /// from them. Without this, "nothing is being recorded" has two very
+    /// different causes that look identical: a filter matching no traffic, and
+    /// traffic that no longer parses.
+    packets: Arc<AtomicU32>,
+    /// How many of those were on port 443 and skipped unread.
+    ///
+    /// A client sitting at the login screen talks to the account service over
+    /// TLS and to nothing else, so every frame is skipped and the app looks
+    /// exactly as it does when it is broken. Told apart, the two read very
+    /// differently: "240 frames, all of them encrypted" is a game that has not
+    /// joined a server yet, and "240 frames, none encrypted, none decoded" is a
+    /// protocol this app no longer understands.
+    tls: Arc<AtomicU32>,
     /// set once the device is open and filtered — "the thread has not ended"
     /// is also true of one that is about to fail, and that read the status
     /// green on every spawn
@@ -230,10 +282,16 @@ fn unmap(ip: IpAddr) -> IpAddr {
     }
 }
 
-fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, BTreeSet<IpAddr>) {
-    let (mut local, mut remote) = (BTreeSet::new(), BTreeSet::new());
+/// The far ends of the game's own connections, read out of the operating
+/// system's socket table.
+///
+/// The near ends were collected too and are not any more: see `scope_for` for
+/// why naming this machine's own address in the filter did more harm than the
+/// narrowing was worth.
+fn game_endpoints(pids: &[u32]) -> BTreeSet<IpAddr> {
+    let mut remote = BTreeSet::new();
     if pids.is_empty() {
-        return (local, remote);
+        return remote;
     }
     let af = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
     if let Ok(sockets) = netstat2::get_sockets_info(af, ProtocolFlags::TCP) {
@@ -242,18 +300,15 @@ fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, BTreeSet<IpAddr>) {
                 continue;
             }
             if let ProtocolSocketInfo::Tcp(t) = &s.protocol_socket_info {
-                let (near, far) = (unmap(t.local_addr), unmap(t.remote_addr));
+                let far = unmap(t.remote_addr);
                 if far.is_unspecified() || far.is_loopback() {
                     continue;
                 }
                 remote.insert(far);
-                if !near.is_unspecified() && !near.is_loopback() {
-                    local.insert(near);
-                }
             }
         }
     }
-    (local, remote)
+    remote
 }
 
 /// Every adapter worth listening on. A split-tunnel engine (WireSock and the
@@ -261,11 +316,55 @@ fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, BTreeSet<IpAddr>) {
 /// game's traffic can surface on the physical adapter, on the tunnel adapter,
 /// or on both — picking one by address misses half of it.
 fn capture_devices() -> Vec<pcap::Device> {
-    pcap::Device::list()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|d| d.addresses.iter().any(|a| !a.addr.is_loopback()))
-        .collect()
+    let all = pcap::Device::list().unwrap_or_default();
+    // Skip loopback, and nothing else.
+    //
+    // This used to read `any(|a| !a.addr.is_loopback())`, which says something
+    // different: keep a device that has at least one address which is not
+    // loopback. A device with no addresses at all has none that qualify, so it
+    // was dropped — and the one Npcap offers for dialup and VPN capture is
+    // exactly that, a device with no addresses of its own.
+    //
+    // On a machine whose traffic all goes through a Windows VPN connection,
+    // that adapter is the only place the game can be seen: on the physical card
+    // the same traffic is inside the tunnel. So the app excluded the one device
+    // that would have worked, before ever asking Npcap, and reported nine
+    // packets in ninety seconds with the filter already wide open.
+    let kept: Vec<pcap::Device> = all.iter().filter(|d| worth_capturing(&d.addresses)).cloned().collect();
+
+    // Which adapters exist, and which were passed over. Every report of nothing
+    // being counted has turned on this list and none of them arrived with it.
+    crate::log::once(
+        "devices",
+        "info",
+        format!(
+            "adapters: {}{}",
+            kept.iter()
+                .map(|d| d.desc.clone().unwrap_or_else(|| d.name.clone()))
+                .collect::<Vec<_>>()
+                .join(", "),
+            {
+                let skipped: Vec<String> = all
+                    .iter()
+                    .filter(|d| !kept.iter().any(|k| k.name == d.name))
+                    .map(|d| d.desc.clone().unwrap_or_else(|| d.name.clone()))
+                    .collect();
+                if skipped.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | skipped as loopback: {}", skipped.join(", "))
+                }
+            }
+        ),
+    );
+    kept
+}
+
+/// Loopback and nothing else is passed over. A device with no addresses at all
+/// is kept: having none is not the same as having only loopback, and the
+/// adapter Npcap offers for dialup and VPN capture has none.
+fn worth_capturing(addresses: &[pcap::Address]) -> bool {
+    addresses.is_empty() || addresses.iter().any(|a| !a.addr.is_loopback())
 }
 
 /// Where the IP header starts in a captured frame. Ethernet can carry one or
@@ -357,30 +456,24 @@ fn unoffload(data: &[u8], ip_start: usize) -> Option<Vec<u8>> {
 /// a wide filter on a busy machine hands this thread every plaintext byte the
 /// machine sends.
 fn wide_capture() -> bool {
-    matches!(std::env::var("HS_WIDE_CAPTURE").as_deref(), Ok("1") | Ok("true"))
+    WIDE.load(Ordering::Relaxed)
+        || matches!(std::env::var("HS_WIDE_CAPTURE").as_deref(), Ok("1") | Ok("true"))
 }
 
-/// Both ends, and the remote end matters most. This used to name only the local
-/// addresses — the ones the game's own sockets are bound to — and `host X` in a
-/// packet filter matches a packet with X at either end, so that came to "every
-/// TCP connection this machine holds on those interfaces". Everything else
-/// running on the same machine went through the parser with it, and in a debug
-/// build into debug-capture.jsonl: one capture on this machine is half a
-/// week of an unrelated project's traffic, and a junk packet from a third
-/// device on the network was the only experience event in twenty-three thousand
-/// messages.
+/// The far end, and only the far end.
 ///
-/// A packet filter cannot ask which process a packet belongs to, so this is as
-/// close as it gets: the pair of ends. Another program talking to Hero Siege's
-/// own servers would still be caught, and nothing else is.
+/// A packet filter cannot ask which process a packet belongs to, so the game's
+/// own servers are as close as it gets. It used to name this machine's own
+/// addresses too — `host X` matches a packet with X at either end, so on its
+/// own that came to "every TCP connection this machine holds", and one capture
+/// taken here to debug the drop counters was half a week of an unrelated
+/// project's traffic. The far side fixed that; the near side was left in beside
+/// it and did nothing but exclude, sometimes everything. See below.
 ///
 /// While the game has not connected there is nothing to name, and the answer is
 /// everything — the endpoints are re-read every five seconds and the capture
 /// restarted when they change, so that state does not last.
-fn scope_for(local: &BTreeSet<IpAddr>, remote: &BTreeSet<IpAddr>) -> String {
-    let hosts = |set: &BTreeSet<IpAddr>| {
-        set.iter().map(|ip| format!("host {ip}")).collect::<Vec<_>>().join(" or ")
-    };
+fn scope_for(remote: &BTreeSet<IpAddr>) -> String {
     // The far side is named by its neighbourhood rather than by the one address
     // that happens to be answering. The game moves between servers inside a
     // session — in one capture a second one joined halfway through and stayed —
@@ -391,27 +484,46 @@ fn scope_for(local: &BTreeSet<IpAddr>, remote: &BTreeSet<IpAddr>) -> String {
     //
     // v6 is left as a plain host: its addresses are not handed out in anything
     // as tidy as a /24, and the game has not been seen using one.
-    let nets = |set: &BTreeSet<IpAddr>| {
-        let mut out: Vec<String> = set
-            .iter()
-            .map(|ip| match ip {
-                IpAddr::V4(v4) => {
-                    let [a, b, c, _] = v4.octets();
-                    format!("net {a}.{b}.{c}.0/24")
-                }
-                IpAddr::V6(_) => format!("host {ip}"),
-            })
-            .collect();
-        out.sort();
-        out.dedup();
-        out.join(" or ")
-    };
-    match (local.is_empty(), remote.is_empty()) {
-        (true, true) => "tcp".into(),
-        (false, true) => hosts(local),
-        (true, false) => nets(remote),
-        (false, false) => format!("({}) and ({})", nets(remote), hosts(local)),
+    //
+    // The near side is not named at all, and used to be: the filter read
+    // `(the servers' /24s) and (host <this machine>)`.
+    //
+    // That address came from the operating system's socket table, and it is the
+    // address the socket is BOUND to — not necessarily the one on the frames
+    // this capture sees. A split-tunnel VPN, which plenty of players run for
+    // the ping, binds to the tunnel and puts a different address on the wire; a
+    // machine with more than one route can send from an address the game's
+    // socket never mentions. When the two differ, `and (host ...)` matches
+    // nothing whatever: the status line stays green, every counter stays at
+    // zero, and nothing says why. Players reported exactly that — "no errors,
+    // nothing, just nothing recorded" — and this file already carries the same
+    // story once before, in `unmap`, where a v4-mapped address compiled into an
+    // IPv6 test that no packet on the wire could satisfy.
+    //
+    // It was never buying much either. The capture is not promiscuous, so the
+    // adapter only hands over frames addressed to this machine in the first
+    // place, and the far side is already a /24 belonging to the game's host.
+    // Narrowing past that risked everything to exclude nothing.
+    if remote.is_empty() {
+        // Nothing to narrow to yet. Wide, because a filter that matches nothing
+        // is worse than one that matches too much: what is not a game message
+        // is thrown away a layer up, and a session that starts deaf stays deaf
+        // until the game happens to open a socket we can attribute.
+        return "tcp".into();
     }
+    let mut out: Vec<String> = remote
+        .iter()
+        .map(|ip| match ip {
+            IpAddr::V4(v4) => {
+                let [a, b, c, _] = v4.octets();
+                format!("net {a}.{b}.{c}.0/24")
+            }
+            IpAddr::V6(_) => format!("host {ip}"),
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out.join(" or ")
 }
 
 pub fn spawn(shared: &Shared, app: tauri::AppHandle) {
@@ -459,6 +571,12 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
     let mut can_capture = true;
     // the hosts the game is talking to, kept between the slow endpoint sweeps
     let mut hosts = 0usize;
+    // When silence was last written down. `log::once` cannot do this job: it
+    // dedupes on the message, and the message carries a frame count that moves
+    // every second — so the first version of this wrote the same warning
+    // twenty-four times in two minutes and buried the two lines above it that
+    // actually mattered.
+    let mut deaf_said: Option<std::time::Instant> = None;
 
     loop {
         tick += 1;
@@ -524,10 +642,10 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         // inode-to-pid map — four calls in five were thrown away.
         if running && looked.elapsed() >= Duration::from_secs(5) {
             looked = std::time::Instant::now();
-            let (local, remote) = game_endpoints(&pids);
+            let remote = game_endpoints(&pids);
             hosts = remote.len();
             wanted = capture_devices();
-            let narrow = scope_for(&local, &remote);
+            let narrow = scope_for(&remote);
             let next = if wide_capture() { "tcp".to_string() } else { narrow };
             if next != scope {
                 crate::log::say("net", &format!("capture filter: {next}"));
@@ -587,17 +705,22 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let stop = Arc::new(AtomicBool::new(false));
             let dropped = Arc::new(AtomicU32::new(0));
             let hits = Arc::new(AtomicU32::new(0));
+            let packets = Arc::new(AtomicU32::new(0));
+            let tls = Arc::new(AtomicU32::new(0));
             let opened = Arc::new(AtomicBool::new(false));
             let handle = {
                 let name = dev.name.clone();
                 let (stop, stats, status, app) = (stop.clone(), stats.clone(), status.clone(), app.clone());
                 let (dev, dropped, scope, hits) = (dev.clone(), dropped.clone(), scope.clone(), hits.clone());
+                let (packets, tls) = (packets.clone(), tls.clone());
                 let opened = opened.clone();
                 std::thread::spawn(move || {
                     // "no interface" is the wrong story when the adapter is
                     // there and the process simply may not open it — the usual
                     // state of a fresh Linux install without cap_net_raw.
-                    if let Err(e) = capture_loop(dev, scope, stop, stats, dropped, hits, opened, &app) {
+                    if let Err(e) =
+                        capture_loop(dev, scope, stop, stats, dropped, hits, packets, tls, opened, &app)
+                    {
                         let refused = denied_open(&e);
                         // The README asks for this log when something is wrong;
                         // until now the whole module never wrote a line to it.
@@ -630,6 +753,8 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                     scope,
                     dropped,
                     hits,
+                    packets,
+                    tls,
                     opened,
                     started: std::time::Instant::now(),
                 },
@@ -648,7 +773,54 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let dropped = alive.iter().map(|c| c.dropped.load(Ordering::Relaxed)).sum();
             let mut ifaces: Vec<&str> = alive.iter().map(|c| c.iface.as_str()).collect();
             ifaces.sort_unstable();
-            set_status(&status, Status::Capturing { iface: ifaces.join(" + "), hosts, dropped });
+            let iface = ifaces.join(" + ");
+            let packets: u32 = alive.iter().map(|c| c.packets.load(Ordering::Relaxed)).sum();
+
+            // Capturing and hearing anything are different states, and on the
+            // status line they looked the same. Players have reported this as
+            // "no errors, nothing, just nothing recorded", and there was
+            // nothing in the log to answer them with — so the two are counted
+            // apart now: frames that got past the filter, and frames that
+            // decoded into something. Nothing past the filter is an adapter or
+            // a filter that the game's traffic never reaches; plenty past it
+            // and nothing decoded is traffic that no longer parses.
+            let heard: u32 = alive.iter().map(|c| c.hits.load(Ordering::Relaxed)).sum();
+            if heard > 0 {
+                // it came back; a later relapse is worth another line
+                deaf_said = None;
+            }
+            let silent = running
+                && heard == 0
+                && alive.iter().any(|c| c.started.elapsed() >= DEAF_AFTER);
+            let deaf = match (silent, wide_capture()) {
+                (false, _) => Deaf::No,
+                (true, false) => Deaf::Narrow,
+                (true, true) => Deaf::Wide,
+            };
+            let due = deaf_said.is_none_or(|at| at.elapsed() >= DEAF_AGAIN);
+            if silent && due {
+                deaf_said = Some(std::time::Instant::now());
+                let encrypted: u32 = alive.iter().map(|c| c.tls.load(Ordering::Relaxed)).sum();
+                let verdict = if packets == 0 {
+                    "None arrived at all - the game's traffic is not on this adapter, or not matching this filter."
+                } else if encrypted == packets {
+                    "Every one of them was encrypted, so the game is talking to a web service and not to a game server - it is most likely sitting at the login screen or in a menu."
+                } else if encrypted > 0 {
+                    "Some were encrypted and the rest did not parse as game messages."
+                } else {
+                    "They arrived in the clear and none of them was a game message."
+                };
+                crate::log::warn(format!(
+                    "nothing decoded after {}s on {iface}: {packets} frames got past `tcp and len > 30 and ({scope})`, {encrypted} of them on port 443. {verdict}{}",
+                    DEAF_AFTER.as_secs(),
+                    if deaf == Deaf::Narrow {
+                        " Only the game's own connections are being read - turn on \"Read every connection\" in Settings if something is redirecting them."
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            set_status(&status, Status::Capturing { iface, hosts, dropped, packets, deaf });
         } else if !captures.is_empty() {
             // every capture died: whatever they stored stands
         } else if !running {
@@ -670,6 +842,8 @@ fn capture_loop(
     stats: Arc<Mutex<GameStats>>,
     dropped: Arc<AtomicU32>,
     hits: Arc<AtomicU32>,
+    packets: Arc<AtomicU32>,
+    tls: Arc<AtomicU32>,
     opened: Arc<AtomicBool>,
     app: &tauri::AppHandle,
 ) -> Result<(), pcap::Error> {
@@ -704,7 +878,10 @@ fn capture_loop(
             // below: on a truncated one the bytes we hold really are fewer than
             // the header says, and telling the parser otherwise would hand the
             // reassembler half a segment as if it were a message.
-            Ok(p) => Some((p.data, p.header.caplen >= p.header.len)),
+            Ok(p) => {
+                packets.fetch_add(1, Ordering::Relaxed);
+                Some((p.data, p.header.caplen >= p.header.len))
+            }
             Err(pcap::Error::TimeoutExpired) => None,
             Err(e) => return Err(e),
         };
@@ -742,8 +919,17 @@ fn capture_loop(
         // The filter is deliberately wide (everything this machine sends and
         // receives), so TLS is skipped here: an encrypted stream cannot yield
         // the plaintext the parser looks for, and reassembling it is pure cost.
+        // Port 443 is skipped as encrypted, which is a fair assumption right up
+        // until something moves the game's traffic onto it — a route optimiser
+        // relaying it does exactly that — and then it is one more rule that
+        // throws everything away without saying so. Reading everything means
+        // reading this too; the cost of being wrong that way is scanning
+        // payloads that never match, which the scan budget already bounds.
         if tcp.source_port() == 443 || tcp.destination_port() == 443 {
-            continue;
+            tls.fetch_add(1, Ordering::Relaxed);
+            if !wide_capture() {
+                continue;
+            }
         }
 
         let flow = (src, tcp.source_port(), tcp.destination_port());
@@ -840,53 +1026,66 @@ mod tests {
         assert_eq!(unmap(plain), plain);
     }
 
+    fn address(ip: &str) -> pcap::Address {
+        pcap::Address {
+            addr: ip.parse().unwrap(),
+            netmask: None,
+            broadcast_addr: None,
+            dst_addr: None,
+        }
+    }
+
+    /// An adapter with no addresses is not a loopback adapter.
+    ///
+    /// This read `any(|a| !a.addr.is_loopback())`, which is false for an empty
+    /// list, so every device without addresses of its own was passed over — and
+    /// the one Npcap offers for dialup and VPN capture is exactly that. On a
+    /// machine whose traffic all goes through a VPN, that was the only adapter
+    /// the game could have been seen on.
+    #[test]
+    fn an_adapter_with_no_addresses_is_still_worth_listening_on() {
+        assert!(worth_capturing(&[]), "no addresses is not the same as loopback");
+        assert!(worth_capturing(&[address("192.168.0.70")]));
+        assert!(worth_capturing(&[address("127.0.0.1"), address("10.250.0.1")]));
+        assert!(!worth_capturing(&[address("127.0.0.1")]), "loopback is what this skips");
+        assert!(!worth_capturing(&[address("::1")]));
+    }
+
     /// The filter decides whether anything is captured at all. With no known
     /// address it must stay wide, or a session is deaf until the game happens
     /// to open a socket we can attribute.
     #[test]
     fn the_filter_is_wide_until_the_game_names_itself() {
-        let none = BTreeSet::new();
-        assert_eq!(scope_for(&none, &none), "tcp");
-
-        let one: BTreeSet<IpAddr> = ["10.8.1.8".parse().unwrap()].into_iter().collect();
-        assert_eq!(scope_for(&one, &none), "host 10.8.1.8");
-
-        let two: BTreeSet<IpAddr> =
-            ["10.8.1.8".parse().unwrap(), "192.168.0.70".parse().unwrap()].into_iter().collect();
-        let filter = scope_for(&two, &none);
-        assert!(filter.contains("host 10.8.1.8"), "{filter}");
-        assert!(filter.contains("host 192.168.0.70"), "{filter}");
-        assert!(filter.contains(" or "), "{filter}");
+        assert_eq!(scope_for(&BTreeSet::new()), "tcp");
     }
 
-    /// And once it does name itself, the filter is both ends rather than one.
+    /// And once it does, the filter names the far end only.
     ///
-    /// `host X` matches a packet with X at either end, so naming only this
-    /// machine's own addresses came to "every connection this machine holds" —
-    /// which is how half a week of an unrelated project ended up in a capture
-    /// taken to debug the drop counters.
+    /// It used to name both — `(the servers' /24s) and (host <this machine>)`.
+    /// The far side is what stops the capture being "every connection this
+    /// machine holds", which is how half a week of an unrelated project ended
+    /// up in a capture taken to debug the drop counters. The near side added
+    /// nothing to that and could be wrong: it is the address the socket is
+    /// bound to, and behind a split tunnel that is not the address on the wire.
+    /// When they differ the old filter matched nothing at all, silently.
     #[test]
-    fn once_the_game_is_talking_the_filter_names_both_ends() {
-        let local: BTreeSet<IpAddr> = ["10.8.1.2".parse().unwrap()].into_iter().collect();
+    fn the_filter_names_the_far_end_and_leaves_this_machine_alone() {
         let remote: BTreeSet<IpAddr> =
             ["172.104.128.178".parse().unwrap(), "139.162.166.201".parse().unwrap()]
                 .into_iter()
                 .collect();
-        let filter = scope_for(&local, &remote);
+        let filter = scope_for(&remote);
 
         assert_eq!(
             filter,
-            "(net 139.162.166.0/24 or net 172.104.128.0/24) and (host 10.8.1.2)",
-            "the game's servers and their neighbours, this machine, and nothing else"
+            "net 139.162.166.0/24 or net 172.104.128.0/24",
+            "the game's servers and their neighbours, and nothing else"
         );
 
-        // A machine that talks to something else entirely is outside it now.
+        // the concern that put the far side there in the first place
         assert!(!filter.contains("192.168.0.226"));
-
-        // The remote side alone will do if the local one cannot be read.
-        let only_remote = scope_for(&BTreeSet::new(), &remote);
-        assert!(only_remote.contains("net 172.104.128.0/24"), "{only_remote}");
-        assert!(!only_remote.contains(" and "), "{only_remote}");
+        // and a tunnel address the socket table might report changes nothing
+        assert!(!filter.contains("10.8.1.2"), "{filter}");
 
         // Two servers in one range are one clause, so a third joining it is
         // already covered without waiting for the endpoints to be re-read.
@@ -894,7 +1093,7 @@ mod tests {
             ["172.104.128.178".parse().unwrap(), "172.104.128.9".parse().unwrap()]
                 .into_iter()
                 .collect();
-        assert_eq!(scope_for(&BTreeSet::new(), &pair), "net 172.104.128.0/24");
+        assert_eq!(scope_for(&pair), "net 172.104.128.0/24");
     }
 }
 

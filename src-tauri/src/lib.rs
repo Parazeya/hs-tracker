@@ -242,6 +242,17 @@ pub struct Settings {
     pub autostart: bool,
     pub ticker: bool,
     pub debug_log: bool,
+    /// Read every connection on the machine, not only the game's own.
+    ///
+    /// Off, the capture is filtered down to the addresses the operating system
+    /// says the game is talking to, which is cheaper and narrower. There are
+    /// setups where those are not the addresses on the wire — a route optimiser
+    /// such as ExitLag redirects the game's packets in a driver below the TCP
+    /// stack — and then the filter contains nothing that ever appears and the
+    /// app counts nothing at all. This is the way out of that, and it is a
+    /// setting rather than a silent fallback because reading everything is the
+    /// player's decision to make about their own machine.
+    pub wide_capture: bool,
     pub sound_on_ground: bool,
     /// stop the session clock when nothing has happened for a while, so a break
     /// does not quietly halve every per-hour figure
@@ -325,6 +336,7 @@ impl Default for Settings {
             autostart: false,
             ticker: true,
             debug_log: false,
+            wide_capture: false,
             sound_on_ground: true,
             theme: "default".into(),
             // On out of the box. Off, with the narrowest band it has, it
@@ -1217,6 +1229,7 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     LOCKED.store(settings.locked, Ordering::Relaxed);
     TICKER.store(settings.ticker, Ordering::Relaxed);
     DEBUG_LOG.store(settings.debug_log, Ordering::Relaxed);
+    sniffer::set_wide_capture(settings.wide_capture);
     SCALE_MILLI.store((scale * 1000.0) as u32, Ordering::Relaxed);
     presence::set_enabled(settings.discord);
     FLOURISH.store(settings.flourish, Ordering::Relaxed);
@@ -1394,6 +1407,21 @@ fn apply_autostart(enabled: bool) {
         "[Desktop Entry]\nType=Application\nName=HS Tracker\nComment=Hero Siege session tracker\nExec={quoted}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
     );
     let _ = std::fs::write(entry, desktop);
+}
+
+/// Turn the wide capture on or off, without the caller holding the settings.
+///
+/// The panel that offers this is the trouble banner, which appears exactly when
+/// nothing is working and has no business loading, editing and writing back the
+/// whole settings file to flip one flag.
+#[tauri::command(async)]
+fn set_wide_capture(app: AppHandle, on: bool) -> Result<(), String> {
+    let mut settings = read_settings();
+    if settings.wide_capture == on {
+        return Ok(());
+    }
+    settings.wide_capture = on;
+    save_settings(app, settings)
 }
 
 #[tauri::command(async)]
@@ -2881,6 +2909,7 @@ pub fn run() {
             load_sound,
             sound_path,
             sound_status,
+            set_wide_capture,
             pick_sound,
             copy_sound,
             clear_sound
