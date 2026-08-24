@@ -158,13 +158,43 @@ can capture it** in Settings, which leaves it there drawing nothing.
 ## If something does not work
 
 **Send the log.** The app writes what goes wrong to `hs-tracker.log` beside its
-settings — panics, and anything a panel throws. **About** gives the path and a
-button that opens the folder. It is small and safe to paste: it holds errors, a
-line saying which version started, and nothing about you.
+settings — panics, anything a panel throws, and, when nothing is being counted,
+what the capture actually saw. **About** gives the path and a button that opens
+the folder.
 
-**The numbers stay at zero.** The app has to be allowed to read network traffic:
-on Windows that means Npcap, on Linux the packaged install does it for you and an
-AppImage needs the `setcap` line above.
+It is meant to be pasted into a chat, so it is worth knowing what is in it:
+which version started, which Windows and which WebView2, where the app is
+installed, the names of your network adapters, and the addresses of the game's
+servers it is filtering on. No account name, no character, nothing the game
+said. The install path is the one line that can carry your Windows username, if
+that is where you put it.
+
+`debug-capture.jsonl`, in the same folder, is a different thing. It is the
+packet log from Settings, off unless you switch it on, and it holds what the
+game actually sent: your account id, your character, your addresses. Do not
+paste that one anywhere you would not paste your account name.
+
+**The numbers stay at zero.** First, the app has to be allowed to read network
+traffic: on Windows that means Npcap, on Linux the packaged install does it for
+you and an AppImage needs the `setcap` line above. Npcap's own installer has a
+box marked *Restrict Npcap driver's access to Administrators only* — ticked, it
+refuses HS Tracker the adapter, and the app says so rather than claiming Npcap
+is missing.
+
+If the capture is running and still nothing is counted, the dashboard says so
+after ninety seconds and the log says what it saw. Three causes account for
+nearly all of it:
+
+- **A route optimiser.** ExitLag and its kind redirect the game's packets, so
+  the connections Windows reports are not the ones on the wire. Turn on **Read
+  every connection** — the banner offers the switch where you are standing.
+- **A VPN that encrypts.** If the game only reaches its server through a tunnel,
+  what leaves your machine is encrypted and there is nothing to read from
+  outside. A VPN that installs an ordinary network adapter — OpenVPN, WireGuard
+  — can be read; a VPN connection set up in Windows' own settings cannot.
+- **The game is at the login screen.** Gold, experience and kills travel with a
+  save, and a save wants a character in the world. The log says outright when
+  everything it heard was encrypted web traffic, which is what that looks like.
 
 **The satanic zone alert came late, or not until I moved.** It arrives when the
 game next asks the server where the zone is, and the game asks as part of saving.
@@ -225,8 +255,6 @@ See [DEVELOPING.md](DEVELOPING.md).
 - The protocol work builds on
   [hero-siege-stats](https://github.com/GuilhermeFaga/hero-siege-stats) and
   [Hero-Siege-Companion](https://github.com/DemonSkye/Hero-Siege-Companion).
-- Item names, rarities and grades are generated from
-  [hero-siege-helper](https://hero-siege-helper.vercel.app)'s datamined data and
-  are not redistributed here.
+- Item names, rarities and grades are generated from Hero siege datamined data
 
 Released under the [MIT license](LICENSE).
