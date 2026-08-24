@@ -144,17 +144,6 @@ The app draws four windows. Each is transparent and can be captured on its own:
    keeps the transparency.
 3. Set **Window Match Priority** to **Window title must match**.
 
-That third step matters. On any other setting OBS falls back to *another window
-of the same type* when it cannot find the one you chose, and every window here is
-the same type — so you get the dashboard instead of the overlay.
-
-A window that is not on screen cannot be captured at all. The ticker and the
-announcement come and go by design: their sources sit empty and fill when a drop
-happens, which is what you want. The overlay is a different matter — it is hidden
-while the dashboard is up, so its source stays empty until you switch back to
-compact mode. For the announcement there is **Keep its window on screen so OBS
-can capture it** in Settings, which leaves it there drawing nothing.
-
 ## If something does not work
 
 **Send the log.** The app writes what goes wrong to `hs-tracker.log` beside its
