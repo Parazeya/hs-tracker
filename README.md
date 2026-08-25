@@ -117,6 +117,11 @@ sudo apt install ./HS\ Tracker_*_amd64.deb      # Debian, Ubuntu, Mint …
 sudo dnf install ./HS\ Tracker-*.x86_64.rpm     # Fedora
 ```
 
+The `.deb` is built on Ubuntu 22.04 and runs on it and on anything newer. The
+`.rpm` is built on Fedora and wants glibc 2.39 or later, so it is for a current
+Fedora rather than for RHEL and its rebuilds — those do not carry the WebKitGTK
+4.1 this is drawn with either way. Everywhere else, the AppImage.
+
 Either package grants the app the right to capture during installation. Settings
 live in `~/.config/hs-tracker`.
 

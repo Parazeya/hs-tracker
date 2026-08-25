@@ -511,9 +511,24 @@ fn restart_backend(app: AppHandle, x11: bool) -> Result<(), String> {
     }
 }
 
+/// A start that hands over to a replacement never meant to draw anything, so it
+/// must not leave the mark that says it tried and failed.
+///
+/// `ease_webkit` writes `no-paint` on the way up and `ui_ready` clears it once a
+/// frame exists. A process that relaunches itself does neither: it exits in
+/// between, mark still on disk, and the replacement reads it as "the run before
+/// me drew nothing" — turns the DMA-BUF renderer off for good and writes a
+/// reason that is not true. Choosing the X11 backend on a Wayland session does
+/// exactly that, on the very first start after the box is ticked.
+#[cfg(not(windows))]
+fn handing_over() {
+    let _ = std::fs::remove_file(data_dir().join("no-paint"));
+}
+
 /// Start a fresh copy of ourselves on the chosen backend.
 #[cfg(not(windows))]
 fn relaunch(x11: bool) -> Result<(), String> {
+    handing_over();
     // inside an AppImage the mounted binary is not what the user keeps
     let exe = std::env::var_os("APPIMAGE")
         .map(PathBuf::from)
@@ -544,19 +559,35 @@ pub(crate) fn debug_log(messages: &[serde_json::Value], src: std::net::IpAddr) {
     if !DEBUG_LOG.load(Ordering::Relaxed) {
         return;
     }
-    // the file stays open: with the wide capture this runs many times a second
-    static FILE: std::sync::Mutex<Option<std::io::BufWriter<std::fs::File>>> =
+    // The file stays open: with the wide capture this runs many times a second.
+    // The count beside it is what has been written since it was opened, which is
+    // how the roll below knows without asking the filesystem every line.
+    static FILE: std::sync::Mutex<Option<(std::io::BufWriter<std::fs::File>, u64)>> =
         std::sync::Mutex::new(None);
     let Ok(mut guard) = FILE.lock() else { return };
-    if guard.is_none() {
-        let opened = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(data_dir().join("debug-capture.jsonl"));
-        let Ok(f) = opened else { return };
-        *guard = Some(std::io::BufWriter::new(f));
+    let path = data_dir().join("debug-capture.jsonl");
+
+    // Rolled, because this had no ceiling at all. It is off by default and a
+    // player switches it on to catch one thing — and then leaves it on, and with
+    // the wide capture it is no longer only the game's traffic being written
+    // down. A session is about 25 MB; two of these is as much of a packet log as
+    // anyone is going to read, and it stops a debugging aid from quietly filling
+    // a disk.
+    const CAPTURE_KEEP: u64 = 64 * 1024 * 1024;
+    if guard.as_ref().is_some_and(|(_, written)| *written >= CAPTURE_KEEP) {
+        if let Some((mut f, _)) = guard.take() {
+            let _ = f.flush();
+        }
+        let _ = std::fs::rename(&path, path.with_extension("old.jsonl"));
     }
-    let Some(f) = guard.as_mut() else { return };
+
+    if guard.is_none() {
+        let opened = std::fs::OpenOptions::new().create(true).append(true).open(&path);
+        let Ok(f) = opened else { return };
+        let had = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        *guard = Some((std::io::BufWriter::new(f), had));
+    }
+    let Some((f, written)) = guard.as_mut() else { return };
     for m in messages {
         // the sender is what tells a character upload apart from the server's
         // copy of it
@@ -569,6 +600,7 @@ pub(crate) fn debug_log(messages: &[serde_json::Value], src: std::net::IpAddr) {
             other => other.clone(),
         };
         if let Ok(line) = serde_json::to_string(&tagged) {
+            *written += line.len() as u64 + 1;
             let _ = writeln!(f, "{line}");
         }
     }
@@ -2539,6 +2571,9 @@ fn retry_without_dmabuf() -> bool {
         return false;
     };
     log::warn("nothing was drawn in 20s - restarting once with the DMA-BUF renderer off");
+    // The replacement reads `soft-render`, which is already written; the attempt
+    // mark belongs to this process and would only tell it a second time.
+    handing_over();
     // The environment carries over as it stands, the GTK backend with it. The
     // marker only stops the backend logic relaunching a second time on top.
     match std::process::Command::new(exe).env("HS_TRACKER_RELAUNCHED", "1").spawn() {

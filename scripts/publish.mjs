@@ -12,6 +12,7 @@
 //   npm run publish              # the version in package.json
 //   npm run publish -- --draft   # create it unpublished, to look at first
 //   npm run publish -- --dry     # say what would happen and stop
+//   npm run publish -- --replace # overwrite assets already on the release
 //
 // The tag must already exist and be pushed — `npm run ship` does that.
 
@@ -48,6 +49,31 @@ if (!tags) die(`no tag ${tag}. Run: npm run ship ${version}`);
 
 const remote = run('git', ['ls-remote', '--tags', 'origin', tag]).trim();
 if (!remote) die(`${tag} exists here but not on origin. Run: git push origin ${tag}`);
+
+// What is being published has to be what was tagged.
+//
+// Nothing here looked. The version is read from package.json, the artifacts are
+// matched by the version in their filenames, and the notes come from the
+// changelog — none of which says the binaries were built from the commit the tag
+// points at. Fix a bug, rebuild, forget to bump, and every check still passes:
+// the four assets on a published release are silently replaced with ones nobody
+// downloading yesterday's has.
+const dirty = run('git', ['status', '--porcelain']).trim();
+if (dirty) {
+  die(
+    `the working tree is not clean, so the artifacts in release/ match no commit:\n\n${dirty}\n\n` +
+      '  commit it, or check it out again, and rebuild.',
+  );
+}
+const head = run('git', ['rev-parse', 'HEAD']).trim();
+const tagged = run('git', ['rev-parse', `${tag}^{commit}`]).trim();
+if (head !== tagged) {
+  die(
+    `HEAD is ${head.slice(0, 8)} and ${tag} is ${tagged.slice(0, 8)}.\n\n` +
+      `  The artifacts were built from HEAD, so publishing them under ${tag} would ship\n` +
+      '  something that tag does not describe. Check the tag out and rebuild.',
+  );
+}
 
 const dir = join(root, 'release');
 if (!existsSync(dir)) die('nothing in release/. Run: npm run all');
@@ -88,7 +114,9 @@ writeFileSync(notesPath, notes + '\n');
 
 // `gh release create` refuses to touch one that already exists, which is the
 // right refusal — a second run should add what is missing, not replace what is
-// there.
+// there. `--clobber` does replace, so it is behind a flag: a rerun that fills in
+// a package the first pass missed is routine, and quietly overwriting an asset
+// somebody has already downloaded is not.
 const exists = (() => {
   try {
     run('gh', ['release', 'view', tag], { stdio: 'ignore' });
@@ -100,8 +128,10 @@ const exists = (() => {
 
 const paths = files.map((n) => join(dir, n));
 if (exists) {
-  console.log('  the release is already there; attaching the files\n');
-  run('gh', ['release', 'upload', tag, ...paths, '--clobber'], { stdio: 'inherit' });
+  console.log(`  the release is already there; ${has('--replace') ? 'replacing' : 'adding what is missing'}\n`);
+  const upload = ['release', 'upload', tag, ...paths];
+  if (has('--replace')) upload.push('--clobber');
+  run('gh', upload, { stdio: 'inherit' });
 } else {
   run(
     'gh',

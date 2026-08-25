@@ -129,6 +129,16 @@
       // backend decides when that is true, because it is the only side that
       // knows when each capture started; `deaf` is 1 while only the game's own
       // connections are being read and 2 when everything already is.
+      // Everything that arrived was encrypted. Not a fault, and no setting
+      // would change it: the game talks to the account service over TLS until
+      // it joins a server.
+      if (deaf === '3')
+        return {
+          bad: false,
+          title: 'Waiting for the game to join a server',
+          detail:
+            `Its traffic is being read on ${iface}, and all of it so far is encrypted — which is what a character screen or a menu looks like from here. Counting starts when the game connects to a game server.`,
+        };
       if (deaf === '1')
         return {
           bad: true,

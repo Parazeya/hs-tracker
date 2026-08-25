@@ -1,11 +1,16 @@
-// One command for a release: set the version, check it, commit, tag, push.
+// The first half of a release: set the version, check it, commit, tag, push.
 //
-// Pushing a tag is what publishes — the workflow in .github/workflows/release.yml
-// fires on `v*`, builds the Windows installer and the three Linux packages, and
-// cuts the release notes out of the first section of CHANGELOG.md. So this walks
-// the same path every time and refuses the mistakes that are easy to make by
-// hand: a version the changelog does not mention, a tag that already exists, a
-// branch that is not main.
+// Pushing a tag used to be what published, and this said so for a while after it
+// stopped being true — the workflow no longer fires on `v*`, so the tag went up,
+// nothing happened, and the last line pointed at an actions page that would stay
+// empty. The packages are built here now (`npm run all`) and the release is cut
+// here too (`npm run publish`); the tag is the marker those two are checked
+// against, not a trigger.
+//
+// So this walks the same path every time and refuses the mistakes that are easy
+// to make by hand: a version the changelog does not mention, a tag that already
+// exists, a branch that is not main. What it does not do is publish — see the
+// line it ends on.
 //
 //   npm run ship 0.9.9      # that version
 //   npm run ship patch      # 0.9.8 -> 0.9.9
@@ -132,7 +137,7 @@ for (const line of files.slice(0, 20)) console.log(`              ${line}`);
 if (files.length > 20) console.log(`              … and ${files.length - 20} more`);
 console.log(`               M the three version files above`);
 console.log(`    tag       ${tag}`);
-console.log(`    push      origin ${branch}, then ${tag}  →  the tag is what publishes`);
+console.log(`    push      origin ${branch}, then ${tag}  →  a marker; publishing is separate`);
 console.log(`    notes     ${pending ? `"Unreleased" → ${version}` : heading?.trim()}\n`);
 
 if (dry) {
@@ -201,5 +206,4 @@ console.log('\n▸ push');
 run('git', ['push', 'origin', branch]);
 run('git', ['push', 'origin', tag]);
 
-const remote = git('remote', 'get-url', 'origin').replace(/\.git$/, '');
-console.log(`\n  ${tag} is away. The build is at ${remote}/actions\n`);
+console.log(`\n  ${tag} is away. Next: npm run all, then npm run publish\n`);

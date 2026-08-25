@@ -18,6 +18,24 @@
 # So the .rpm is built here instead, and `build-linux.mjs` refuses to let the
 # other image bundle one.
 #
+# The base decides where the result runs, the same way it does in the other
+# Dockerfile — and here it decides it twice over.
+#
+# The obvious half is libpcap: Fedora's is `libpcap.so.1`, which is the whole
+# reason this file exists. The half that is easy to miss is glibc. Rust's std
+# emits weak references to `pidfd_spawnp` and `pidfd_getpid` when the build's
+# glibc has them, and the version reference it records is NOT marked weak — so
+# the loader treats it as a hard floor. Built on 41 (glibc 2.40) the binary asks
+# for GLIBC_2.39, and nothing in the RPM header says so, because the Requires
+# are the ones written in tauri.conf.json and glibc is not among them.
+#
+# In practice that floor costs nothing: the app needs webkit2gtk-4.1 at runtime,
+# which RHEL 9 and its rebuilds do not ship at all, so the distributions below
+# 2.39 could not run it whatever this base were. Raising the base raises the
+# floor, so check after changing it:
+#
+#     objdump -p usr/bin/hs-tracker | grep GLIBC | sort -u
+#
 # The package list is the one the release workflow's Fedora job already uses,
 # which is the version that has been proved to build. Fedora's own rust and
 # cargo are current enough that rustup is not needed here, unlike on 22.04.

@@ -45,6 +45,16 @@ pub enum Status {
 pub enum Deaf {
     /// hearing things, or not silent long enough to say so
     No,
+    /// Silent because every frame that arrived was encrypted.
+    ///
+    /// A client at the login screen talks to the account service over TLS and
+    /// to nothing else, so it is silent in exactly the way a broken capture is.
+    /// Told apart, because the two want opposite things said: this one is not a
+    /// fault at all and there is no setting that would help it. The log has
+    /// distinguished them since the counters were split; the panel was still
+    /// showing a red banner and offering a switch to a player who was merely
+    /// standing at the character screen.
+    Encrypted,
     /// silent, and only the game's own connections are being read
     Narrow,
     /// silent with every connection on the machine already being read
@@ -66,6 +76,7 @@ impl Status {
                     Deaf::No => 0,
                     Deaf::Narrow => 1,
                     Deaf::Wide => 2,
+                    Deaf::Encrypted => 3,
                 };
                 format!("capturing|{iface}|{hosts}|{dropped}|{packets}|{deaf}")
             }
@@ -844,15 +855,18 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let silent = running
                 && heard == 0
                 && alive.iter().any(|c| c.started.elapsed() >= DEAF_AFTER);
-            let deaf = match (silent, wide_capture()) {
-                (false, _) => Deaf::No,
-                (true, false) => Deaf::Narrow,
-                (true, true) => Deaf::Wide,
+            let encrypted: u32 = alive.iter().map(|c| c.tls.load(Ordering::Relaxed)).sum();
+            let deaf = match (silent, packets > 0 && encrypted == packets, wide_capture()) {
+                (false, _, _) => Deaf::No,
+                // nothing arrived that was not encrypted: a game at its login
+                // screen looks exactly like this, and nothing is wrong
+                (true, true, _) => Deaf::Encrypted,
+                (true, false, false) => Deaf::Narrow,
+                (true, false, true) => Deaf::Wide,
             };
             let due = deaf_said.is_none_or(|at| at.elapsed() >= DEAF_AGAIN);
             if silent && due {
                 deaf_said = Some(std::time::Instant::now());
-                let encrypted: u32 = alive.iter().map(|c| c.tls.load(Ordering::Relaxed)).sum();
                 let verdict = if packets == 0 {
                     "None arrived at all - the game's traffic is not on this adapter, or not matching this filter."
                 } else if encrypted == packets {

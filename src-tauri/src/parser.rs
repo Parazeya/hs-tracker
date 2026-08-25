@@ -226,16 +226,26 @@ impl Reassembler {
     }
 
     fn finish(&mut self, flow: Flow, flushed: Vec<u8>) -> Vec<u8> {
-        // stitch the previous tail back on — unless it has been waiting for
-        // its ending too long to be a real message
-        // How many flushes this tail has already survived. It has to come out
-            // of the map with the tail: recomputing it from whether the tail was
-            // empty — which is what this did — made it 0 or 1 forever, so the
-            // count never reached CARRY_ROUNDS and the give-up test below could
-            // never fire.
-        let (mut data, rounds) = match self.carry.remove(&flow) {
-            Some((tail, rounds)) if rounds < CARRY_ROUNDS => (tail, rounds),
-            _ => (Vec::new(), 0),
+        // Stitch the previous tail back on, and count how many flushes it has
+        // waited. The count has to come out of the map with the tail:
+        // recomputing it from whether the tail was empty — which is what this
+        // did — made it 0 or 1 forever, so it never reached CARRY_ROUNDS and
+        // the give-up below could never fire.
+        //
+        // Giving up used to mean dropping the tail. That threw away more than
+        // the stray brace it was aimed at: everything the brace was holding
+        // went with it. A `[` or `{` in binary framing is followed by whatever
+        // the stream sent next, and if a drop answer sat behind it, three
+        // flushes later the drop was gone — never counted, never chimed, never
+        // journalled, and nothing said so.
+        //
+        // So the bytes are kept and parsed instead. What was behind the opener
+        // is read on this pass, and no new carry is taken from it: carrying
+        // again would hand the same opener another three flushes of hostages.
+        let (mut data, rounds, giving_up) = match self.carry.remove(&flow) {
+            Some((tail, rounds)) if rounds < CARRY_ROUNDS => (tail, rounds, false),
+            Some((tail, _)) => (tail, 0, true),
+            None => (Vec::new(), 0, false),
         };
         data.extend_from_slice(&flushed);
 
@@ -255,8 +265,10 @@ impl Reassembler {
         // closes either, so everything after it counts as nested. What tells
         // them apart is the next byte, which `opens_a_value` reads.
         let cut = unterminated_start(&data);
-        let truncated =
-            cut < data.len() && data.len() - cut <= CARRY_CAP && opens_a_value(&data[cut..]);
+        let truncated = !giving_up
+            && cut < data.len()
+            && data.len() - cut <= CARRY_CAP
+            && opens_a_value(&data[cut..]);
         if truncated {
             let tail = data.split_off(cut);
             self.carry.insert(flow, (tail, rounds + 1));
@@ -975,12 +987,23 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
 /// mix: every `{player}` sits in one of the two merchant listings and every
 /// `{pos}` in one of the three drop answers.
 ///
+/// Both spellings, because the game uses both. This read `gd` alone and three
+/// captures in this repository disagree about which one carries the marker: in
+/// one, `gd` holds the ownership 268 times and `gid` never; in another `gid`
+/// holds it 28 times and `gd` holds a position instead. Whichever the patch of
+/// the day sends, a listing spelled the way this did not know went back to
+/// pouring the merchant's stock into the journal as finds — the very thing this
+/// function exists to stop, silently undone by a rename.
+///
 /// Refuses only what is provably a slot. An item that says nothing about where
 /// it is keeps being read as a drop, which is how the ordinary drop answer has
 /// always arrived.
 fn belongs_to_a_player(item: &Value) -> bool {
-    matches!(field_ref(item, &["gd"]), Some(Value::Object(map)) if map.contains_key("player"))
+    matches!(field_ref(item, OWNER_FIELDS), Some(Value::Object(map)) if map.contains_key("player"))
 }
+
+/// Where an item says whose slot it is in. See `belongs_to_a_player`.
+const OWNER_FIELDS: &[&str] = &["gd", "gid"];
 
 fn item_events(d: &Value) -> Vec<GameEvent> {
     item_sources(d)
@@ -1583,6 +1606,27 @@ mod tests {
         assert_eq!(messages.len(), 1, "the message before the noise is still read");
     }
 
+    /// Both spellings of the ownership marker, because the game sends both.
+    ///
+    /// The guard knew `gd` only. Captures in this repository carry the marker
+    /// under `gid` 28 times in one and under `gd` 268 times in another, with
+    /// `gd` holding a plain position in the first — so on the days the game
+    /// says `gid`, every item in the merchant's window was read as a find at
+    /// the player's feet, which is exactly the flood the guard was written for.
+    #[test]
+    fn the_merchant_is_recognised_under_either_spelling_of_the_marker() {
+        for owner in ["gd", "gid"] {
+            let item = json!({ owner: {"player": 0}, "a": 372940672, "b": 8, "c": 1 });
+            assert!(belongs_to_a_player(&item), "{owner} says whose slot it is in");
+        }
+        // and a position under either name is still the ground
+        for where_at in ["gd", "gid"] {
+            let item = json!({ where_at: {"pos": [11, 0]}, "a": 372940672 });
+            assert!(!belongs_to_a_player(&item), "{where_at} with a position is a drop");
+        }
+        assert!(!belongs_to_a_player(&json!({"a": 1})), "saying nothing is still a drop");
+    }
+
     #[test]
     fn an_item_posted_to_the_market_is_not_a_drop() {
         // the listing as captured, credentials replaced
@@ -2084,6 +2128,32 @@ mod tests {
         let messages = extract_messages(&flushed);
         assert_eq!(messages.len(), 1, "the save survived the flood");
         assert_eq!(messages[0]["currency_data"]["GSS"], 42);
+    }
+
+    /// What the stray brace was holding comes back.
+    ///
+    /// An opener in framing noise looks exactly like a truncated message — the
+    /// bytes after it are whatever the stream sent next — so it is carried, and
+    /// after three flushes the carry is given up. Giving up used to mean
+    /// dropping the tail, and a real message sitting behind the brace went with
+    /// it: never counted, never chimed, never journalled. Now the bytes are
+    /// parsed on the way out.
+    #[test]
+    fn a_message_held_hostage_by_a_stray_opener_is_recovered() {
+        let mut asm = Reassembler::default();
+        let flow = flow_from("1.2.3.4");
+        // `[` then a quote is a plausible enough start for the carry to take it
+        asm.push(flow, 1, b"\x01[\"noise");
+        asm.push(flow, 2, b"{\"currency_data\":{\"GSS\":11}}");
+        for ack in 3..8 {
+            if let Some(flushed) = asm.push(flow, ack, b"x") {
+                let events = events_from_messages(&extract_messages(&flushed));
+                if events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 11)) {
+                    return;
+                }
+            }
+        }
+        panic!("the message behind the stray opener was never parsed");
     }
 
     #[test]

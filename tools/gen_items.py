@@ -388,7 +388,16 @@ def room_names() -> dict[str, str]:
     season that adds an act adds its rooms here with it.
     """
     out: dict[str, str] = {}
-    for path in sorted(GAME.glob("translations*.csv")):
+    files = sorted(GAME.glob("translations*.csv"))
+    if not files:
+        # The other two readers say so and carry on, because a name can fall
+        # back to the datamined one. This cannot: the rooms are only here, and
+        # without them ACT_ZONES is empty, every "Overworld" place parses to
+        # nothing, and the act-to-zone data silently reverts to the snapshot's —
+        # which is a season behind. The run would print its usual success line
+        # and the diff would look like a routine refresh.
+        print(f"note: no translations*.csv under {GAME} — rooms and zones cannot be read")
+    for path in files:
         for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
             key, _, rest = line.partition("|")
             key = key.strip()
@@ -436,6 +445,15 @@ for room in rooms:
         ACT_ZONES.setdefault(int(part.group(1)), []).append(int(part.group(2)))
 for numbers in ACT_ZONES.values():
     numbers.sort()
+
+# Nothing correct can be written without them, so stop rather than write
+# something wrong over the tables that are already right.
+if not ACT_ZONES:
+    sys.exit(
+        f"no rooms were read from {GAME}.\n"
+        "Point HERO_SIEGE_BIN at the game's bin folder (see .env.example) and run this again;\n"
+        "carrying on would rewrite items.js and items.rs with no rooms and a season-old act table."
+    )
 
 ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10}
 
@@ -568,7 +586,19 @@ for entry in ENTRIES:
         # The game named no place at all for this one — 23 items — so the
         # snapshot is all there is. It is kept rather than dropped: stale is
         # better than silent, and every code the game does state overrides it.
-        codes = sorted({c for d in (meta.get("drop") or []) for c in (d.get("locations") or [])})
+        #
+        # Codes only. The snapshot's `locations` also carries plain words —
+        # "Sheeponia", "Circle of Hatred", "Unstable Rift" — and those went into
+        # a table whose whole purpose is to be matched against a zone code like
+        # "8-2". They can never match one, so they sat there as entries nothing
+        # could ever read, and showed up as a zone code in the Codex. The words
+        # are not lost: `dropPlaces` is where they belong and already has them.
+        codes = sorted(
+            c
+            for d in (meta.get("drop") or [])
+            for c in (d.get("locations") or [])
+            if re.fullmatch(r"\d+-(?:\d+|D|BD)", str(c))
+        )
     if notable and codes:
         zones.setdefault(name.lower(), codes)
         # The chase rate is the base rate times a factor the game carries beside

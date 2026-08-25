@@ -581,6 +581,21 @@ impl GameStats {
             // session's earnings. Replaying a real capture, 88% of the points
             // a reset could fall on hold one.
             self.banked,
+            // `banked` cancels a deposit the balance has not confirmed yet; this
+            // is the same debt the other way round — a balance step credited
+            // whose own deposit packet has not arrived. Only one of the pair
+            // travelled, so a Reset landing between the two halves left the
+            // survivor with nothing to cancel against and the coins counted
+            // twice. The note above says exactly that about `banked`; its mirror
+            // was missed. `pending_since` goes with it, or the debt never
+            // expires.
+            self.pending_step,
+            self.pending_since,
+            // The peak a climb is measured from. `total_gold` travels and this
+            // did not, so after a Reset a bank drawn down and put back read as
+            // income: withdraw half a million, reset, put it back, and the new
+            // run opens claiming it earned it.
+            self.gold_high,
             // the balance travels, so the moment it was read travels with it:
             // without it the carried gold reports an age of zero and looks fresh
             self.last_bank,
@@ -614,6 +629,9 @@ impl GameStats {
             self.xp_authoritative,
             self.stale_bank,
             self.banked,
+            self.pending_step,
+            self.pending_since,
+            self.gold_high,
             // the balance travels, so the moment it was read travels with it:
             // without it the carried gold reports an age of zero and looks fresh
             self.last_bank,
@@ -2137,6 +2155,56 @@ mod tests {
         s.reset();
         feed(&mut s, json!({"currencyData": {"GSS": 722_839}}));
         assert_eq!(s.snapshot(String::new()).gold.earned, 0, "the new session did not earn it");
+    }
+
+    /// The same crossing, the other way round.
+    ///
+    /// The test above has the deposit arrive first and the balance confirm it
+    /// after the Reset. Here the balance moves first and the client's own report
+    /// of the deposit arrives after — the pair the engine cancels with
+    /// `pending_step`, which did not travel across a Reset while its mirror
+    /// `banked` did. So the report landed with nothing to cancel against and the
+    /// fresh run opened claiming coins banked before it began.
+    #[test]
+    fn a_reset_between_a_balance_and_its_deposit_earns_the_gold_once() {
+        let mut s = GameStats::default();
+        s.apply(&account_packet("Parahryushka", 0, 84_833_801));
+        let feed = |s: &mut GameStats, packet: serde_json::Value| {
+            for e in parser::events_from_messages(&[packet]) {
+                s.apply(&e);
+            }
+        };
+        feed(&mut s, json!({"currencyData": {"GSS": 720_239}}));
+        feed(&mut s, json!({"currencyData": {"GSS": 722_839}}));
+        assert_eq!(s.snapshot(String::new()).gold.earned, 2600, "the balance climbed by 2600");
+        s.reset();
+        feed(&mut s, json!({"amount_gold": "2600"}));
+        assert_eq!(
+            s.snapshot(String::new()).gold.earned,
+            0,
+            "the deposit that caused that climb is not a second 2600"
+        );
+    }
+
+    /// A bank drawn down and put back is not income, Reset or no Reset.
+    #[test]
+    fn the_peak_a_climb_is_measured_from_survives_a_reset() {
+        let mut s = GameStats::default();
+        s.apply(&account_packet("Parahryushka", 0, 84_833_801));
+        let feed = |s: &mut GameStats, packet: serde_json::Value| {
+            for e in parser::events_from_messages(&[packet]) {
+                s.apply(&e);
+            }
+        };
+        feed(&mut s, json!({"currencyData": {"GSS": 1_000_000}}));
+        feed(&mut s, json!({"currencyData": {"GSS": 500_000}})); // withdrawn to gamble
+        s.reset();
+        feed(&mut s, json!({"currencyData": {"GSS": 1_000_000}})); // and put back
+        assert_eq!(
+            s.snapshot(String::new()).gold.earned,
+            0,
+            "returning to a level the bank has already held is a return, not income"
+        );
     }
 
     #[test]

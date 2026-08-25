@@ -41,3 +41,39 @@
   ${EndIf}
   npcap_skipped:
 !macroend
+
+; "Delete application data" has to delete this application's data.
+;
+; The box is Tauri's and so is what it clears: `$APPDATA\${BUNDLEID}` and
+; `$LOCALAPPDATA\${BUNDLEID}`, the places a Tauri app usually keeps things. This
+; one keeps them beside the executable instead — `data_dir()` on Windows is the
+; exe's own folder, which is what makes a portable copy work — so ticking the box
+; reported success and left every one of them behind: the settings, the whole run
+; history, the sounds the player imported, the log, and `debug-capture.jsonl`,
+; which holds an account id and a character name. Reinstalling later brought the
+; lot back, to someone who had asked for it to be gone.
+;
+; Guarded the same way Tauri guards its own block, so an upgrade keeps
+; everything: only when the box is ticked and this is not an update.
+!macro NSIS_HOOK_POSTUNINSTALL
+  ${If} $DeleteAppDataCheckboxState = 1
+  ${AndIf} $UpdateMode <> 1
+    Delete "$INSTDIR\settings.json"
+    Delete "$INSTDIR\runs.json"
+    Delete "$INSTDIR\positions.json"
+    Delete "$INSTDIR\carried.json"
+    Delete "$INSTDIR\shopping.json"
+    Delete "$INSTDIR\hs-tracker.log"
+    Delete "$INSTDIR\hs-tracker.log.1"
+    Delete "$INSTDIR\debug-capture.jsonl"
+    Delete "$INSTDIR\debug-capture.old.jsonl"
+    ; marks the app leaves to remember a start that went wrong
+    Delete "$INSTDIR\soft-render"
+    Delete "$INSTDIR\no-paint"
+    Delete "$INSTDIR\.write-probe"
+    RMDir /r "$INSTDIR\sounds"
+    ; empty-only: anything the user put here themselves stays, and so does the
+    ; uninstaller that is running out of this folder right now
+    RMDir "$INSTDIR"
+  ${EndIf}
+!macroend

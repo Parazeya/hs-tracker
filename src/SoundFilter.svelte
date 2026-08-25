@@ -6,11 +6,19 @@
   import { RARITIES, soundUrl, play } from './audio.js';
   import { ALL_BUFFS } from './buffs.js';
 
-  // only named items can be listed: an ordinary base has no identity of its own
+  // Only named items can be listed: an ordinary base has no identity of its own.
+  //
+  // "Has a rarity" used to say that, and stopped: the tables now carry a rarity
+  // for every item, ordinary bases included, so this offered 1,440 names of
+  // which 476 could never fire. Pick "War Axe" out of the search, put it on a
+  // list, and nothing ever chimes — the parser leaves an ordinary pickup
+  // nameless, so the list has nothing to match. Being on one of the five
+  // rarities the journal keeps is what "named" actually means.
+  const LISTABLE = new Set(['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy']);
   const NAMED = [
     ...new Map(
       Object.entries(ITEMS)
-        .filter(([, name]) => RARITY_BY_NAME[name.toLowerCase()])
+        .filter(([, name]) => LISTABLE.has(RARITY_BY_NAME[name.toLowerCase()]))
         .map(([key, name]) => [
           name,
           {

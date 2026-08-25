@@ -1,25 +1,29 @@
 name: release
 
-# Not on a tag any more. The packages are built on the maintainer's machine —
-# `npm run all` — and the release is cut with `npm run publish`, because a
-# hosted runner spent an evening timing out against a dead Ubuntu mirror while
-# the same build took four minutes here. Start it by hand when a second opinion
-# is wanted: the .rpm in particular is built on Fedora here and on Debian there,
-# and Fedora is the more careful place to record what the package depends on.
+# A second opinion, and nothing else. It builds and tests; it does not publish.
+#
+# The packages are built on the maintainer's machine — `npm run all` — and the
+# release is cut with `npm run publish`, because a hosted runner spent an evening
+# timing out against a dead Ubuntu mirror while the same build took four minutes
+# here. Start this by hand when it is worth seeing the build stand up somewhere
+# that is not one laptop.
+#
+# It used to publish, and the trigger was removed without the publishing steps.
+# Dispatch is allowed on a tag, so the tag-guarded halves that were left behind
+# could still fire — a second writer on a release `npm run publish` had already
+# cut, replacing four assets with runner-built ones nobody had tested and
+# rewriting the release body underneath them. One publisher; this is not it.
 on:
   workflow_dispatch:
 
-# read-only by default; only the job that publishes the release asks for more
+# Read-only, all of it. Nothing here writes a release any more, and a token that
+# cannot is the clearest way to keep it that way.
 permissions:
   contents: read
 
 jobs:
   build:
     runs-on: windows-latest
-    # creating the release and attaching the installer needs write access; new
-    # repositories hand Actions a read-only token by default
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +42,9 @@ jobs:
       # so every job was building the front end twice.
       - run: npm ci
 
-      # package.json owns the version; fail the build if the tag disagrees
+      # package.json owns the version; fail the build if the tag disagrees.
+      # Only meaningful when dispatched from a tag, which is the way to ask this
+      # workflow whether a release commit stands up somewhere else.
       - name: Check the tag matches package.json
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -60,22 +66,10 @@ jobs:
           name: hs-tracker-installer
           path: src-tauri/target/release/bundle/nsis/*.exe
 
-      # the release text is this version's section of the changelog, not the
-      # whole history: everything from the first "## " heading to the next one
-      - name: Cut the release notes
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: awk '/^## /{n++} n==1' CHANGELOG.md > RELEASE_NOTES.md
-
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: src-tauri/target/release/bundle/nsis/*.exe
-          body_path: RELEASE_NOTES.md
-
   # The Debian half: a .deb and an AppImage. The artifact is uploaded whether or
   # not this is a tagged run, so a build can be handed to a tester without
-  # cutting a release. The .rpm is built elsewhere — see below.
+  # cutting a release. The .rpm is built in a Fedora job of its own below,
+  # because a binary linked here asks for a libpcap Fedora does not ship.
   linux:
     runs-on: ubuntu-latest
     steps:
@@ -181,48 +175,9 @@ jobs:
           name: hs-tracker-rpm
           path: src-tauri/target/release/bundle/rpm/*.rpm
 
-  # Attaches the three Linux packages to the tagged release, next to the Windows
-  # installer. It waits for the Windows job so the two never write the same
-  # release at once, and carries no body_path: the release text is already
-  # there. Set the repository variable PUBLISH_LINUX to "false" to hold the
-  # Linux packages back for a release without touching this file.
-  publish-linux:
-    needs: [build, linux, rpm]
-    # `!cancelled()` rather than `always()`: a cancelled run should stop, but a
-    # failed rpm job should not hold back the .deb and the AppImage that built
-    # perfectly well beside it. The rpm image is Fedora and outlives its own
-    # support window; when it breaks it must break alone.
-    #
-    # Not `continue-on-error` on the rpm job — that would make the run read
-    # green and report `success` here, which is worse than the problem.
-    if: >-
-      !cancelled() && startsWith(github.ref, 'refs/tags/')
-      && vars.PUBLISH_LINUX != 'false'
-      && needs.build.result == 'success' && needs.linux.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: hs-tracker-linux
-          path: linux
-
-      # download-artifact errors hard on an artifact that was never uploaded,
-      # so the guard belongs here as well as on the release step.
-      - uses: actions/download-artifact@v4
-        if: needs.rpm.result == 'success'
-        with:
-          name: hs-tracker-rpm
-          path: linux/rpm
-
-      # The .rpm may not be here at all — see the guard on its download above.
-      # A pattern that matches nothing is not an error to this action, but say
-      # so rather than leaving the release to a default.
-      - uses: softprops/action-gh-release@v2
-        with:
-          fail_on_unmatched_files: false
-          files: |
-            linux/deb/*.deb
-            linux/rpm/*.rpm
-            linux/appimage/*.AppImage
+# The publish-linux job stood here. It downloaded the three Linux packages and
+# attached them to the release, guarded on a tag ref that the dispatch trigger
+# can still produce — so it would have overwritten packages `npm run publish`
+# had already uploaded, swapping locally built ones for the runner's. The
+# artifacts from the jobs above are still uploaded and can be downloaded from
+# the run; nothing here writes to a release.

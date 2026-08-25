@@ -8,6 +8,42 @@ nothing counted at all, each one ending at a cause that was ours and not theirs.
 
 ### Fixed
 
+- **The merchant's window went back to reading as a floor full of loot.** The
+  guard that tells a shop slot from a drop looked for the ownership marker under
+  `gd`, and the game also spells it `gid` — three captures kept in this
+  repository disagree about which, one carrying it under `gid` 28 times while
+  `gd` holds a plain position instead. On the patches that say `gid`, opening the
+  Black Market poured its whole stock into the journal as finds at your feet,
+  which is the exact flood that guard was written to stop. It knows both
+  spellings now, and a test says so.
+- **Gold could be counted twice across a Reset, and a return could be counted as
+  income.** A deposit and the balance that confirms it arrive in either order and
+  the engine cancels the two against each other — but only one half of that pair
+  survived a Reset, so a Reset landing between them left the survivor with
+  nothing to cancel and the coins counted again. The high-water mark that stops a
+  bank drawn down and put back reading as earnings did not survive either.
+- **A message hidden behind a stray brace is no longer thrown away.** An opener
+  in binary framing looks exactly like a truncated message, so it is carried and
+  given up on after three flushes — and giving up used to mean dropping
+  everything the brace was holding, a real drop answer among it.
+- **The renderer was being turned off on machines that never had trouble.** A
+  start that hands over to a replacement — which is what choosing the X11 backend
+  does — left behind the mark meaning "this run drew nothing", so the next start
+  disabled the DMA-BUF renderer and wrote a reason that was not true.
+- **A game at its login screen is no longer reported as a fault.** Everything a
+  client sends before it joins a server is encrypted, which is indistinguishable
+  from a broken capture unless the two are counted apart. The dashboard said
+  nothing had been counted for ninety seconds and offered a setting that would
+  not have helped.
+- **"Delete application data" deletes this application's data.** The box clears
+  the two folders a Tauri app usually writes to; this one keeps everything beside
+  its executable, so the settings, the run history, the imported sounds, the log
+  and the packet capture — which holds an account id and a character name — all
+  survived an uninstall that reported success.
+- **The per-item alert list stopped offering items whose alerts cannot fire.** It
+  kept anything with a rarity, and every item has one since the tables were
+  rebuilt, so 476 ordinary bases were on offer. Putting one on a list did nothing
+  at all, silently: the game never names an ordinary pickup.
 - **A flask counted as a find but never as a tier.** Flasks are equipped, the
   same as charms, and were on neither the gear list nor the stackable one — so a
   Heroic flask went into the Heroic column while the SS column, which counts the
@@ -18,6 +54,23 @@ nothing counted at all, each one ending at a cause that was ours and not theirs.
 
 ### Changed
 
+- The packet log is capped at 64 MB with one older copy kept. It had no ceiling,
+  and with **Read every connection** on it is no longer only the game's traffic
+  being written down.
+- The item tables refuse to be built without the game. A missing folder used to
+  produce tables with no rooms and a season-old act table, print a success line
+  and exit 0. Plain words like "Sheeponia" no longer go into the table of zone
+  codes either — nothing could ever match them, and `dropPlaces` already holds
+  them properly.
+- **The release workflow builds and no longer publishes.** Its trigger was removed
+  a while ago without its publishing steps, and dispatch is allowed on a tag — so
+  it could still fire as a second writer on a release `npm run publish` had cut,
+  replacing tested assets with runner-built ones. `npm run publish` now refuses a
+  dirty tree or a HEAD that is not the tag it publishes under, and overwrites an
+  existing asset only when asked with `--replace`. `npm run ship` names the next
+  command instead of a page that would stay empty.
+- The README says which distributions each Linux package is for, glibc floor
+  included, and `docker/Dockerfile.fedora` records how its base sets that floor.
 - **A vial is called a flask**, which is what the game calls it.
 - **A grade is called a tier** wherever the word is shown, which is what the
   game's own tooltip says.
