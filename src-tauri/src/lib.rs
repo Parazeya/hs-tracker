@@ -2500,12 +2500,59 @@ fn log_environment() {
     );
 }
 
+/// Nothing was drawn, so try once more without the renderer that usually
+/// explains it — rather than printing the remedy and hoping it is read.
+///
+/// The player this was written for had four EGL failures and a paragraph of
+/// advice in front of him and answered "yeah idk what's going on atp". He was
+/// one restart away. Restarting is something this app already does to change
+/// GTK backends, and `ease_webkit` reads the mark on the way up, so the
+/// replacement needs nothing handed to it.
+///
+/// Once, and the mark is what says so. `HS_TRACKER_RELAUNCHED` cannot be the
+/// guard here: on the machine this came from it was already set, because that
+/// process was itself the replacement that came up through XWayland.
+#[cfg(not(windows))]
+fn retry_without_dmabuf() -> bool {
+    let soft = data_dir().join("soft-render");
+    if soft.exists() || std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return false; // this start was already the retry
+    }
+    if std::fs::write(&soft, "the DMA-BUF renderer drew nothing on this machine\n").is_err() {
+        return false;
+    }
+    // inside an AppImage the mounted binary is not what the user keeps
+    let Some(exe) =
+        std::env::var_os("APPIMAGE").map(PathBuf::from).or_else(|| std::env::current_exe().ok())
+    else {
+        return false;
+    };
+    log::warn("nothing was drawn in 20s - restarting once with the DMA-BUF renderer off");
+    // The environment carries over as it stands, the GTK backend with it. The
+    // marker only stops the backend logic relaunching a second time on top.
+    match std::process::Command::new(exe).env("HS_TRACKER_RELAUNCHED", "1").spawn() {
+        Ok(_) => true,
+        Err(e) => {
+            log::error(format!("could not restart: {e}"));
+            false
+        }
+    }
+}
+
 /// Nothing painted, and by now something would have. Says so where the user
 /// can find it, because on screen there is only an invisible window.
-fn spawn_render_watchdog() {
-    std::thread::spawn(|| {
+// Windows has nothing to retry: there the handle is only carried, not used.
+#[cfg_attr(windows, allow(unused_variables))]
+fn spawn_render_watchdog(app: AppHandle) {
+    std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(20));
         if UI_READY.load(Ordering::Relaxed) {
+            return;
+        }
+        // Do it rather than describe it; see `retry_without_dmabuf`.
+        #[cfg(not(windows))]
+        if retry_without_dmabuf() {
+            app.exit(0);
             return;
         }
         // The advice differs by platform and used to be printed on both: a
@@ -2520,11 +2567,10 @@ fn spawn_render_watchdog() {
         );
         #[cfg(not(windows))]
         log::error(
-            "no window has drawn anything after 20s - the web process is probably dead. \
-             The next start turns the DMA-BUF renderer off by itself, so try again \
-             before anything else. To force it now: WEBKIT_DISABLE_DMABUF_RENDERER=1, \
-             and failing that WEBKIT_DISABLE_COMPOSITING_MODE=1. An EGL line above \
-             is that renderer, whatever card is in the machine.",
+            "no window has drawn anything after 20s, and not with the DMA-BUF renderer \
+             off either - so the web process is dying for another reason. Worth trying: \
+             WEBKIT_DISABLE_COMPOSITING_MODE=1, then LIBGL_ALWAYS_SOFTWARE=1. Please send \
+             this log and whatever the terminal printed alongside it.",
         );
     });
 }
@@ -3010,7 +3056,7 @@ pub fn run() {
                 use tauri::Manager as _;
                 let _ = app.asset_protocol_scope().allow_directory(sounds_dir(), false);
             }
-            spawn_render_watchdog();
+            spawn_render_watchdog(app.handle().clone());
             spawn_position_saver(app.handle().clone());
             spawn_stats_pusher(app.handle().clone());
             presence::spawn(app.handle().clone());
