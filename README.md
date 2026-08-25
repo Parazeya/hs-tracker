@@ -120,13 +120,32 @@ sudo dnf install ./HS\ Tracker-*.x86_64.rpm     # Fedora
 Either package grants the app the right to capture during installation. Settings
 live in `~/.config/hs-tracker`.
 
-The AppImage runs anywhere but cannot carry that right, so it needs one line by
-hand:
+**Install a package if you want the numbers.** The AppImage runs anywhere, and
+it is the one form that cannot be given the capture right — not by `setcap`, and
+not by anything else.
+
+The two rule each other out. A binary carrying a capability is a privileged one,
+so the loader stops trusting the library path the process was handed — and that
+path is the whole of how an AppImage finds the libraries bundled inside it. Give
+the binary `cap_net_raw` and it stops starting at all:
+
+```
+hs-tracker: error while loading shared libraries: libpcap.so.0.8:
+cannot open shared object file: No such file or directory
+```
+
+An `$ORIGIN` rpath does not get round it either; the loader refuses that for a
+privileged binary too. A package has no such problem: its binary uses the
+distribution's own libpcap from a directory the loader trusts however the
+program was started.
+
+`sudo` does work, because nothing is granted at exec time and the library path
+survives — but settings, runs and sounds are then written to root's home instead
+of yours:
 
 ```bash
 ./HS\ Tracker_*.AppImage --appimage-extract     # gives ./squashfs-root
-sudo setcap cap_net_raw=ep squashfs-root/usr/bin/hs-tracker
-./squashfs-root/AppRun
+sudo ./squashfs-root/AppRun
 ```
 
 ## Using it
@@ -185,8 +204,8 @@ game actually sent: your account id, your character, your addresses. Do not
 paste that one anywhere you would not paste your account name.
 
 **The numbers stay at zero.** First, the app has to be allowed to read network
-traffic: on Windows that means Npcap, on Linux the packaged install does it for
-you and an AppImage needs the `setcap` line above. Npcap's own installer has a
+traffic: on Windows that means Npcap, on Linux the packaged install grants it
+and an AppImage cannot be granted it at all — see above. Npcap's own installer has a
 box marked *Restrict Npcap driver's access to Administrators only* — ticked, it
 refuses HS Tracker the adapter, and the app says so rather than claiming Npcap
 is missing.

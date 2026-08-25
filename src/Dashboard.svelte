@@ -70,8 +70,15 @@
   let snap = $state(null);
   // the path to paste into setcap: guessing it is the user's job otherwise
   let binary = $state('');
+  // ...except from an AppImage, where that line does not help and does harm
+  let appimage = $state(false);
   $effect(() => {
-    invoke('about').then((a) => (binary = a?.binary ?? '')).catch(() => {});
+    invoke('about')
+      .then((a) => {
+        binary = a?.binary ?? '';
+        appimage = a?.appimage ?? false;
+      })
+      .catch(() => {});
   });
   $effect(() => {
     invoke('snapshot').then((s) => (snap = s)).catch(() => {});
@@ -95,6 +102,13 @@
         title: 'Npcap is installed, but this app may not use it',
         detail:
           'Npcap has an option called “Restrict Npcap driver’s access to Administrators only”. With it on, only an elevated program can read traffic. Either run HS Tracker as administrator, or reinstall Npcap from npcap.com with that box unticked.',
+      };
+    if (status === 'no-capture' && appimage)
+      return {
+        bad: true,
+        title: 'An AppImage cannot be given the capture right',
+        detail:
+          'Granting it would stop the app starting at all: a binary carrying a capability makes the loader ignore the library path an AppImage needs to find the libraries bundled inside it. Install the .deb or the .rpm instead — either grants the right during installation. Running this AppImage with sudo also works, but then settings and runs are written to root’s home rather than yours.',
       };
     if (status === 'no-capture')
       return {

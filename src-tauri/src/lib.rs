@@ -1806,6 +1806,16 @@ pub struct About {
     /// where this process actually lives, so the setcap line the dashboard
     /// shows is one that can be pasted rather than a placeholder
     binary: String,
+    /// Running out of an AppImage, where `setcap` is not merely unnecessary but
+    /// harmful.
+    ///
+    /// A binary carrying a capability is a privileged one, so the loader stops
+    /// trusting the library path it was handed — and that path is the whole of
+    /// how an AppImage finds its own bundled libraries. Granting the right
+    /// stops the app starting at all, with `libpcap.so.0.8: cannot open shared
+    /// object file`, which is a worse place to be than counting nothing. The
+    /// panel has to know, because it is where the advice is given.
+    appimage: bool,
 }
 
 const REPO: &str = "https://github.com/Parazeya/hs-tracker";
@@ -1884,6 +1894,7 @@ fn about() -> About {
         },
         // inside an AppImage the running binary is on a mount that will be
         // gone; the file the user keeps is the one to name
+        appimage: std::env::var_os("APPIMAGE").is_some(),
         binary: std::env::var_os("APPIMAGE")
             .map(PathBuf::from)
             .or_else(|| std::env::current_exe().ok())
