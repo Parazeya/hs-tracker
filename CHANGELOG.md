@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.9.96 — 2026-08-25
+
+Linux, and one thing 0.9.95 broke.
+
+### Fixed
+
+- **An invisible window on a machine with no NVIDIA in it.** Since 2.40
+  WebKitGTK composites through a DMA-BUF renderer, and the app has been turning
+  that renderer off wherever it found the NVIDIA driver — which is where it was
+  known to fail. It fails elsewhere too: on a KDE session with an AMD card it
+  gave `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...`
+  four times over and then the web process died, leaving a window that was up,
+  transparent and drawing nothing.
+
+  There is no way to test for that in advance, because it happens inside a
+  process that has not started yet. So it is learned instead: every start leaves
+  a mark behind and the first frame drawn clears it. A start that finds the mark
+  still there knows the run before it drew nothing, and turns the renderer off
+  on this machine from then on. The first start fails, the second works, and
+  nobody has to read a log or find an environment variable. Delete
+  `soft-render` beside the settings to let it try again after a driver update.
+
+  The line the log printed about this said the renderer was worth turning off
+  "on an NVIDIA card", which told the one player it could have helped that it
+  was not for him. It no longer mentions a brand.
+
+- **0.9.95 tried to capture on Bluetooth, netfilter and D-Bus.** Keeping
+  adapters that have no addresses was right — it is what an adapter for VPN
+  capture looks like — but libpcap lists more than networks, and those have no
+  addresses either. Each got a capture thread, each failed with "link-layer type
+  filtering not implemented", and the failures took the status line away from
+  the adapter that was working. Opening the D-Bus one was worse: libpcap runs
+  `dbus-launch` to find the bus, which inside an AppImage resolves against the
+  bundled libdbus and dies with a version error in the player's log.
+
+  Those devices are not opened now, and anything else that turns out to speak a
+  framing this app cannot read is set aside after one line at a level nobody has
+  to act on.
+
+- **The .rpm could not start on the distributions it is for.** Tauri writes the
+  RPM archive itself rather than calling rpmbuild, so the Ubuntu build container
+  produced one without complaint — with a binary linked against Debian's
+  libpcap, asking the loader for `libpcap.so.0.8`. Fedora, RHEL and openSUSE
+  ship `libpcap.so.1` and never had the other name, so the package installed,
+  satisfied its declared dependency and then did not run. It is built in a
+  Fedora container of its own now, and the build script refuses to bundle one
+  anywhere else.
+
 ## 0.9.95 — 2026-08-23
 
 Everything here came out of players reporting that nothing was being counted —

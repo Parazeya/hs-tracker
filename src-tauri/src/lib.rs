@@ -2398,7 +2398,12 @@ fn ui_ready() {
         return;
     }
     #[cfg(not(windows))]
-    let _ = std::fs::remove_file(data_dir().join("x11-attempt"));
+    {
+        let _ = std::fs::remove_file(data_dir().join("x11-attempt"));
+        // Something was drawn, so this start is not the one that failed. See
+        // `ease_webkit`.
+        let _ = std::fs::remove_file(data_dir().join("no-paint"));
+    }
     log::say("start", "the interface is up");
 }
 
@@ -2516,8 +2521,10 @@ fn spawn_render_watchdog() {
         #[cfg(not(windows))]
         log::error(
             "no window has drawn anything after 20s - the web process is probably dead. \
-             Try starting with WEBKIT_DISABLE_COMPOSITING_MODE=1, or with \
-             WEBKIT_DISABLE_DMABUF_RENDERER=1 on an NVIDIA card.",
+             The next start turns the DMA-BUF renderer off by itself, so try again \
+             before anything else. To force it now: WEBKIT_DISABLE_DMABUF_RENDERER=1, \
+             and failing that WEBKIT_DISABLE_COMPOSITING_MODE=1. An EGL line above \
+             is that renderer, whatever card is in the machine.",
         );
     });
 }
@@ -2812,9 +2819,25 @@ fn honour_backend_choice() {}
 /// position turns the renderer off, and the cost here is a little smoothness on
 /// a panel that is mostly still pictures.
 ///
-/// Only machines that actually carry the driver pay for it, and never one where
-/// the user has already made the choice themselves. It has to be set before GTK
-/// starts, which is why it lives at the top of `run` — and the process is still
+/// NVIDIA is not the only way it fails, though, and the second way cannot be
+/// tested for from here.
+///
+/// A player on KDE with an AMD card and no NVIDIA module at all got
+/// `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...` four
+/// times over and then the same invisible window — through XWayland, with the
+/// overlay working and the renderer still unable to find a display to draw on. Whatever the renderer
+/// wants there, it does not have, and nothing this process can read says so in
+/// advance: the failure happens inside a web process that has not started yet.
+///
+/// So it is learned instead. Every start leaves `no-paint` behind and `ui_ready`
+/// removes it once something has actually been drawn; a start that finds the
+/// file knows the run before it drew nothing, and writes `soft-render` to say
+/// that this machine does not get the DMA-BUF renderer again. Delete that file
+/// to try it once more — after a driver update, say.
+///
+/// Only machines that need it pay for it, and never one where the user has
+/// already made the choice themselves. It has to be set before GTK starts,
+/// which is why it lives at the top of `run` — and the process is still
 /// single-threaded here, so setting it is safe.
 #[cfg(not(windows))]
 fn ease_webkit() {
@@ -2824,7 +2847,18 @@ fn ease_webkit() {
     let nvidia = ["/dev/nvidiactl", "/sys/module/nvidia/version"]
         .iter()
         .any(|p| std::path::Path::new(p).exists());
-    if nvidia {
+
+    let painting = data_dir().join("no-paint");
+    let soft = data_dir().join("soft-render");
+    // The run before this one got as far as writing the breadcrumb and never
+    // as far as drawing. Once is enough to stop trying.
+    if painting.exists() && !soft.exists() {
+        let _ = std::fs::write(&soft, "the DMA-BUF renderer drew nothing on this machine\n");
+        log::say("start", "nothing was drawn last time; the DMA-BUF renderer is off from now on");
+    }
+    let _ = std::fs::write(&painting, "");
+
+    if nvidia || soft.exists() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 }

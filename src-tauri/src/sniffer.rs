@@ -330,7 +330,11 @@ fn capture_devices() -> Vec<pcap::Device> {
     // the same traffic is inside the tunnel. So the app excluded the one device
     // that would have worked, before ever asking Npcap, and reported nine
     // packets in ninety seconds with the filter already wide open.
-    let kept: Vec<pcap::Device> = all.iter().filter(|d| worth_capturing(&d.addresses)).cloned().collect();
+    let kept: Vec<pcap::Device> = all
+        .iter()
+        .filter(|d| worth_capturing(&d.addresses) && is_a_network(&d.name))
+        .cloned()
+        .collect();
 
     // Which adapters exist, and which were passed over. Every report of nothing
     // being counted has turned on this list and none of them arrived with it.
@@ -352,7 +356,7 @@ fn capture_devices() -> Vec<pcap::Device> {
                 if skipped.is_empty() {
                     String::new()
                 } else {
-                    format!(" | skipped as loopback: {}", skipped.join(", "))
+                    format!(" | not networks, or loopback: {}", skipped.join(", "))
                 }
             }
         ),
@@ -365,6 +369,42 @@ fn capture_devices() -> Vec<pcap::Device> {
 /// adapter Npcap offers for dialup and VPN capture has none.
 fn worth_capturing(addresses: &[pcap::Address]) -> bool {
     addresses.is_empty() || addresses.iter().any(|a| !a.addr.is_loopback())
+}
+
+/// Devices libpcap offers that are not networks.
+///
+/// Keeping the address-less ones brought these along, because they have no
+/// addresses either: on one Linux machine the list came back with `bluetooth0`,
+/// `bluetooth-monitor`, `nflog`, `nfqueue`, `dbus-system` and `dbus-session`.
+/// Each got a capture thread, each failed with "link-layer type filtering not
+/// implemented" or its like, and those failures then took the status line away
+/// from the adapter that was working.
+///
+/// Opening `dbus-session` is worse than useless: libpcap runs `dbus-launch` to
+/// find the bus, and inside an AppImage that resolves against the bundled
+/// libdbus rather than the system one and dies with a version error the player
+/// then has to read past.
+///
+/// None of them can carry a TCP conversation with a game server, so none is
+/// opened. The names are libpcap's own and fixed; anything new that slips
+/// through is caught after the fact by `unusable_device`.
+fn is_a_network(name: &str) -> bool {
+    const PSEUDO: [&str; 5] = ["any", "nflog", "nfqueue", "dbus-system", "dbus-session"];
+    !PSEUDO.contains(&name)
+        && !name.starts_with("bluetooth")
+        && !name.starts_with("usbmon")
+        && !name.starts_with("nfqueue:")
+}
+
+/// Whether a capture ended because the device is not one we can read, rather
+/// than because something is wrong.
+///
+/// That is a fact about the device, not a fault: it must not be retried, and it
+/// must not put an error on the status line while a real adapter is working
+/// perfectly well beside it.
+fn unusable_device(e: &pcap::Error) -> bool {
+    let text = e.to_string().to_lowercase();
+    text.contains("not implemented") || text.contains("link-layer type")
 }
 
 /// Where the IP header starts in a captured frame. Ethernet can carry one or
@@ -721,6 +761,18 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                     if let Err(e) =
                         capture_loop(dev, scope, stop, stats, dropped, hits, packets, tls, opened, &app)
                     {
+                        // Something libpcap lists but cannot filter on. Said
+                        // once, at a level nobody has to act on, and left alone
+                        // from then on — the status line belongs to the
+                        // adapters that can actually carry the game.
+                        if unusable_device(&e) {
+                            crate::log::once(
+                                &format!("unusable:{name}"),
+                                "info",
+                                format!("{name} is not a device we can read: {e}"),
+                            );
+                            return;
+                        }
                         let refused = denied_open(&e);
                         // The README asks for this log when something is wrong;
                         // until now the whole module never wrote a line to it.
@@ -1032,6 +1084,22 @@ mod tests {
             netmask: None,
             broadcast_addr: None,
             dst_addr: None,
+        }
+    }
+
+    /// The list libpcap hands over is not all networks.
+    ///
+    /// Keeping address-less devices — which the VPN case needs — brought
+    /// Bluetooth, netfilter and D-Bus along with it, and one Linux machine
+    /// spent a capture thread on each. Opening the D-Bus one makes libpcap run
+    /// `dbus-launch`, which inside an AppImage dies on the bundled libdbus.
+    #[test]
+    fn the_pseudo_devices_libpcap_lists_are_left_alone() {
+        for real in ["enp9s0", "eth0", "wlan0", "virbr0", "tun0", "wg0"] {
+            assert!(is_a_network(real), "{real}");
+        }
+        for pseudo in ["any", "nflog", "nfqueue", "dbus-system", "dbus-session", "bluetooth0", "bluetooth-monitor", "usbmon1"] {
+            assert!(!is_a_network(pseudo), "{pseudo}");
         }
     }
 
