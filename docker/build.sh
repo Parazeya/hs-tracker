@@ -10,6 +10,24 @@ set -euo pipefail
 
 BUNDLES="${BUNDLES:-deb}"
 
+# An .rpm is only built where an .rpm will run.
+#
+# Tauri writes the archive itself rather than calling rpmbuild, so this image
+# will cheerfully produce one — and the binary inside it is linked against
+# Debian's libpcap. On Fedora the package installs, satisfies its declared
+# dependency, and then dies in the loader looking for libpcap.so.0.8. Three
+# releases shipped that way before a player pasted the error.
+#
+# The check is here rather than in build-linux.mjs so that running the image by
+# hand cannot get round it.
+if [[ ",${BUNDLES}," == *",rpm,"* && "${PKG_FAMILY:-deb}" != "rpm" ]]; then
+  echo "refusing to bundle an .rpm in a ${PKG_FAMILY:-deb} image:" >&2
+  echo "  the binary would be linked against Debian's libpcap and would not" >&2
+  echo "  start on Fedora. Use docker/Dockerfile.fedora - npm run deb -- --rpm" >&2
+  echo "  does that for you." >&2
+  exit 2
+fi
+
 echo "==> copying the checkout"
 rsync -a --delete \
   --exclude node_modules --exclude dist --exclude target \

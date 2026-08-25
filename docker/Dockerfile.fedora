@@ -1,0 +1,49 @@
+# The .rpm, built where an .rpm is going to run.
+#
+# The other image is Ubuntu, and it can produce an .rpm — Tauri writes the
+# archive itself rather than shelling out to rpmbuild, so the bundler does not
+# care which distribution it is standing on. The binary inside does. Linked on
+# Ubuntu it asks the loader for `libpcap.so.0.8`, which is what Debian ships;
+# Fedora, RHEL and openSUSE ship `libpcap.so.1` and have never had the other
+# name. The package's declared dependency, `libpcap`, is satisfied on all of
+# them, so it installs cleanly and then does not start:
+#
+#     hs-tracker: error while loading shared libraries: libpcap.so.0.8:
+#     cannot open shared object file: No such file or directory
+#
+# That went out in three releases before a player sent the line. Nothing said
+# so, because nothing had reason to look: the packaging is right, the declared
+# dependency is right, and only the linking is wrong.
+#
+# So the .rpm is built here instead, and `build-linux.mjs` refuses to let the
+# other image bundle one.
+#
+# The package list is the one the release workflow's Fedora job already uses,
+# which is the version that has been proved to build. Fedora's own rust and
+# cargo are current enough that rustup is not needed here, unlike on 22.04.
+FROM fedora:41
+
+ENV CARGO_TARGET_DIR=/target \
+    CARGO_HOME=/cargo \
+    PATH=/cargo/bin:$PATH
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+      gcc gcc-c++ make rust cargo nodejs npm \
+      webkit2gtk4.1-devel gtk3-devel libayatana-appindicator-gtk3-devel \
+      librsvg2-devel libpcap-devel openssl-devel \
+      file which findutils tar rsync \
+ && dnf clean all \
+ && rustc --version
+
+RUN npm install -g @tauri-apps/cli@^2
+
+# See the note in the other Dockerfile: build.sh will not bundle an .rpm unless
+# it is standing somewhere that produces one that runs.
+ENV PKG_FAMILY=rpm
+
+# Same as the other image, and for the same reason: Git on Windows hands this
+# over with CRLF line endings, and a carriage return on the shebang line makes
+# the entrypoint "bash\r: No such file or directory" - a 127 with no other clue.
+COPY build.sh /usr/local/bin/build.sh
+RUN sed -i 's/\r$//' /usr/local/bin/build.sh && chmod +x /usr/local/bin/build.sh
+ENTRYPOINT ["/usr/local/bin/build.sh"]

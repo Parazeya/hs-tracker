@@ -36,10 +36,31 @@
 | **About** | The version you are running, who made it, and a button that asks GitHub whether a newer release is out. |
 | **Discord** | Optional: while the game is open, your friends see the zone, the drops and the timer. |
 
-It reads the game's network traffic. It never touches the game process, never
-injects anything, and sends nothing anywhere — everything stays on your machine.
-The one exception is the **About** section's update check, which asks GitHub for
-the newest release and only when you press the button.
+## Where the numbers come from
+
+It listens to the game's own network traffic, with the same packet-capture
+library `tcpdump` and Wireshark use — Npcap on Windows, libpcap on Linux. The
+game already tells its server about every drop, every deposit and every save.
+This reads that conversation going past and counts what is in it.
+
+It never touches the game. Nothing is injected, no memory is read, no file of
+the game's is opened, and nothing about it is modified. What it does with the
+game process is ask the operating system two things — whether it is running, and
+which servers it holds connections to — which are the two questions Task Manager
+and `netstat` already answer for anyone who asks them.
+
+The capture is narrowed to the game's own servers: the app asks the operating
+system which addresses the game is connected to and listens to those, so the
+rest of what your machine is doing is never looked at. There are setups where
+that cannot work — a route optimiser such as ExitLag redirects the game's
+packets below the level Windows reports them at, so the addresses it names are
+not the ones on the wire, and nothing is counted at all. **Read every
+connection** in Settings takes the filter off for those machines. That widens
+what is read on your own machine and changes nothing else.
+
+Nothing is sent anywhere; every number stays where it was counted. The one
+exception is the **About** section's update check, which asks GitHub for the
+newest release, and only when you press the button.
 
 ## Showcase
 

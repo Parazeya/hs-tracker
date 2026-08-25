@@ -57,6 +57,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 ENV APPIMAGE_EXTRACT_AND_RUN=1
 
+# What this image is fit to produce. Read by build.sh, which refuses anything
+# else — an .rpm bundled here installs on Fedora and then cannot start, because
+# the binary asks for the libpcap Debian ships and Fedora does not have. See
+# Dockerfile.fedora.
+ENV PKG_FAMILY=deb
+
 # Git on Windows hands this over with CRLF line endings, and a carriage
 # return on the shebang line makes the entrypoint "bash\r: No such file
 # or directory" - a 127 with no other clue. Strip them here so the checkout

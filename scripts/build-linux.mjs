@@ -9,9 +9,14 @@
 //
 //   npm run deb                 # a .deb
 //   npm run deb -- --appimage   # a .deb and an AppImage
-//   npm run deb -- --rpm        # and an .rpm
-//   npm run deb -- --rebuild    # rebuild the image first
+//   npm run deb -- --rpm        # and an .rpm, from a Fedora image of its own
+//   npm run deb -- --rebuild    # rebuild the images first
 //   npm run deb -- --clean      # throw the build caches away
+//
+// The .rpm is built in a second container and not beside the other two. A
+// binary linked on Ubuntu wants `libpcap.so.0.8`; Fedora has `libpcap.so.1`,
+// so the package installed and then would not start. Three releases went out
+// that way. See docker/Dockerfile.fedora.
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, statSync } from 'node:fs';
@@ -22,7 +27,20 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const has = (f) => args.includes(f);
 
-const IMAGE = 'hs-tracker-linux-build';
+// Two images, because two package formats mean two sets of shared libraries.
+// See docker/Dockerfile.fedora for what an .rpm built on Ubuntu does.
+const IMAGES = {
+  deb: { tag: 'hs-tracker-linux-build', file: 'Dockerfile', cargo: 'hs-cargo', target: 'hs-target' },
+  rpm: {
+    tag: 'hs-tracker-fedora-build',
+    file: 'Dockerfile.fedora',
+    // Its own caches: a target directory holds objects linked against this
+    // image's libraries, and sharing one between the two would hand each
+    // build the other's.
+    cargo: 'hs-cargo-fedora',
+    target: 'hs-target-fedora',
+  },
+};
 const OUT = join(root, 'dist-linux');
 const win = process.platform === 'win32';
 
@@ -47,7 +65,7 @@ try {
 }
 
 if (has('--clean')) {
-  for (const v of ['hs-cargo', 'hs-target']) {
+  for (const v of Object.values(IMAGES).flatMap((i) => [i.cargo, i.target])) {
     try {
       docker(['volume', 'rm', v], { quiet: true });
       console.log(`  removed volume ${v}`);
@@ -56,51 +74,57 @@ if (has('--clean')) {
   if (!has('--rebuild')) process.exit(0);
 }
 
-const builtAt = (() => {
-  try {
-    return Date.parse(
-      docker(['image', 'inspect', IMAGE, '--format', '{{.Created}}'], { quiet: true }).trim(),
-    );
-  } catch {
-    return 0;
-  }
-})();
-
 // An edit to docker/ that nobody rebuilt is invisible from here: the run reuses
 // the old image and then fails on precisely what that edit was adding. That is
 // how an APPIMAGE_EXTRACT_AND_RUN and a patchelf sat in the Dockerfile, in no
 // image, while AppImage bundling kept dying. Compare, do not trust.
-const stale =
-  builtAt > 0 &&
-  readdirSync(join(root, 'docker')).some(
-    (f) => statSync(join(root, 'docker', f)).mtimeMs > builtAt,
-  );
-
-if (!builtAt || stale || has('--rebuild')) {
-  console.log(`\n▸ building the image (${stale ? 'docker/ has changed' : 'once'}; a few minutes)\n`);
-  docker(['build', '-t', IMAGE, join('docker')]);
+function ensureImage(image) {
+  const builtAt = (() => {
+    try {
+      return Date.parse(
+        docker(['image', 'inspect', image.tag, '--format', '{{.Created}}'], { quiet: true }).trim(),
+      );
+    } catch {
+      return 0;
+    }
+  })();
+  const stale =
+    builtAt > 0 &&
+    readdirSync(join(root, 'docker')).some(
+      (f) => statSync(join(root, 'docker', f)).mtimeMs > builtAt,
+    );
+  if (!builtAt || stale || has('--rebuild')) {
+    console.log(
+      `\n▸ building ${image.tag} (${stale ? 'docker/ has changed' : 'once'}; a few minutes)\n`,
+    );
+    docker(['build', '-t', image.tag, '-f', join('docker', image.file), join('docker')]);
+  }
 }
 
 mkdirSync(OUT, { recursive: true });
 
-const bundles = ['deb'];
-if (has('--appimage')) bundles.push('appimage');
-// Tauri's RPM bundler writes the archive itself rather than shelling out to
-// rpmbuild, so the Debian image can produce one — `build.sh` was already
-// collecting *.rpm when it gathered the results. CI uses a Fedora container
-// for it, which is the more careful place to be sure of the dependency names
-// it records; if the two ever disagree, trust that one.
-if (has('--rpm')) bundles.push('rpm');
+function bundle(image, bundles) {
+  ensureImage(image);
+  console.log(`\n▸ ${image.tag}: ${bundles.join(', ')}\n`);
+  docker([
+    'run', '--rm',
+    '-v', `${root}:/src:ro`,
+    '-v', `${OUT}:/out`,
+    '-v', `${image.cargo}:/cargo`,
+    '-v', `${image.target}:/target`,
+    '-e', `BUNDLES=${bundles.join(',')}`,
+    image.tag,
+  ]);
+}
 
-console.log(`\n▸ building: ${bundles.join(', ')}\n`);
-docker([
-  'run', '--rm',
-  '-v', `${root}:/src:ro`,
-  '-v', `${OUT}:/out`,
-  '-v', 'hs-cargo:/cargo',
-  '-v', 'hs-target:/target',
-  '-e', `BUNDLES=${bundles.join(',')}`,
-  IMAGE,
-]);
+// The .deb and the AppImage share a compile, so they share a run.
+const debian = ['deb'];
+if (has('--appimage')) debian.push('appimage');
+bundle(IMAGES.deb, debian);
+
+// The .rpm is a second compile in a second image, and that is the whole point
+// of it: the bundler would happily write one from the Ubuntu build, and the
+// binary inside would ask Fedora for a libpcap Fedora has never shipped.
+if (has('--rpm')) bundle(IMAGES.rpm, ['rpm']);
 
 console.log(`\n  packages are in ${OUT}\n`);
