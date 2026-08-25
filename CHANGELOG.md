@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.0 — 2026-08-25
+
+The number is the largest thing in this release. What stands behind it is the
+week before it: three releases spent finding out why a handful of players saw
+nothing counted at all, each one ending at a cause that was ours and not theirs.
+
+### Fixed
+
+- **A flask counted as a find but never as a tier.** Flasks are equipped, the
+  same as charms, and were on neither the gear list nor the stackable one — so a
+  Heroic flask went into the Heroic column while the SS column, which counts the
+  tier of gear, never saw it. The panel showed twelve Heroic beside ten SS with
+  nothing on screen to explain the gap. Every Heroic item in the tables is
+  graded SS, so a Heroic that was not also an SS could not have been anything
+  else.
+
+### Changed
+
+- **A vial is called a flask**, which is what the game calls it.
+- **A grade is called a tier** wherever the word is shown, which is what the
+  game's own tooltip says.
+- The custom filter's heading read "lists that outrank the above". That is true
+  of an item on a list and was read as true of everything else, so players
+  believed a filter switched the rarity alerts off and asked for the adding
+  behaviour the app already had. It now says which it is: a list adds a voice,
+  it does not take the others away. The behaviour did not change; a test was
+  added, because the one that existed armed no rarity at all and so could not
+  tell an adding filter from a replacing one.
+
 ## 0.9.96 — 2026-08-25
 
 Linux, and one thing 0.9.95 broke.

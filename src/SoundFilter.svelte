@@ -753,13 +753,22 @@
   <div class="col detail">
   {#if settings}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
-      <div class="sechead" data-tauri-drag-region>Custom filter — lists that outrank the above</div>
+      <div class="sechead" data-tauri-drag-region>Custom filter — a sound of its own for the items you name</div>
 
       <div class="line">
         <button class="check" onclick={() => { settings.use_filter = !settings.use_filter; save(); }} aria-label="use filter">
           <img src={settings.use_filter ? art('check_on') : art('check_off')} alt="" />
         </button>
         <span class="opt">Use the selected filter</span>
+      </div>
+      <!-- The header used to read "lists that outrank the above", which is true
+           of an item that is on one and was read as true of everything else:
+           people believed a filter switched the rarity alerts off and asked for
+           the adding behaviour the app already had. It says which it is now. -->
+      <div class="hint" data-tauri-drag-region>
+        A list adds a voice, it does not take the others away. An item you name here plays
+        that list's sound instead of its rarity's; everything you have not named carries on
+        exactly as the rarity alerts above say.
       </div>
 
       <div class="line">
@@ -1036,6 +1045,16 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+
+  /* How the two halves of this page fit together — the one thing about it that
+     was not obvious from either half on its own. */
+  .hint {
+    font-size: 10px;
+    line-height: 15px;
+    color: var(--bone-6);
+    padding: 0 2px 6px 30px;
+    max-width: 620px;
   }
 
   .sechead {

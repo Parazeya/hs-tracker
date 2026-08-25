@@ -44,11 +44,17 @@ const IDLE_AFTER: Duration = Duration::from_secs(300);
 // stack resources by item type
 const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "materials"), (15, "socketables")];
 
-/// What a character wears and carries: helmets through charms, and orbs. The
-/// grade counters are about gear and nothing else — a key or a reagent has a
-/// grade of its own and would otherwise sit in the SS column beside a weapon,
+/// What a character wears and carries: helmets through charms, vials, and orbs.
+/// The grade counters are about gear and nothing else — a key or a reagent has
+/// a grade of its own and would otherwise sit in the SS column beside a weapon,
 /// which is not the thing the column is counting.
-const GEAR: [i64; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10];
+///
+/// Vials were missing and are equipped like charms. Being neither gear nor a
+/// stackable, one landed in its rarity column and in no grade column at all, so
+/// the panel showed twelve Heroic beside ten SS with nothing to explain the
+/// gap. Every Heroic item in the tables is graded SS, so a Heroic that is not
+/// an SS could never have been anything but this.
+const GEAR: [i64; 11] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 18];
 
 /// Containers, which carry a real rarity and are worth keeping in the tables —
 /// the game shows an Angelic Vault in gold and a Superior one in blue — but
@@ -2184,6 +2190,78 @@ mod tests {
         let snap = s.snapshot(String::new());
         let group = snap.notable.iter().find(|n| n.label == "S runes").expect("group exists");
         assert_eq!(group.total, 2, "both spellings land in the same group");
+    }
+
+    /// A list is meant to add a voice, not to take the others away.
+    ///
+    /// "Target Items" with three names in it should give those three a sound of
+    /// their own and leave every other drop exactly as it was — the rarity
+    /// switches above the filter still deciding. The other test here arms no
+    /// rarity at all, so it cannot tell an additive filter from an exclusive
+    /// one; this is the case a player actually sits in.
+    /// A vial is gear, and counts in both columns like the rest of it.
+    ///
+    /// It is equipped, the same as a charm. Being on neither list it used to
+    /// reach its rarity column and no grade column at all, so the panel showed
+    /// twelve Heroic beside ten SS with nothing to explain the gap. Every
+    /// Heroic item in the tables is graded SS, so a Heroic that is not also an
+    /// SS could never have been anything but this.
+    #[test]
+    fn a_vial_is_gear_and_counts_in_both_columns() {
+        let mut s = GameStats::default();
+        let vial = GameEvent::ItemAdded {
+            rarity: json!(9),
+            unscaled: false,
+            mf: false,
+            tier: 6, // SS
+            item_type: 18, // Vial: not a resource, and not gear either
+            item_id: 5,
+            weapon_type: 0,
+            seed: 1,
+            name: "Elixir of Unworldly Cognition".into(),
+            announced: false,
+            amount: 1,
+            fingerprint: String::new(),
+            hash: "v".into(),
+            ground: true,
+        };
+        s.apply(&vial);
+        let snap = s.snapshot(String::new());
+        assert_eq!(snap.items.get("Heroic").map(|i| i.total), Some(1), "a Heroic find");
+        assert_eq!(s.graded(6), 1, "and an SS one, which is what the columns disagreed about");
+    }
+
+    #[test]
+    fn a_list_adds_a_voice_rather_than_taking_the_others_away() {
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        // the ordinary switches, as a player leaves them
+        // Both names below are real items the tables call Heroic, and a known
+        // name outranks whatever the packet claims - so that is what to arm.
+        s.set_filter(vec!["Heroic".into()], 0);
+        s.set_sound_lists(vec![("list-target".into(), vec!["AK-47".into()])]);
+        let drop = |name: &str, hash: &str| GameEvent::ItemAdded {
+            rarity: json!(9), // Heroic
+            unscaled: false,
+            mf: false,
+            tier: 0,
+            item_type: 3,
+            item_id: 15,
+            weapon_type: 14,
+            seed: 1,
+            name: name.into(),
+            announced: false,
+            amount: 1,
+            fingerprint: String::new(),
+            hash: hash.into(),
+            ground: true,
+        };
+
+        let listed = s.apply(&drop("AK-47", "a")).expect("on a list, so it is announced");
+        assert_eq!(listed.sound.as_deref(), Some("list-target"), "the list's own sound");
+
+        let plain = s.apply(&drop("Eternity", "b")).expect("on no list, but its rarity is armed");
+        assert_eq!(plain.sound.as_deref(), Some("heroic"), "still the rarity's sound");
     }
 
     #[test]

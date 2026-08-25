@@ -358,15 +358,15 @@
            only one that came and went — ghost mode draws none — so the panel
            finished on a gap exactly when it was pinned over the game.
 
-           SS is the top grade, and the number a run is judged by whatever colour
-           the drops came out in. The backend has counted every grade all along;
+           SS is the top tier, and the number a run is judged by whatever colour
+           the drops came out in. The backend has counted every tier all along;
            this is the one worth a chip. The label is written out rather than
            left to a tooltip: this panel is what a capture card records, and
            nobody hovers a video. -->
       <div
         class="chip md"
         style:border-image-source="url({art('chip_dark')})"
-        title="SS-graded drops this session — the top grade, counted whatever the rarity"
+        title="SS drops this session — the top tier, counted whatever the rarity"
       >
         <span class="grade">SS</span>
         <span class="val">{fmt(snap?.ss)}</span>
