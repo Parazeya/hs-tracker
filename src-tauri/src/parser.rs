@@ -57,6 +57,15 @@ impl Currency {
 pub enum GameEvent {
     Gold(Currency),
     XpGain(i64),
+    /// Inventory fingerprints that just left the player's bags.
+    ///
+    /// Dropping a worn item on the floor and picking it back up is two ordinary
+    /// inventory operations, and the second is indistinguishable from finding
+    /// the thing — same shape, same named flag, same identity. The only thing
+    /// that tells them apart is having watched the first: the fingerprint the
+    /// game gives an item survives the round trip exactly, so an addition of one
+    /// the player has just let go of is a return.
+    ItemsLetGo(Vec<String>),
     Account {
         experience: i64,
         has_experience: bool,
@@ -846,6 +855,10 @@ fn xp_gain(d: &Value) -> i64 {
 /// the same four for the counters they feed.
 const RESOURCE_TYPES: [i64; 4] = [12, 13, 14, 15];
 
+/// What only a market message carries. See `item_sources`.
+const MARKET_FIELDS: &[&str] =
+    &["marketId", "market_id", "market_tokens", "marketTokens", "seller_name", "sellerName", "price"];
+
 const ITEM_DATA_FIELDS: &[&str] = &["itemData", "item_data"];
 const PICKUP_FIELDS: &[&str] = &["pickup_add_data", "pickupAddData"];
 /// The session credentials the client attaches to everything it asks for. Their
@@ -885,6 +898,28 @@ fn object_items(v: &Value) -> Vec<(Option<String>, Value)> {
 /// checks. The bool marks a GROUND drop (generated near the player) as opposed
 /// to an inventory addition (the pickup itself).
 fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
+    // A trip to the market is not a find.
+    //
+    // Taking an item back off the trade board is answered like this:
+    //
+    // ```text
+    //   {"message": "Removal success", "marketId": "138066",
+    //    "fingerprint": "8-4559708-...", "itemData": "{...\"c\":1...}"}
+    // ```
+    //
+    // which is an item, named, with its identity — the same shape a drop answer
+    // has, and it was read as one. Two players' worth of gear came back from the
+    // board and every piece of it was announced, chimed and journalled as though
+    // it had just fallen. Listing an item sends the mirror of it, with a price
+    // and a seller.
+    //
+    // The marks are unambiguous: in a 25 MB capture, 16,410 messages carry an
+    // item and exactly four carry any of these — the two removals and the two
+    // listings that caused this report. A drop answer has no price, no seller
+    // and no market id, because none of those things is true of the floor.
+    if MARKET_FIELDS.iter().any(|f| has(d, &[f])) {
+        return vec![];
+    }
     let own_fp = match field(d, &["addedItemFingerprint", "added_item_fingerprint", "fingerprint"]) {
         Some(Value::String(s)) if !s.is_empty() => Some(s),
         _ => None,
@@ -950,10 +985,24 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         } else {
             object_items(&item_data)
         };
+        // A quest's reward is not lying on the floor either.
+        //
+        // Walking into a zone whose quest pays a named item has the client ask
+        // for the item to be made, and the answer is a drop answer in every
+        // respect — one named item, no owner, `itemGenHash` — so the thing was
+        // announced the moment the zone loaded, before the quest was so much as
+        // started. It is not in the world: it goes into `fortune_item` in the
+        // save, and only reaches the bags through an ordinary pickup later.
+        //
+        // What tells them apart is that a thing on the floor is somewhere. Of
+        // the 3,193 named items the two captures kept here see lying about, all
+        // 3,193 carry the world's id for the spot they are on, and the only one
+        // that carries none is the Mana Bender's Will this was reported for.
         return candidates
             .into_iter()
             .filter(|(_, item)| int_field(item, &["c"]) == 1)
             .filter(|(_, item)| !belongs_to_a_player(item))
+            .filter(|(_, item)| lies_on_the_floor(item))
             .map(|(fp, item)| (fp, item, true))
             .collect();
     }
@@ -995,17 +1044,53 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
 /// pouring the merchant's stock into the journal as finds — the very thing this
 /// function exists to stop, silently undone by a rename.
 ///
-/// Refuses only what is provably a slot. An item that says nothing about where
-/// it is keeps being read as a drop, which is how the ordinary drop answer has
-/// always arrived.
+/// Both names are read separately, because taking whichever comes first reads
+/// the wrong one on the capture where `gd` holds a position and `gid` holds the
+/// owner.
 fn belongs_to_a_player(item: &Value) -> bool {
-    matches!(field_ref(item, OWNER_FIELDS), Some(Value::Object(map)) if map.contains_key("player"))
+    OWNER_FIELDS
+        .iter()
+        .filter_map(|f| field_ref(item, &[*f]))
+        .any(|v| matches!(v, Value::Object(map) if map.contains_key("player")))
 }
 
-/// Where an item says whose slot it is in. See `belongs_to_a_player`.
+/// Whether the item is lying somewhere in the world.
+///
+/// The same field that names a slot holds a plain number when the thing is on
+/// the ground: the world's id for it. An item carrying neither is not anywhere
+/// — see the fortune item in `item_sources`.
+fn lies_on_the_floor(item: &Value) -> bool {
+    OWNER_FIELDS.iter().any(|f| field_ref(item, &[*f]).and_then(as_int).is_some())
+}
+
+/// Where an item says whose slot it is in, or which spot on the floor it is
+/// lying on. See `belongs_to_a_player` and `lies_on_the_floor`.
 const OWNER_FIELDS: &[&str] = &["gd", "gid"];
 
 fn item_events(d: &Value) -> Vec<GameEvent> {
+    // What left the bags, before what entered them: the two arrive in one
+    // message when an item is moved, and the engine has to know the item is
+    // coming back before it is told that it arrived.
+    //
+    // Both spellings, for the reason `belongs_to_a_player` reads two: a list of
+    // fingerprints is what the game sends today, and the sibling operation
+    // `add` is keyed by fingerprint instead — so the object form is the one a
+    // rename would land on. Every object-shaped `remove` in the captures here
+    // is empty, so reading its keys costs nothing and would survive the swap.
+    let fps: Vec<String> = match field(d, &["operations"]).as_ref().and_then(|o| field(o, &["remove"])) {
+        Some(Value::Array(gone)) => gone.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        Some(Value::Object(gone)) => gone.keys().cloned().collect(),
+        _ => vec![],
+    };
+    let mut out = match fps.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>() {
+        fps if fps.is_empty() => vec![],
+        fps => vec![GameEvent::ItemsLetGo(fps)],
+    };
+    out.extend(item_events_added(d));
+    out
+}
+
+fn item_events_added(d: &Value) -> Vec<GameEvent> {
     item_sources(d)
         .into_iter()
         .filter(|(_, item, _)| item.is_object())
@@ -1461,6 +1546,32 @@ mod tests {
     /// Market was opened: the same shape as a drop answer, the same `ok`, and
     /// twenty-five named items that never dropped. The one difference is that a
     /// thing on the ground has a position and a thing in a shop has a player.
+    /// A quest's reward is not lying on the floor.
+    ///
+    /// Walking into a zone whose quest pays a named item announced it there and
+    /// then, before the quest was started: the client asks for the item to be
+    /// made on entering, and the answer is a drop answer in every respect. The
+    /// message below is the one that reported this, verbatim — the item is a
+    /// Mana Bender's Will, and it went into `fortune_item` in the save rather
+    /// than into the world.
+    #[test]
+    fn a_quest_reward_waiting_to_be_earned_is_not_a_drop() {
+        let fortune = json!({
+            "itemData": {
+                "7-4964607-659e0185c44750001-7":
+                    {"a": 850937459, "b": 12, "c": 1, "d": 9, "e": 0, "j": 0, "sh": "2c490ef57269"}
+            },
+            "itemGenHash": "",
+            "message": "ok",
+            "operationTime": 0.0011980533599853516,
+            "status": 1
+        });
+        assert!(
+            events_from_messages(std::slice::from_ref(&fortune)).is_empty(),
+            "a reward that has not been earned has not dropped"
+        );
+    }
+
     #[test]
     fn a_shop_window_is_not_the_ground() {
         let stock = json!({
@@ -1480,21 +1591,21 @@ mod tests {
             "nothing in a shop window has dropped"
         );
 
-        // and the drop answer beside it still lands
+        // and the drop answer beside it still lands. The same field carries the
+        // world's id for the spot the thing is lying on when it is lying on one;
+        // that number is the whole difference, and this message is verbatim.
         let dropped = json!({
             "status": 1,
             "message": "ok",
-            "itemGenHash": "abc",
-            "operationTime": 1,
             "itemData": {
-                "7-4964607-65991cc0616140001-18":
-                    {"a": 61067529, "b": 5, "c": 1, "d": 6, "e": 0, "gd": {"pos": [11, 0]}, "j": 0, "sh": "ecc3352481d6"}
+                "99-4964607-1a025546fef-1":
+                    {"a": 392508565, "b": 84, "c": 1, "d": 9, "e": 0, "gd": 2422649, "j": 0, "m": 1, "sh": "97ef9213eaf6"}
             }
         });
         let events = events_from_messages(std::slice::from_ref(&dropped));
         assert!(
             matches!(events.first(), Some(GameEvent::ItemAdded { ground: true, .. })),
-            "a thing with a place on the map is a drop: {events:?}"
+            "a thing with a place in the world is a drop: {events:?}"
         );
     }
 
@@ -1627,6 +1738,41 @@ mod tests {
         assert!(!belongs_to_a_player(&json!({"a": 1})), "saying nothing is still a drop");
     }
 
+    /// Taking an item back off the trade board is not finding it.
+    ///
+    /// The server answers a removal with the item in full — named, identified,
+    /// `c: 1` — which is the shape of a drop answer and was counted as one. The
+    /// two messages below are from the capture that reported it: a Stormloop and
+    /// a Thunder Guardian's Plate, both Heroic, both announced as finds the
+    /// moment their owner took them back off the board.
+    #[test]
+    fn an_item_taken_back_off_the_market_is_not_a_drop() {
+        let removal = json!({
+            "message": "Removal success",
+            "marketId": "138066",
+            "fingerprint": "8-4559708-64f87be967fea0001-7",
+            "itemData": "{\"d\":1,\"r\":0,\"sh\":\"0d820197c506\",\"b\":44,\"c\":1,\"e\":10,\"i\":548925603,\"q\":2,\"a\":566876198,\"j\":0,\"w\":1}",
+            "logSuccess": 1,
+            "status": "1"
+        });
+        assert!(
+            events_from_messages(&[removal]).is_empty(),
+            "a removal from the market announced nothing"
+        );
+
+        // and the listing that goes the other way, which carries a price
+        let listing = json!({
+            "item_name": "Stormloop",
+            "price": "12121221",
+            "market_tokens": "2",
+            "seller_name": "Parahryushka",
+            "rarity": "9",
+            "fingerprint": "8-4559708-64f87be967fea0001-7",
+            "item_data": {"a": 566876198, "b": 44, "c": 1, "d": 1, "e": 10, "j": 0, "w": 1}
+        });
+        assert!(events_from_messages(&[listing]).is_empty(), "nor does putting one up");
+    }
+
     #[test]
     fn an_item_posted_to_the_market_is_not_a_drop() {
         // the listing as captured, credentials replaced
@@ -1651,7 +1797,7 @@ mod tests {
         // and the server's answer for the very same item still is a drop
         let dropped = serde_json::json!({
             "itemData": {
-                "7-4964607-65875ac569ff60006-3": {"a": 998596353, "b": 14, "c": 1, "d": 2, "e": 10, "j": 3, "n": 3, "sh": "5d6053f71623"}
+                "7-4964607-65875ac569ff60006-3": {"a": 998596353, "b": 14, "c": 1, "d": 2, "e": 10, "gd": 2422649, "j": 3, "n": 3, "sh": "5d6053f71623"}
             },
             "itemGenHash": "1234",
             "message": "Success on item generation",
@@ -1671,8 +1817,8 @@ mod tests {
     fn only_named_drops_come_out_of_a_generation_answer() {
         let msg = serde_json::json!({
             "itemData": {
-                "3-4964607-65875f2ed96610001-3": {"a": 1, "b": 8, "c": 0, "d": 2, "e": 10, "j": 0, "n": 3, "sh": "aa"},
-                "3-4964607-65875f2ed96610002-3": {"a": 2, "b": 30, "c": 1, "d": 2, "e": 10, "j": 0, "sh": "bb"}
+                "3-4964607-65875f2ed96610001-3": {"a": 1, "b": 8, "c": 0, "d": 2, "e": 10, "gd": 2422649, "j": 0, "n": 3, "sh": "aa"},
+                "3-4964607-65875f2ed96610002-3": {"a": 2, "b": 30, "c": 1, "d": 2, "e": 10, "gd": 2422650, "j": 0, "sh": "bb"}
             },
             "itemGenHash": "x", "message": "ok", "status": 1
         });

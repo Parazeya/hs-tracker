@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — 2026-08-25
+## 1.0.0 — 2026-08-26
 
 The number is the largest thing in this release. What stands behind it is the
 week before it: three releases spent finding out why a handful of players saw
@@ -8,6 +8,33 @@ nothing counted at all, each one ending at a cause that was ours and not theirs.
 
 ### Fixed
 
+- **A quest's reward counted as a find before the quest was started.** Walking
+  into a zone that pays a named item has the client ask the server to make the
+  item on the way in, and the answer is a drop answer in every respect — one
+  named item, nobody's slot, an `itemGenHash` — so a Mana Bender's Will was
+  announced, chimed and journalled at the door. It was never in the world: it
+  waits in the save until the quest is finished. What separates the two is that
+  a thing on the floor is somewhere, and the game says where: of the 3,958
+  named items lying about across five captures kept here, every one carries the
+  world's id for the spot it is on, and the only one that carries none is the
+  reward this was reported for.
+- **An item taken back off the trade board counted as a find.** The server
+  answers a removal from the market with the item in full — named, identified,
+  carrying the flag that marks something worth announcing — which is the shape of
+  a drop answer and was read as one. Listing an item sends the mirror of it. A
+  player who put two pieces of gear up for sale and changed his mind had both
+  announced, chimed and written into the journal as though they had fallen at his
+  feet. A market message carries a price, a seller or a market id and an answer
+  from the floor carries none of those: of the 16,410 messages in one capture
+  that hold an item, exactly four hold any of them, and all four are his.
+- **Dropping something you were wearing and picking it back up counted as a
+  find.** Both halves are ordinary inventory operations, and the second is
+  indistinguishable from a real drop down to the named flag — a Pendant of
+  Eternity and a pair of Tectonic Grips, worn for hours, announced as new the
+  moment they came off the ground. The fingerprint the game gives an item
+  survives the round trip unchanged, so what has just left your bags is
+  remembered and not counted when it comes back. Once per time it was put down:
+  finding another one later still counts.
 - **The merchant's window went back to reading as a floor full of loot.** The
   guard that tells a shop slot from a drop looked for the ownership marker under
   `gd`, and the game also spells it `gid` — three captures kept in this

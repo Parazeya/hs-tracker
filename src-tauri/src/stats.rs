@@ -406,6 +406,12 @@ pub struct GameStats {
     /// items already announced, by identity — the roll on the ground and the
     /// pickup that follows are two sightings of one item
     told: std::collections::HashSet<String>,
+    /// Fingerprints the player has just let go of; see `GameEvent::ItemsLetGo`.
+    ///
+    /// An entry is spent the moment it is used: an item can only come back once
+    /// per time it was put down, and a later genuine find must not be swallowed
+    /// by a memory of something that happened an hour ago.
+    let_go: std::collections::HashSet<String>,
     announced_at: HashMap<String, Instant>,
     character: Option<CharacterInfo>,
     drops: VecDeque<DropEntry>,
@@ -517,6 +523,7 @@ impl Default for GameStats {
             tier_seen: HashMap::new(),
             counted: std::collections::HashSet::new(),
             told: std::collections::HashSet::new(),
+            let_go: std::collections::HashSet::new(),
             announced_at: HashMap::new(),
             character: None,
             drops: VecDeque::new(),
@@ -1239,6 +1246,15 @@ impl GameStats {
                     self.apply_currency(&crate::parser::Currency { delta: 0, ..c });
                 }
             }
+            GameEvent::ItemsLetGo(gone) => {
+                // Bounded the way the sighting set beside it is. Selling, using
+                // and crafting all remove things that never come back, so this
+                // would otherwise only grow.
+                if self.let_go.len() > 4_000 {
+                    self.let_go.clear();
+                }
+                self.let_go.extend(gone.iter().cloned());
+            }
             GameEvent::Mail(has) => self.has_mail = *has,
             GameEvent::Room(room) => {
                 if self.room.as_deref() != Some(room.as_str()) {
@@ -1332,6 +1348,18 @@ impl GameStats {
                 } else {
                     String::new()
                 };
+                // Picking up what you have just put down is not finding it.
+                //
+                // A worn item thrown on the floor and taken back is two ordinary
+                // inventory operations; the second is shaped exactly like a
+                // find, down to the named flag. Two of them were reported —
+                // a Pendant of Eternity and a pair of Tectonic Grips — both
+                // announced, chimed and journalled as though they had dropped.
+                // The fingerprint survives the round trip unchanged, which is
+                // what makes them tellable apart at all.
+                if !fingerprint.is_empty() && self.let_go.remove(fingerprint) {
+                    return None;
+                }
                 if !identity.is_empty() {
                     // a world sync repeats the very same sighting; that is noise
                     let sighting = format!("{}{identity}", if *ground { "d:" } else { "p:" });
@@ -2133,6 +2161,48 @@ mod tests {
         // gold that appears without a deposit (mail, selling) still counts
         feed(&mut s, json!({"currencyData": {"GSS": 723_000}}));
         assert_eq!(s.snapshot(String::new()).gold.earned, 2761);
+    }
+
+    /// Picking up what you have just put down is not finding it.
+    ///
+    /// A worn item thrown on the floor and taken back arrives as two ordinary
+    /// inventory operations, and the second is shaped exactly like a find. The
+    /// two below are the ones that were reported, with the fingerprints they
+    /// carried in the capture: a Pendant of Eternity and a pair of Tectonic
+    /// Grips, dropped and picked straight back up, both announced as though
+    /// they had fallen.
+    #[test]
+    fn an_item_you_dropped_yourself_is_not_found_when_you_pick_it_up() {
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_filter(vec!["Heroic".into()], 0);
+
+        let pendant = "7-4964607-65953287a338c0001-5";
+        let pickup = |fp: &str| GameEvent::ItemAdded {
+            rarity: json!(9),
+            unscaled: false,
+            mf: false,
+            tier: 6,
+            item_type: 5,
+            item_id: 25,
+            weapon_type: 0,
+            seed: 0,
+            name: "Pendant of Eternity".into(),
+            announced: false,
+            amount: 1,
+            fingerprint: fp.into(),
+            hash: String::new(),
+            ground: false,
+        };
+
+        // it leaves the bags, then comes straight back
+        s.apply(&GameEvent::ItemsLetGo(vec![pendant.into()]));
+        assert!(s.apply(&pickup(pendant)).is_none(), "the same item returning is not a find");
+        assert_eq!(s.snapshot(String::new()).items["Heroic"].total, 0);
+
+        // and the memory is spent: put down once, back once. A second arrival
+        // with that fingerprint is a real sighting again.
+        assert!(s.apply(&pickup(pendant)).is_some(), "only the return itself is excused");
     }
 
     /// The same pair with a reset between them: bank the loot at the vendor,
