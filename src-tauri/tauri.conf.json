@@ -82,7 +82,6 @@
     "longDescription": "A session overlay for Hero Siege. It shows gold, experience, kills and every drop worth hearing about on top of the game, and reads them from the game's own network traffic — nothing is injected, no memory is read and nothing is sent anywhere.",
     "category": "Game",
     "license": "MIT",
-    "publisher": "HS Tracker contributors",
     "copyright": "Copyright (c) 2026 HS Tracker contributors",
     "linux": {
       "deb": {

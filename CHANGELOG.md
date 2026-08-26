@@ -8,6 +8,17 @@ nothing counted at all, each one ending at a cause that was ours and not theirs.
 
 ### Fixed
 
+- **An item a friend gave you counted as a find.** Picked off the floor where
+  they dropped it, a Torch of Shadows was announced, chimed and journalled as
+  though it had fallen for you — and from the packet it is indistinguishable
+  from one that had: named, flagged, entering your bags the same way. The one
+  thing that separates them is the account the game made the item for, which it
+  writes into the fingerprint and the item then carries for life. Across four
+  captures, 999 named things entered these bags: 985 were made for this account
+  and fourteen were not, and not one of the fourteen had ever been seen falling.
+  Five of them arrive one after another from a single account, which is what
+  being handed a set of gear looks like from the outside. Nothing is refused
+  until the client has said which account it is.
 - **A quest's reward counted as a find before the quest was started.** Walking
   into a zone that pays a named item has the client ask the server to make the
   item on the way in, and the answer is a drop answer in every respect — one

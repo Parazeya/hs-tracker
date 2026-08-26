@@ -66,6 +66,14 @@ pub enum GameEvent {
     /// game gives an item survives the round trip exactly, so an addition of one
     /// the player has just let go of is a return.
     ItemsLetGo(Vec<String>),
+    /// The account this client is logged in as.
+    ///
+    /// Every fingerprint the game hands out carries the account it was made
+    /// for in its second field, and it keeps it for the life of the item — so
+    /// knowing our own number is the whole of telling our things from other
+    /// people's. The client says it in nearly every request it sends, which is
+    /// why this is worth reading rather than deducing.
+    WhoseAccount(String),
     Account {
         experience: i64,
         has_experience: bool,
@@ -765,6 +773,9 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
     if let Some(region) = zone_request_region(d) {
         events.push(GameEvent::ZoneRegion(region));
     }
+    if let Some(account) = our_account(d) {
+        events.push(GameEvent::WhoseAccount(account));
+    }
     if has(d, SATANIC_ZONE_FIELDS) {
         events.push(satanic_event(d));
     }
@@ -1419,6 +1430,34 @@ fn zone_request_region(d: &Value) -> Option<String> {
         Value::Number(n) => Some(n.to_string()),
         _ => None,
     }
+}
+
+/// Who we are, out of the client's own requests.
+///
+/// Only the client sends this field: it is how a request is told from an
+/// answer elsewhere in this file. So reading it anywhere it appears cannot
+/// pick up somebody else's number by mistake.
+fn our_account(d: &Value) -> Option<String> {
+    match field(d, ACCOUNT_ID_FIELDS)? {
+        Value::String(s) if !s.is_empty() => Some(s),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// The account a fingerprint was made for — its second field.
+///
+/// ```text
+///   99-4964607-1a03b93f92c-10     ours
+///   99-133690701-1a03ba73b5f-10   a friend's, picked up off the floor
+/// ```
+pub fn fingerprint_account(fingerprint: &str) -> Option<&str> {
+    let mut parts = fingerprint.split('-');
+    let _kind = parts.next()?;
+    let account = parts.next()?;
+    // there has to be more after it, or this is not a fingerprint at all
+    parts.next()?;
+    (!account.is_empty() && account.bytes().all(|b| b.is_ascii_digit())).then_some(account)
 }
 
 fn satanic_event(d: &Value) -> GameEvent {

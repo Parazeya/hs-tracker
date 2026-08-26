@@ -619,6 +619,7 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
                 format!("save  {name}: xp {experience}, kills {kills}")
             }
             parser::GameEvent::ItemsLetGo(gone) => format!("gone  {} out of the bags", gone.len()),
+            parser::GameEvent::WhoseAccount(id) => format!("whom  account {id}"),
             parser::GameEvent::Mail(has) => format!("mail  {has}"),
             parser::GameEvent::Room(room) => format!("room  {room}"),
             parser::GameEvent::ZoneRegion(id) => format!("asks  zone, for region {id}"),

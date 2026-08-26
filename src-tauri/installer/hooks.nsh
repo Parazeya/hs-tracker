@@ -16,6 +16,24 @@
 ; the honest version of this is what a user would do anyway: say what is
 ; missing, and open the page it comes from.
 
+; Do not set `publisher` in tauri.conf.json.
+;
+; It reads like a label and is not one. Tauri builds `MANUFACTURER` from it and
+; `MANUKEY` from that — `Software\${MANUFACTURER}` — and the install directory
+; of every version ever installed is the default value under
+; `Software\hstracker\HS Tracker`, put there because `MANUFACTURER` falls back
+; to the second element of the bundle identifier. Setting it to anything else
+; points the lookup at a key that does not exist, so `_?=` is handed an empty
+; directory when the installer runs the old uninstaller:
+;
+;   ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""     ; empty
+;   StrCpy $R1 "$R1 _?=$4"                         ; uninstall.exe _?=
+;
+; which fails with "Error launching installer", and the installer then says
+; "Unable to uninstall!" and will not go on. Every existing install upgrades
+; through that path. `copyright`, `license` and `longDescription` are safe;
+; this one is not.
+
 ; the welcome page is generic by default, and it is the first thing anyone
 ; sees — say what the thing is and what it needs. Defined here because Tauri
 ; includes this file before it lays out the pages.

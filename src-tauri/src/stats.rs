@@ -412,6 +412,11 @@ pub struct GameStats {
     /// per time it was put down, and a later genuine find must not be swallowed
     /// by a memory of something that happened an hour ago.
     let_go: std::collections::HashSet<String>,
+    /// The account this client is logged in as, once it has said so.
+    ///
+    /// `None` until then, and nothing is refused while it is `None`: not
+    /// knowing who we are is a reason to count a find, not to drop one.
+    account: Option<String>,
     announced_at: HashMap<String, Instant>,
     character: Option<CharacterInfo>,
     drops: VecDeque<DropEntry>,
@@ -524,6 +529,7 @@ impl Default for GameStats {
             counted: std::collections::HashSet::new(),
             told: std::collections::HashSet::new(),
             let_go: std::collections::HashSet::new(),
+            account: None,
             announced_at: HashMap::new(),
             character: None,
             drops: VecDeque::new(),
@@ -566,6 +572,10 @@ impl GameStats {
         // it: without that a reset makes an hours-old zone look freshly
         // confirmed, which is the one thing this field exists to prevent.
         let satanic_at = self.satanic_at.take();
+        // Who is playing does not change because the counters were restarted,
+        // and the window between a reset and the client next naming itself is
+        // long enough to pick something up in.
+        let account = self.account.take();
         let carry = (
             self.character.take(),
             self.satanic.take(),
@@ -655,6 +665,7 @@ impl GameStats {
         // it happened" is empty for a run that happened entirely in one room.
         self.room_since = self.room.is_some().then(Instant::now);
         self.satanic_at = satanic_at;
+        self.account = account;
         self.zone_region = zone_region;
         self.zone_asked_by = zone_asked_by;
         self.revision = revision + 1;
@@ -1246,6 +1257,11 @@ impl GameStats {
                     self.apply_currency(&crate::parser::Currency { delta: 0, ..c });
                 }
             }
+            GameEvent::WhoseAccount(id) => {
+                if self.account.as_deref() != Some(id.as_str()) {
+                    self.account = Some(id.clone());
+                }
+            }
             GameEvent::ItemsLetGo(gone) => {
                 // Bounded the way the sighting set beside it is. Selling, using
                 // and crafting all remove things that never come back, so this
@@ -1359,6 +1375,26 @@ impl GameStats {
                 // what makes them tellable apart at all.
                 if !fingerprint.is_empty() && self.let_go.remove(fingerprint) {
                     return None;
+                }
+                // Somebody else's item is not a find, wherever you picked it up.
+                //
+                // A fingerprint carries the account it was made for and keeps
+                // it for the life of the item, so a friend's Torch of Shadows
+                // dropped on the floor for you arrives named, flagged and
+                // shaped exactly like a drop — it was announced and journalled
+                // as one. Across four captures, 999 named things entered these
+                // bags: 985 were made for this account and 14 were not, and not
+                // one of the 14 had ever been seen falling. Five of them arrive
+                // in a row from one account, which is what being handed a set
+                // of gear looks like from the outside.
+                //
+                // Nothing is refused until the client has said who it is.
+                if let (Some(mine), Some(theirs)) =
+                    (self.account.as_deref(), crate::parser::fingerprint_account(fingerprint))
+                {
+                    if mine != theirs {
+                        return None;
+                    }
                 }
                 if !identity.is_empty() {
                     // a world sync repeats the very same sighting; that is noise
@@ -2161,6 +2197,67 @@ mod tests {
         // gold that appears without a deposit (mail, selling) still counts
         feed(&mut s, json!({"currencyData": {"GSS": 723_000}}));
         assert_eq!(s.snapshot(String::new()).gold.earned, 2761);
+    }
+
+    /// A friend's item is not a find, even off the floor.
+    ///
+    /// Both messages are out of the capture that reported this, verbatim: the
+    /// client naming itself, then the server confirming the pickup of a Torch
+    /// of Shadows. The two accounts in them are the whole of the difference —
+    /// the client is 4964607 and the fingerprint says 133690701 — and there is
+    /// nothing else in the packet to go on: it is named, it is flagged `c: 1`,
+    /// and it entered the bags exactly as a real find does.
+    #[test]
+    fn an_item_made_for_somebody_else_is_not_a_find() {
+        let mut s = GameStats::default();
+        let feed = |s: &mut GameStats, packet: serde_json::Value| {
+            for e in parser::events_from_messages(&[packet]) {
+                s.apply(&e);
+            }
+        };
+
+        let hello = json!({
+            "account_id": "49646",
+            "beta": "0",
+            "hardcore": "0",
+            "season": "0",
+            "unique_account_id": "4964607"
+        });
+        let pickup = json!({
+            "goldAmount": 0,
+            "message": "Success on inventory update ext",
+            "newHashes": {},
+            "operations": {
+                "add": {
+                    "99-133690701-1a03ba73b5f-10":
+                        {"a": 781190902, "b": 23, "c": 1, "d": 4, "e": 0, "j": 0, "sh": "a4a54a715ab5", "w": 1}
+                }
+            },
+            "status": 1
+        });
+
+        feed(&mut s, hello);
+        feed(&mut s, pickup);
+        let found = |s: &mut GameStats| {
+            s.snapshot(String::new()).items.get("Heroic").map(|i| i.total).unwrap_or(0)
+        };
+        assert_eq!(found(&mut s), 0, "a friend handing you a thing is not you finding one");
+
+        // and another of the same kind, made for us, still is — its own roll and
+        // its own hash, or the sighting it repeats would be the one above
+        let ours = json!({
+            "goldAmount": 0,
+            "message": "Success on inventory update ext",
+            "operations": {
+                "add": {
+                    "99-4964607-1a03ba74c88-10":
+                        {"a": 55123904, "b": 23, "c": 1, "d": 4, "e": 0, "j": 0, "sh": "0f21b6c4d7e3", "w": 1}
+                }
+            },
+            "status": 1
+        });
+        feed(&mut s, ours);
+        assert_eq!(found(&mut s), 1, "our own still counts");
     }
 
     /// Picking up what you have just put down is not finding it.
