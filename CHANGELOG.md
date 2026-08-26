@@ -14,10 +14,12 @@ nothing counted at all, each one ending at a cause that was ours and not theirs.
   named item, nobody's slot, an `itemGenHash` — so a Mana Bender's Will was
   announced, chimed and journalled at the door. It was never in the world: it
   waits in the save until the quest is finished. What separates the two is that
-  a thing on the floor is somewhere, and the game says where: of the 3,958
-  named items lying about across five captures kept here, every one carries the
-  world's id for the spot it is on, and the only one that carries none is the
-  reward this was reported for.
+  a thing in the world says where it is, and a reward waiting to be earned says
+  nothing. Across six captures — the five kept in this repository and the one
+  from the machine that reported it — a server's answers carry 5,098 named
+  items: 4,137 say which spot in the world they are lying on, 943 say whose slot
+  they sit in, and eighteen say neither. Seventeen of those eighteen are the
+  trade board above. The eighteenth is this.
 - **An item taken back off the trade board counted as a find.** The server
   answers a removal from the market with the item in full — named, identified,
   carrying the flag that marks something worth announcing — which is the shape of
@@ -88,7 +90,13 @@ nothing counted at all, each one ending at a cause that was ours and not theirs.
   produce tables with no rooms and a season-old act table, print a success line
   and exit 0. Plain words like "Sheeponia" no longer go into the table of zone
   codes either — nothing could ever match them, and `dropPlaces` already holds
-  them properly.
+  them properly. How often a thing drops in its own zone no longer depends on
+  that table: it needed a zone code to be written down at all, so taking the
+  words out took the odds off everything that drops in Sheeponia with them —
+  the Sheep King's three, Steve's five, Loaded Dice, aimbot.exe. Knowing the
+  place by name is enough, which is also how thirty-one items that never had
+  their odds shown — the dice, the abomination's three pieces, Noxus — have
+  them now.
 - **The release workflow builds and no longer publishes.** Its trigger was removed
   a while ago without its publishing steps, and dispatch is allowed on a tag — so
   it could still fire as a second writer on a release `npm run publish` had cut,

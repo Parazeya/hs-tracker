@@ -98,12 +98,18 @@ function lastResort(err) {
   const shut = document.createElement('button');
   shut.textContent = 'Close';
   shut.style.cssText = 'align-self:flex-start;padding:6px 14px;cursor:pointer';
+  // `destroy` answers with a promise, so a refusal arrives after this function
+  // has returned and the `try` around it never sees one. The only way out of a
+  // window with nothing drawn in it was a button that did nothing at all.
   shut.onclick = () => {
+    let asked;
     try {
-      getCurrentWebviewWindow().destroy();
+      asked = getCurrentWebviewWindow().destroy();
     } catch {
       window.close();
+      return;
     }
+    Promise.resolve(asked).catch(() => window.close());
   };
   panel.append(head, why, shut);
   root.append(panel);

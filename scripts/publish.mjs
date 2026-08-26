@@ -47,7 +47,11 @@ try {
 const tags = run('git', ['tag', '-l', tag]).trim();
 if (!tags) die(`no tag ${tag}. Run: npm run ship ${version}`);
 
-const remote = run('git', ['ls-remote', '--tags', 'origin', tag]).trim();
+// Both the tag object and the commit under it, which is why the pattern ends
+// in a star: `ls-remote --tags origin v1.0.0` matches the ref and not the
+// `v1.0.0^{}` line beside it, so an annotated tag comes back as the object's
+// own hash and nothing that could be compared to a commit.
+const remote = run('git', ['ls-remote', '--tags', 'origin', tag + '*']).trim();
 if (!remote) die(`${tag} exists here but not on origin. Run: git push origin ${tag}`);
 
 // What is being published has to be what was tagged.
@@ -72,6 +76,26 @@ if (head !== tagged) {
     `HEAD is ${head.slice(0, 8)} and ${tag} is ${tagged.slice(0, 8)}.\n\n` +
       `  The artifacts were built from HEAD, so publishing them under ${tag} would ship\n` +
       '  something that tag does not describe. Check the tag out and rebuild.',
+  );
+}
+
+// And the tag on origin has to mean that commit too.
+//
+// The check above compares HEAD to the LOCAL tag, which agrees with itself. A
+// tag that was moved here and refused by `git push` as a non-fast-forward —
+// one line, easy to walk past — leaves origin pointing at the old commit, and
+// the release is then cut there: notes and artifacts from a commit nobody
+// downloading it would ever get.
+//
+// An annotated tag answers `ls-remote` on two lines and the one ending `^{}`
+// carries the commit; a lightweight tag has only the first, and that one is
+// the commit.
+const peeled = remote.split('\n').find((l) => l.endsWith(tag + '^{}'));
+const [remoteSha] = (peeled ?? remote).split(/\s/);
+if (remoteSha !== tagged) {
+  die(
+    `${tag} is ${tagged.slice(0, 8)} here and ${remoteSha.slice(0, 8)} on origin.\n\n` +
+      `  The artifacts were built from this one. Push it: git push --force origin ${tag}`,
   );
 }
 

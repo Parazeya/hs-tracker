@@ -58,9 +58,12 @@ not the ones on the wire, and nothing is counted at all. **Read every
 connection** in Settings takes the filter off for those machines. That widens
 what is read on your own machine and changes nothing else.
 
-Nothing is sent anywhere; every number stays where it was counted. The one
-exception is the **About** section's update check, which asks GitHub for the
-newest release, and only when you press the button.
+Nothing is sent anywhere; every number stays where it was counted. Two things
+leave the machine, both only if you ask for them: the **About** section's update
+check, which asks GitHub for the newest release when you press the button, and
+Discord rich presence, which hands the zone, the drop count and the session
+clock to the Discord client while it is switched on. It is off until you turn it
+on.
 
 ## Showcase
 
@@ -149,6 +152,7 @@ survives — but settings, runs and sounds are then written to root's home inste
 of yours:
 
 ```bash
+chmod +x ./HS\ Tracker_*.AppImage               # a fresh download has no execute bit
 ./HS\ Tracker_*.AppImage --appimage-extract     # gives ./squashfs-root
 sudo ./squashfs-root/AppRun
 ```
@@ -156,7 +160,8 @@ sudo ./squashfs-root/AppRun
 ## Using it
 
 The tray icon is the control centre: click it to hide or bring back whatever was
-last on screen. Right-clicking the overlay opens the same menu.
+last on screen. The overlay carries its own strip of icons down the right-hand
+edge for the same things.
 
 | | |
 | --- | --- |

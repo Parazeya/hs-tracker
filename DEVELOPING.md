@@ -51,7 +51,9 @@ npm test                     # the Rust tests
 Both work on every platform: on Windows they load the Visual Studio environment
 first, elsewhere they call the Tauri CLI and cargo directly. Install Rust with
 [rustup](https://rustup.rs) rather than from a distribution's packages — Ubuntu
-24.04 ships 1.75 and this tree needs 1.87.
+24.04 ships 1.75 and this tree needs 1.88 — the code itself only wants 1.87, but
+the lock file's `time` asks for 1.88, which is what `rust-version` in
+`Cargo.toml` records.
 
 On Linux a dev build reads nothing until it is allowed to capture, and the
 capability is on the file, so **every relink drops it**:
@@ -78,9 +80,10 @@ npm run release              # Windows: installer in src-tauri/target/release/bu
 `tauri.conf.json` and `Cargo.toml` too, and `npm run release` runs that first, so
 the installer, the crate and the tag cannot disagree.
 
-Tagging is what publishes: `.github/workflows/release.yml` fires on `v*`, builds
-the Windows installer and the three Linux packages, and cuts the release notes
-out of the first section of `CHANGELOG.md`.
+Tagging does not publish. It did once, and `.github/workflows/release.yml` is
+now `workflow_dispatch` only — nothing in it writes to a release. The packages
+are built on a developer's machine and the release is cut from there, which is
+also the only way the Linux three get built by the container they are meant for.
 
 ### Releasing
 
@@ -97,6 +100,25 @@ It refuses rather than ships when the tag already exists, the branch is not main
 or `CHANGELOG.md` does not open with the version being released — the release
 notes are cut from that section, so a mismatch would describe the wrong release.
 `--skip-notes`, `--skip-tests` and `--any-branch` each waive one check.
+
+Then the packages and the release itself:
+
+```bash
+npm run all               # the installer, the .deb, the .rpm and the AppImage
+npm run publish -- --dry  # print what would be published and stop
+npm run publish
+```
+
+`npm run publish` refuses a dirty tree or a HEAD that is not the tag it is
+publishing under, because the artifacts in `release/` were built from HEAD and
+would otherwise be published under a tag that describes something else.
+
+A tag that was pushed but never published can still be moved — nothing points at
+it yet. Delete it on both sides first, or `ship` will refuse it:
+
+```bash
+git tag -d v1.0.0 && git push origin :refs/tags/v1.0.0
+```
 
 ### Linux, from any machine
 

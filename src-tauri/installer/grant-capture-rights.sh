@@ -3,8 +3,11 @@
 # rights. Granting them to the binary keeps the app out of root — without this
 # the capture fails and the overlay reports that it cannot listen.
 #
-# An AppImage cannot do this for itself: there the user runs the same setcap
-# line by hand once.
+# This is for the packages only. An AppImage must NOT be given the same right:
+# a binary with file capabilities is loaded as AT_SECURE, and the loader then
+# ignores the $ORIGIN rpath the extracted AppImage depends on, so it stops
+# starting at all. Reproduced in a container; the README and the app itself say
+# so too. On an AppImage, run it with sudo instead.
 #
 # Only cap_net_raw is asked for. cap_net_admin buys promiscuous mode, which the
 # capture never turns on, and the `i` of `=eip` does nothing without ambient

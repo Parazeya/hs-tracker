@@ -63,6 +63,12 @@
     Delete "$INSTDIR\positions.json"
     Delete "$INSTDIR\carried.json"
     Delete "$INSTDIR\shopping.json"
+    ; A file that stops parsing is kept rather than thrown away, under its
+    ; own name with `.bad` on the end — see `read_json_or_default`. It holds
+    ; whatever the file held, so it is the same data and goes the same way.
+    Delete "$INSTDIR\*.json.bad"
+    ; written by 0.9.x and not since; still beside the exe on anything upgraded
+    Delete "$INSTDIR\sessions.json"
     Delete "$INSTDIR\hs-tracker.log"
     Delete "$INSTDIR\hs-tracker.log.1"
     Delete "$INSTDIR\debug-capture.jsonl"

@@ -601,6 +601,19 @@ for entry in ENTRIES:
         )
     if notable and codes:
         zones.setdefault(name.lower(), codes)
+    if notable and (codes or where):
+        # A zone code is not the only way to know where a thing drops. This used
+        # to sit under the line above and so needed a code, which cost fourteen
+        # items their odds the moment plain words like "Sheeponia" stopped
+        # counting as one: every Sheeponia drop — the Sheep King's three,
+        # Steve's five, Loaded Dice, aimbot.exe — lost the one-in-N the Codex
+        # shows, for a change that was only ever about a lookup table. `where`
+        # holds the same places in words, and is what `dropPlaces` is built from.
+        #
+        # Still gated on knowing a place at all: the number means "this often in
+        # its zone", so an item with no zone has nothing for it to be measured
+        # against.
+        #
         # The chase rate is the base rate times a factor the game carries beside
         # it — 142 of the snapshot's own chase numbers are exactly that product,
         # and not one of them is anything else. Computing it from the rate the

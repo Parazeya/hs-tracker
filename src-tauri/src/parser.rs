@@ -994,10 +994,13 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         // started. It is not in the world: it goes into `fortune_item` in the
         // save, and only reaches the bags through an ordinary pickup later.
         //
-        // What tells them apart is that a thing on the floor is somewhere. Of
-        // the 3,193 named items the two captures kept here see lying about, all
-        // 3,193 carry the world's id for the spot they are on, and the only one
-        // that carries none is the Mana Bender's Will this was reported for.
+        // What tells them apart is that a thing in the world says where it is.
+        // Six captures — the five kept here and the one from the machine that
+        // reported this — carry 5,098 named items in a server's answer: 4,137
+        // give the world's id for the spot they are on, 943 give a player whose
+        // slot they sit in, and 18 give nothing. Seventeen of those eighteen are
+        // the trade board, refused above; the eighteenth is the Mana Bender's
+        // Will this was reported for.
         return candidates
             .into_iter()
             .filter(|(_, item)| int_field(item, &["c"]) == 1)
@@ -1026,9 +1029,14 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
 /// a place on the map, and a thing in a shop window has a player.
 ///
 /// ```text
-///   on the ground   "gd": {"pos": [11, 0]}       (or {"bits", "pos"})
-///   in a shop       "gd": {"player": 0}
+///   somewhere in the world   "gd": 2422649   or   "gd": {"pos": [11, 0]}
+///   in somebody's slot       "gd": {"player": 0}
 /// ```
+///
+/// The number and the position are both the world; the captures here send the
+/// number for named items and the position for ordinary ones. See
+/// `lies_on_the_floor`, which reads the same field for the other half of the
+/// question.
 ///
 /// Opening the Black Market poured its whole stock into the journal as a
 /// cascade of finds at the player's feet — twenty-five named items in one
@@ -1054,13 +1062,24 @@ fn belongs_to_a_player(item: &Value) -> bool {
         .any(|v| matches!(v, Value::Object(map) if map.contains_key("player")))
 }
 
-/// Whether the item is lying somewhere in the world.
+/// Whether the item says where in the world it is.
 ///
-/// The same field that names a slot holds a plain number when the thing is on
-/// the ground: the world's id for it. An item carrying neither is not anywhere
-/// — see the fortune item in `item_sources`.
+/// The field above says one of three things, and only the third is a claim to
+/// be somewhere: a plain number, which is the world's id for the spot the thing
+/// is lying on; `{"pos": [11, 0]}`, a place on the map; or `{"player": 0}`,
+/// which is a slot and is `belongs_to_a_player`'s to refuse. An item that says
+/// none of the three is not anywhere at all — see the fortune item in
+/// `item_sources`.
+///
+/// So this asks only whether the item says anything, and leaves which of the
+/// two worldly answers it gave alone. Reading the number and not the position
+/// would have been enough for every capture kept here — of 5,098 named items in
+/// a server's answer, 4,137 carry a number, 943 a player and 18 nothing, and
+/// not one carries a position — but the position is what ordinary items on the
+/// ground carry, so a named one arriving that way is a shape the game already
+/// speaks, and refusing it would lose a real find.
 fn lies_on_the_floor(item: &Value) -> bool {
-    OWNER_FIELDS.iter().any(|f| field_ref(item, &[*f]).and_then(as_int).is_some())
+    OWNER_FIELDS.iter().any(|f| field_ref(item, &[*f]).is_some())
 }
 
 /// Where an item says whose slot it is in, or which spot on the floor it is
@@ -1540,12 +1559,6 @@ mod tests {
         assert_eq!(snap.mf, 1447, "silence about a number is not zero");
     }
 
-    /// The merchant's window is not a pile of loot.
-    ///
-    /// Both packets are out of a capture taken 2026-08-21, the moment the Black
-    /// Market was opened: the same shape as a drop answer, the same `ok`, and
-    /// twenty-five named items that never dropped. The one difference is that a
-    /// thing on the ground has a position and a thing in a shop has a player.
     /// A quest's reward is not lying on the floor.
     ///
     /// Walking into a zone whose quest pays a named item announced it there and
@@ -1572,6 +1585,13 @@ mod tests {
         );
     }
 
+    /// The merchant's window is not a pile of loot.
+    ///
+    /// Both packets are out of a capture taken 2026-08-21, the moment the Black
+    /// Market was opened: the same shape as a drop answer, the same `ok`, and
+    /// twenty-five named items that never dropped. The one difference is that a
+    /// thing in the world says where it is and a thing in a shop says whose it
+    /// is.
     #[test]
     fn a_shop_window_is_not_the_ground() {
         let stock = json!({
@@ -1606,6 +1626,26 @@ mod tests {
         assert!(
             matches!(events.first(), Some(GameEvent::ItemAdded { ground: true, .. })),
             "a thing with a place in the world is a drop: {events:?}"
+        );
+
+        // and so is one that gives its place as a position rather than an id.
+        // No named item arrives that way in any capture kept here, but every
+        // ordinary item on the ground does, so it is a shape the game speaks
+        // and a filter that refused it would throw away a real find.
+        let by_position = json!({
+            "status": 1,
+            "message": "ok",
+            "itemGenHash": "abc",
+            "operationTime": 1,
+            "itemData": {
+                "7-4964607-65991cc0616140001-18":
+                    {"a": 61067529, "b": 5, "c": 1, "d": 6, "e": 0, "gd": {"pos": [11, 0]}, "j": 0, "sh": "ecc3352481d6"}
+            }
+        });
+        let events = events_from_messages(std::slice::from_ref(&by_position));
+        assert!(
+            matches!(events.first(), Some(GameEvent::ItemAdded { ground: true, .. })),
+            "a position is a place too: {events:?}"
         );
     }
 
@@ -1794,13 +1834,16 @@ mod tests {
             "selling an item we already own is not finding one"
         );
 
-        // and the server's answer for the very same item still is a drop
+        // and a drop answer still is a drop. Not the same item: the capture
+        // this listing came from never saw that one fall, so the alternative to
+        // this line was inventing the answer for it — which is how a fixture
+        // ends up proving whatever it was written to prove. This one is a
+        // different message, copied out whole.
         let dropped = serde_json::json!({
             "itemData": {
-                "7-4964607-65875ac569ff60006-3": {"a": 998596353, "b": 14, "c": 1, "d": 2, "e": 10, "gd": 2422649, "j": 3, "n": 3, "sh": "5d6053f71623"}
+                "99-4964607-1a025546fef-1": {"a": 392508565, "b": 84, "c": 1, "d": 9, "e": 0, "gd": 2422649, "j": 0, "m": 1, "sh": "97ef9213eaf6"}
             },
-            "itemGenHash": "1234",
-            "message": "Success on item generation",
+            "message": "ok",
             "status": 1,
         });
         let found: Vec<_> = super::events_from_messages(&[dropped])
@@ -1815,6 +1858,9 @@ mod tests {
     /// would chime as Satanic.
     #[test]
     fn only_named_drops_come_out_of_a_generation_answer() {
+        // Both items are made up — the ids are 1 and 2 — so the world id on them
+        // is made up too. What is not made up is that a thing in the world says
+        // where it is; see `lies_on_the_floor`.
         let msg = serde_json::json!({
             "itemData": {
                 "3-4964607-65875f2ed96610001-3": {"a": 1, "b": 8, "c": 0, "d": 2, "e": 10, "gd": 2422649, "j": 0, "n": 3, "sh": "aa"},
