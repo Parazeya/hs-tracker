@@ -292,6 +292,8 @@ pub struct GameStats {
     /// the last time the run actually moved: gold, experience, a kill, a drop
     last_progress: Instant,
     has_mail: bool,
+    /// whether anything has said yet; see `mail_state`
+    mail_known: bool,
     total_gold: i64,
     gold_earned: i64,
     total_xp: i64,
@@ -488,6 +490,7 @@ impl Default for GameStats {
             by_hand: false,
             last_progress: Instant::now(),
             has_mail: false,
+            mail_known: false,
             total_gold: 0,
             gold_earned: 0,
             total_xp: 0,
@@ -572,6 +575,10 @@ impl GameStats {
         // it: without that a reset makes an hours-old zone look freshly
         // confirmed, which is the one thing this field exists to prevent.
         let satanic_at = self.satanic_at.take();
+        // Whether the box has been asked about survives a Reset, for the same
+        // reason its contents do: the button restarts the counters, not the
+        // account, and forgetting would ring the chime a second time.
+        let mail_known = self.mail_known;
         // Who is playing does not change because the counters were restarted,
         // and the window between a reset and the client next naming itself is
         // long enough to pick something up in.
@@ -665,6 +672,7 @@ impl GameStats {
         // it happened" is empty for a run that happened entirely in one room.
         self.room_since = self.room.is_some().then(Instant::now);
         self.satanic_at = satanic_at;
+        self.mail_known = mail_known;
         self.account = account;
         self.zone_region = zone_region;
         self.zone_asked_by = zone_asked_by;
@@ -714,10 +722,17 @@ impl GameStats {
         }
     }
 
-    /// Cheap enough to poll: the mail chime must fire even while every window
-    /// that shows the counters is hidden.
-    pub fn has_mail(&self) -> bool {
-        self.has_mail
+    /// What is known about mail, which is not the same as whether there is any.
+    ///
+    /// Cheap enough to poll: the chime must fire even while every window that
+    /// shows the counters is hidden.
+    ///
+    /// `None` until the server has answered once. The plain flag reads false
+    /// before that, which is indistinguishable from an empty box — and the
+    /// chime, watching for false becoming true, rang on every launch for a
+    /// letter that had been sitting there for days.
+    pub fn mail_state(&self) -> Option<bool> {
+        self.mail_known.then_some(self.has_mail)
     }
 
     /// The satanic zone has moved and this rotation is worth telling the player
@@ -1271,7 +1286,10 @@ impl GameStats {
                 }
                 self.let_go.extend(gone.iter().cloned());
             }
-            GameEvent::Mail(has) => self.has_mail = *has,
+            GameEvent::Mail(has) => {
+                self.has_mail = *has;
+                self.mail_known = true;
+            }
             GameEvent::Room(room) => {
                 if self.room.as_deref() != Some(room.as_str()) {
                     // Close the books on the room being left: a run is worth
@@ -2258,6 +2276,35 @@ mod tests {
         });
         feed(&mut s, ours);
         assert_eq!(found(&mut s), 1, "our own still counts");
+    }
+
+    /// Mail already in the box is not mail arriving.
+    ///
+    /// The chime watches for "none" becoming "some". Nothing said which of
+    /// those a silent tracker was in, so the first answer from the server —
+    /// which on a launch is the state of a box that may have been full for
+    /// days — looked like a change and rang. Reported by a player on Bloodpact,
+    /// a mode with no mailbox in it, who heard it on every start.
+    #[test]
+    fn mail_that_was_already_there_does_not_announce_itself() {
+        let mut s = GameStats::default();
+        assert_eq!(s.mail_state(), None, "before anything is said, nothing is known");
+
+        // the server's first word, on a box that is already full
+        s.apply(&GameEvent::Mail(true));
+        assert_eq!(s.mail_state(), Some(true));
+
+        // a fresh tracker told there is none knows that too, and differently
+        let mut empty = GameStats::default();
+        empty.apply(&GameEvent::Mail(false));
+        assert_eq!(empty.mail_state(), Some(false));
+        empty.apply(&GameEvent::Mail(true));
+        assert_eq!(empty.mail_state(), Some(true), "and that is the arrival worth a chime");
+
+        // A Reset restarts the counters, not the account. If it forgot, the
+        // next answer would look like a first one and ring again.
+        s.reset();
+        assert_eq!(s.mail_state(), Some(true), "the box is not emptied by the Reset button");
     }
 
     /// Picking up what you have just put down is not finding it.

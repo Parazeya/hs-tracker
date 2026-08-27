@@ -1,0 +1,642 @@
+[
+ {
+  "room": "Cabin_01_rm",
+  "room_index": 131,
+  "x": 109,
+  "y": 521,
+  "kind": "cabin",
+  "act": null,
+  "name": "s Cabin",
+  "site": "0xba7b142"
+ },
+ {
+  "room": "Town_01_rm",
+  "room_index": 234,
+  "x": 182,
+  "y": 561,
+  "kind": "town",
+  "act": null,
+  "name": "Town of Inoya",
+  "site": "0xba7b479"
+ },
+ {
+  "room": "Act_01_01",
+  "room_index": 1,
+  "x": 252,
+  "y": 537,
+  "kind": "zone",
+  "act": 1,
+  "name": "Outskirts of Inoya",
+  "site": "0xba7b6bc"
+ },
+ {
+  "room": "Act_01_02",
+  "room_index": 3,
+  "x": 236,
+  "y": 485,
+  "kind": "zone",
+  "act": 1,
+  "name": "Fields of Battle",
+  "site": "0xba7b8ff"
+ },
+ {
+  "room": "Act_01_03",
+  "room_index": 4,
+  "x": 164,
+  "y": 440,
+  "kind": "zone",
+  "act": 1,
+  "name": "The Pumpkin Patch",
+  "site": "0xba7bb42"
+ },
+ {
+  "room": "Act_01_04",
+  "room_index": 6,
+  "x": 226,
+  "y": 406,
+  "kind": "zone",
+  "act": 1,
+  "name": "Woodhill Plains",
+  "site": "0xba7bd85"
+ },
+ {
+  "room": "Act_01_05",
+  "room_index": 7,
+  "x": 287,
+  "y": 363,
+  "kind": "zone",
+  "act": 1,
+  "name": "King's Garden",
+  "site": "0xba7bfc8"
+ },
+ {
+  "room": "Act_01_Boss_Dungeon_03",
+  "room_index": 11,
+  "x": 353,
+  "y": 335,
+  "kind": "boss_dungeon",
+  "act": 1,
+  "name": null,
+  "site": "0xba7c20b"
+ },
+ {
+  "room": "Town_02_rm",
+  "room_index": 236,
+  "x": 160,
+  "y": 355,
+  "kind": "town",
+  "act": null,
+  "name": "Danethorpe",
+  "site": "0xba7c4a6"
+ },
+ {
+  "room": "Act_02_01",
+  "room_index": 15,
+  "x": 229,
+  "y": 299,
+  "kind": "zone",
+  "act": 2,
+  "name": "Crystal Village",
+  "site": "0xba7c6e9"
+ },
+ {
+  "room": "Act_02_02",
+  "room_index": 17,
+  "x": 77,
+  "y": 305,
+  "kind": "zone",
+  "act": 2,
+  "name": "Chilling Lake",
+  "site": "0xba7c92c"
+ },
+ {
+  "room": "Act_02_03",
+  "room_index": 18,
+  "x": 146,
+  "y": 274,
+  "kind": "zone",
+  "act": 2,
+  "name": "Arctic Tundra",
+  "site": "0xba7cb6f"
+ },
+ {
+  "room": "Act_02_04",
+  "room_index": 20,
+  "x": 209,
+  "y": 227,
+  "kind": "zone",
+  "act": 2,
+  "name": "Snowy Mountains",
+  "site": "0xba7cdb2"
+ },
+ {
+  "room": "Act_02_05",
+  "room_index": 21,
+  "x": 330,
+  "y": 276,
+  "kind": "zone",
+  "act": 2,
+  "name": "The Glacial Trail",
+  "site": "0xba7cff5"
+ },
+ {
+  "room": "Act_02_Boss_Dungeon_03",
+  "room_index": 25,
+  "x": 354,
+  "y": 214,
+  "kind": "boss_dungeon",
+  "act": 2,
+  "name": null,
+  "site": "0xba7d238"
+ },
+ {
+  "room": "Town_03_rm",
+  "room_index": 237,
+  "x": 465,
+  "y": 216,
+  "kind": "town",
+  "act": null,
+  "name": "Village of Mos'Arathim",
+  "site": "0xba7d4d3"
+ },
+ {
+  "room": "Act_03_01",
+  "room_index": 28,
+  "x": 540,
+  "y": 260,
+  "kind": "zone",
+  "act": 3,
+  "name": "Corrupted Oasis",
+  "site": "0xba7d716"
+ },
+ {
+  "room": "Act_03_02",
+  "room_index": 29,
+  "x": 523,
+  "y": 320,
+  "kind": "zone",
+  "act": 3,
+  "name": "Dry Hills",
+  "site": "0xba7d959"
+ },
+ {
+  "room": "Act_03_03",
+  "room_index": 31,
+  "x": 460,
+  "y": 402,
+  "kind": "zone",
+  "act": 3,
+  "name": "Mos'Arathim Desert",
+  "site": "0xba7db9c"
+ },
+ {
+  "room": "Act_03_04",
+  "room_index": 33,
+  "x": 563,
+  "y": 450,
+  "kind": "zone",
+  "act": 3,
+  "name": "Pyramid Level 1",
+  "site": "0xba7dddf"
+ },
+ {
+  "room": "Act_03_05",
+  "room_index": 34,
+  "x": 590,
+  "y": 400,
+  "kind": "zone",
+  "act": 3,
+  "name": "Pyramid Level 2",
+  "site": "0xba7e022"
+ },
+ {
+  "room": "Act_03_Boss_Dungeon_03",
+  "room_index": 38,
+  "x": 658,
+  "y": 434,
+  "kind": "boss_dungeon",
+  "act": 3,
+  "name": null,
+  "site": "0xba7e265"
+ },
+ {
+  "room": "Town_04_rm",
+  "room_index": 238,
+  "x": 264,
+  "y": 705,
+  "kind": "town",
+  "act": null,
+  "name": "Dhorn Farum",
+  "site": "0xba7e500"
+ },
+ {
+  "room": "Act_04_01",
+  "room_index": 41,
+  "x": 178,
+  "y": 664,
+  "kind": "zone",
+  "act": 4,
+  "name": "Old Mining Village",
+  "site": "0xba7e743"
+ },
+ {
+  "room": "Act_04_02",
+  "room_index": 43,
+  "x": 304,
+  "y": 600,
+  "kind": "zone",
+  "act": 4,
+  "name": "The Highland Mines",
+  "site": "0xba7e986"
+ },
+ {
+  "room": "Act_04_03",
+  "room_index": 44,
+  "x": 380,
+  "y": 657,
+  "kind": "zone",
+  "act": 4,
+  "name": "Corrupted Cave",
+  "site": "0xba7ebc9"
+ },
+ {
+  "room": "Act_04_04",
+  "room_index": 45,
+  "x": 389,
+  "y": 580,
+  "kind": "zone",
+  "act": 4,
+  "name": "The Nightmare",
+  "site": "0xba7ee0c"
+ },
+ {
+  "room": "Act_04_05",
+  "room_index": 46,
+  "x": 467,
+  "y": 555,
+  "kind": "zone",
+  "act": 4,
+  "name": "The Devil's Breach",
+  "site": "0xba7f04f"
+ },
+ {
+  "room": "Act_04_Boss_Dungeon_03",
+  "room_index": 49,
+  "x": 513,
+  "y": 514,
+  "kind": "boss_dungeon",
+  "act": 4,
+  "name": null,
+  "site": "0xba7f292"
+ },
+ {
+  "room": "Town_05_rm",
+  "room_index": 239,
+  "x": 628,
+  "y": 534,
+  "kind": "town",
+  "act": null,
+  "name": "Shujo Retreat",
+  "site": "0xba7f52d"
+ },
+ {
+  "room": "Act_05_01",
+  "room_index": 52,
+  "x": 570,
+  "y": 624,
+  "kind": "zone",
+  "act": 5,
+  "name": "Mt. Fuji",
+  "site": "0xba7f770"
+ },
+ {
+  "room": "Act_05_02",
+  "room_index": 53,
+  "x": 679,
+  "y": 645,
+  "kind": "zone",
+  "act": 5,
+  "name": "Misty Swamp",
+  "site": "0xba7f9b3"
+ },
+ {
+  "room": "Act_05_03",
+  "room_index": 55,
+  "x": 750,
+  "y": 562,
+  "kind": "zone",
+  "act": 5,
+  "name": "Fuji Coast",
+  "site": "0xba7fbf6"
+ },
+ {
+  "room": "Act_05_04",
+  "room_index": 56,
+  "x": 823,
+  "y": 618,
+  "kind": "zone",
+  "act": 5,
+  "name": "Sea of Karponia",
+  "site": "0xba7fe39"
+ },
+ {
+  "room": "Act_05_05",
+  "room_index": 57,
+  "x": 933,
+  "y": 662,
+  "kind": "zone",
+  "act": 5,
+  "name": "Temple of Zamjo",
+  "site": "0xba8007c"
+ },
+ {
+  "room": "Act_05_Boss_Dungeon_03",
+  "room_index": 60,
+  "x": 994,
+  "y": 626,
+  "kind": "boss_dungeon",
+  "act": 5,
+  "name": null,
+  "site": "0xba802bf"
+ },
+ {
+  "room": "Town_06_rm",
+  "room_index": 240,
+  "x": 677,
+  "y": 290,
+  "kind": "town",
+  "act": null,
+  "name": "Dawn's Chapel",
+  "site": "0xba8055a"
+ },
+ {
+  "room": "Act_06_01",
+  "room_index": 62,
+  "x": 695,
+  "y": 374,
+  "kind": "zone",
+  "act": 6,
+  "name": "Highland Graveyard",
+  "site": "0xba8079d"
+ },
+ {
+  "room": "Act_06_02",
+  "room_index": 64,
+  "x": 759,
+  "y": 324,
+  "kind": "zone",
+  "act": 6,
+  "name": "The Cathedral",
+  "site": "0xba809e0"
+ },
+ {
+  "room": "Act_06_03",
+  "room_index": 66,
+  "x": 740,
+  "y": 242,
+  "kind": "zone",
+  "act": 6,
+  "name": "Prison Dungeon",
+  "site": "0xba80c23"
+ },
+ {
+  "room": "Act_06_04",
+  "room_index": 67,
+  "x": 823,
+  "y": 258,
+  "kind": "zone",
+  "act": 6,
+  "name": "Steam Train",
+  "site": "0xba80e66"
+ },
+ {
+  "room": "Act_06_05",
+  "room_index": 68,
+  "x": 840,
+  "y": 383,
+  "kind": "zone",
+  "act": 6,
+  "name": "The Depths of Hell",
+  "site": "0xba810a9"
+ },
+ {
+  "room": "Act_06_Boss_Dungeon_03",
+  "room_index": 71,
+  "x": 866,
+  "y": 327,
+  "kind": "boss_dungeon",
+  "act": 6,
+  "name": null,
+  "site": "0xba812ec"
+ },
+ {
+  "room": "Town_07_rm",
+  "room_index": 241,
+  "x": 928,
+  "y": 202,
+  "kind": "town",
+  "act": null,
+  "name": "Astral Encampment",
+  "site": "0xba81583"
+ },
+ {
+  "room": "Act_07_01",
+  "room_index": 74,
+  "x": 928,
+  "y": 262,
+  "kind": "zone",
+  "act": 7,
+  "name": "Deep Space",
+  "site": "0xba817c0"
+ },
+ {
+  "room": "Act_07_02",
+  "room_index": 75,
+  "x": 970,
+  "y": 342,
+  "kind": "zone",
+  "act": 7,
+  "name": "Event Horizon",
+  "site": "0xba819fd"
+ },
+ {
+  "room": "Act_07_03",
+  "room_index": 76,
+  "x": 865,
+  "y": 445,
+  "kind": "zone",
+  "act": 7,
+  "name": "The Black Hole",
+  "site": "0xba81c3a"
+ },
+ {
+  "room": "Act_07_04",
+  "room_index": 78,
+  "x": 933,
+  "y": 480,
+  "kind": "zone",
+  "act": 7,
+  "name": "Parallel Dimension",
+  "site": "0xba81e77"
+ },
+ {
+  "room": "Act_07_05",
+  "room_index": 79,
+  "x": 960,
+  "y": 553,
+  "kind": "zone",
+  "act": 7,
+  "name": "Subconscious Mind",
+  "site": "0xba820b4"
+ },
+ {
+  "room": "Act_07_Boss_Dungeon_03",
+  "room_index": 83,
+  "x": 1022,
+  "y": 518,
+  "kind": "boss_dungeon",
+  "act": 7,
+  "name": null,
+  "site": "0xba822f1"
+ },
+ {
+  "room": "Act_08_01",
+  "room_index": 85,
+  "x": 1124,
+  "y": 245,
+  "kind": "zone",
+  "act": 8,
+  "name": "Forest of the Slain",
+  "site": "0xba825c6"
+ },
+ {
+  "room": "Act_08_02",
+  "room_index": 86,
+  "x": 1198,
+  "y": 281,
+  "kind": "zone",
+  "act": 8,
+  "name": "Flooded Plains",
+  "site": "0xba82809"
+ },
+ {
+  "room": "Act_08_03",
+  "room_index": 87,
+  "x": 1307,
+  "y": 341,
+  "kind": "zone",
+  "act": 8,
+  "name": "Forgotten Caves",
+  "site": "0xba82a4c"
+ },
+ {
+  "room": "Act_08_04",
+  "room_index": 88,
+  "x": 1203,
+  "y": 420,
+  "kind": "zone",
+  "act": 8,
+  "name": "Camp of Souls",
+  "site": "0xba82c8f"
+ },
+ {
+  "room": "Act_08_05",
+  "room_index": 89,
+  "x": 1286,
+  "y": 457,
+  "kind": "zone",
+  "act": 8,
+  "name": "Helheim",
+  "site": "0xba82ed2"
+ },
+ {
+  "room": "Act_08_Boss_Dungeon_03",
+  "room_index": 92,
+  "x": 1402,
+  "y": 395,
+  "kind": "boss_dungeon",
+  "act": 8,
+  "name": null,
+  "site": "0xba83115"
+ },
+ {
+  "room": "Town_09_rm",
+  "room_index": 242,
+  "x": 2131,
+  "y": 334,
+  "kind": "town",
+  "act": null,
+  "name": "Karros Aegeus",
+  "site": "0xba833ac"
+ },
+ {
+  "room": "Act_09_01",
+  "room_index": 100,
+  "x": 2315,
+  "y": 441,
+  "kind": "zone",
+  "act": 9,
+  "name": "Abyss Jungle",
+  "site": "0xba835e9"
+ },
+ {
+  "room": "Act_09_02",
+  "room_index": 101,
+  "x": 2395,
+  "y": 595,
+  "kind": "zone",
+  "act": 9,
+  "name": "Shipwreck Cove",
+  "site": "0xba83826"
+ },
+ {
+  "room": "Act_09_03",
+  "room_index": 102,
+  "x": 1852,
+  "y": 623,
+  "kind": "zone",
+  "act": 9,
+  "name": "Tormented Reef",
+  "site": "0xba83a63"
+ },
+ {
+  "room": "Act_09_04",
+  "room_index": 103,
+  "x": 1750,
+  "y": 360,
+  "kind": "zone",
+  "act": 9,
+  "name": "Boreal Island",
+  "site": "0xba83ca0"
+ },
+ {
+  "room": "Act_09_05",
+  "room_index": 104,
+  "x": 1971,
+  "y": 140,
+  "kind": "zone",
+  "act": 9,
+  "name": "Volcanic Island",
+  "site": "0xba83edd"
+ },
+ {
+  "room": "Act_09_06",
+  "room_index": 105,
+  "x": 2671,
+  "y": 333,
+  "kind": "zone",
+  "act": 9,
+  "name": "Abyss Realm",
+  "site": "0xba8411a"
+ },
+ {
+  "room": "Act_09_Boss",
+  "room_index": 109,
+  "x": 2656,
+  "y": 442,
+  "kind": "boss_dungeon",
+  "act": 9,
+  "name": null,
+  "site": "0xba84357"
+ }
+]

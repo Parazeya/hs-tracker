@@ -1,0 +1,65 @@
+gml_line,x,y,room_index,room,zone_name
+109,109,521,131,Cabin_01_rm,s Cabin
+114,182,561,234,Town_01_rm,Town of Inoya
+115,252,537,1,Act_01_01,Outskirts of Inoya
+116,236,485,3,Act_01_02,Fields of Battle
+117,164,440,4,Act_01_03,The Pumpkin Patch
+118,226,406,6,Act_01_04,Woodhill Plains
+119,287,363,7,Act_01_05,King's Garden
+120,353,335,11,Act_01_Boss_Dungeon_03,King’s Tomb
+124,160,355,236,Town_02_rm,Danethorpe
+125,229,299,15,Act_02_01,Crystal Village
+126,77,305,17,Act_02_02,Chilling Lake
+127,146,274,18,Act_02_03,Arctic Tundra
+128,209,227,20,Act_02_04,Snowy Mountains
+129,330,276,21,Act_02_05,The Glacial Trail
+130,354,214,25,Act_02_Boss_Dungeon_03,Chamber of Ice
+134,465,216,237,Town_03_rm,Village of Mos'Arathim
+135,540,260,28,Act_03_01,Corrupted Oasis
+136,523,320,29,Act_03_02,Dry Hills
+137,460,402,31,Act_03_03,Mos'Arathim Desert
+138,563,450,33,Act_03_04,Pyramid Level 1
+139,590,400,34,Act_03_05,Pyramid Level 2
+140,658,434,38,Act_03_Boss_Dungeon_03,Tomb of Ancients
+144,264,705,238,Town_04_rm,Dhorn Farum
+145,178,664,41,Act_04_01,Old Mining Village
+146,304,600,43,Act_04_02,The Highland Mines
+147,380,657,44,Act_04_03,Corrupted Cave
+148,389,580,45,Act_04_04,The Nightmare
+149,467,555,46,Act_04_05,The Devil's Breach
+150,513,514,49,Act_04_Boss_Dungeon_03,Chamber of Burning Souls
+154,628,534,239,Town_05_rm,Shujo Retreat
+155,570,624,52,Act_05_01,Mt. Fuji
+156,679,645,53,Act_05_02,Misty Swamp
+157,750,562,55,Act_05_03,Fuji Coast
+158,823,618,56,Act_05_04,Sea of Karponia
+159,933,662,57,Act_05_05,Temple of Zamjo
+160,994,626,60,Act_05_Boss_Dungeon_03,The Sacred Temple
+164,677,290,240,Town_06_rm,Dawn's Chapel
+165,695,374,62,Act_06_01,Highland Graveyard
+166,759,324,64,Act_06_02,The Cathedral
+167,740,242,66,Act_06_03,Prison Dungeon
+168,823,258,67,Act_06_04,Steam Train
+169,840,383,68,Act_06_05,The Depths of Hell
+170,866,327,71,Act_06_Boss_Dungeon_03,Pathway to Hell
+174,928,202,241,Town_07_rm,Astral Encampment
+175,928,262,74,Act_07_01,Deep Space
+176,970,342,75,Act_07_02,Event Horizon
+177,865,445,76,Act_07_03,The Black Hole
+178,933,480,78,Act_07_04,Parallel Dimension
+179,960,553,79,Act_07_05,Subconscious Mind
+180,1022,518,83,Act_07_Boss_Dungeon_03,The Waiting Room
+185,1124,245,85,Act_08_01,Forest of the Slain
+186,1198,281,86,Act_08_02,Flooded Plains
+187,1307,341,87,Act_08_03,Forgotten Caves
+188,1203,420,88,Act_08_04,Camp of Souls
+189,1286,457,89,Act_08_05,Helheim
+190,1402,395,92,Act_08_Boss_Dungeon_03,Vault of Ancients
+194,2131,334,242,Town_09_rm,Karros Aegeus
+195,2315,441,100,Act_09_01,Abyss Jungle
+196,2395,595,101,Act_09_02,Shipwreck Cove
+197,1852,623,102,Act_09_03,Tormented Reef
+198,1750,360,103,Act_09_04,Boreal Island
+199,1971,140,104,Act_09_05,Volcanic Island
+200,2671,333,105,Act_09_06,Abyss Realm
+201,2656,442,109,Act_09_Boss,Ether´s Edge

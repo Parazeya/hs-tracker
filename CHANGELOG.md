@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.1 — 2026-08-27
+
+### Fixed
+
+- **Somebody typing "mailbox" in chat rang the mail chime.**
+- **Mail already in the box announced itself as new.**
+- **The panel came out squished on some machines** ([#3]). The window was a
+  fixed 444 CSS pixels wide and the chips inside it fixed widths that do not
+  wrap, so wherever the text drew wider — a substituted font, a system text
+  size, a webview's minimum font size — it had nowhere to go and spilled across
+  the row. No setting could help, because none of them move a CSS pixel. The
+  panel is now measured on both axes instead of one: 444 is a floor, the window
+  follows the content above it, and the icon strip beside it moves with the edge
+  rather than remembering where it used to be.
+
+[#3]: https://github.com/Parazeya/hs-tracker/issues/3
+
 ## 1.0.0 — 2026-08-26
 
 The number is the largest thing in this release. What stands behind it is the

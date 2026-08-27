@@ -81,16 +81,38 @@ class DataWin:
             self.sprites[name] = {"frames": frames, "speed": speed}
 
     def _parse_tgin(self):
-        # entry: name, directory, extension, loadtype, five list ptrs
-        # (texture pages, sprites, spine, fonts, tilesets); pages are ids
+        """Texture group -> the `.yytex` files beside the game.
+
+        The entry is 52 bytes: name, directory, extension, load type, then five
+        POINTERS — to the texture pages, the sprites, the spine sprites, the
+        fonts and the tilesets — and each points at a count followed by that
+        many ids. This read the count and the ids inline instead, out of the
+        middle of the pointer block, and got a garbage length: it claimed 21,794
+        texture pages where the game ships 324, and only 96 of the names it
+        produced were files that exist. Every sprite outside those 96 pages then
+        failed to load, which is a whole-file failure that shows up one sprite
+        at a time.
+
+        The mapping is checked by the thing it describes: 325 pages come out,
+        324 of them files on disk, and the one that is not is GameMaker's own
+        fallback texture, which is built in rather than shipped.
+        """
         base, _ = self.chunks["TGIN"]
         self.page_files = {}
         for ptr in self._ptr_list(base + 4):  # chunk starts with a version u32
             name_ptr, dir_ptr = struct.unpack_from("<II", self.raw, ptr)
             name = self.string(name_ptr)
             sub = self.string(dir_ptr) if dir_ptr else ""
-            n = self.u32(ptr + 36)
-            ids = struct.unpack_from(f"<{n}I", self.raw, ptr + 40)
+            # the directory is "dyntex" for the built-in group, which is not a folder
+            if sub == "dyntex":
+                sub = ""
+            pages_ptr = self.u32(ptr + 16)
+            if not pages_ptr:
+                continue
+            n = self.u32(pages_ptr)
+            if n > 4000:  # not a count; the layout has moved again
+                continue
+            ids = struct.unpack_from(f"<{n}I", self.raw, pages_ptr + 4)
             for i, page_id in enumerate(ids):
                 self.page_files[page_id] = (Path(sub) if sub else Path()) / f"{name}_{i}"
 

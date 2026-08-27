@@ -39,8 +39,22 @@ const SOUND_EXTS: [(&str, &str); 4] = [
 // and the web side measures that itself (see `fit_overlay`). The figures here
 // are only the opening bid, so the window is about right before the first frame
 // rather than resizing in front of the player.
-/// The panel's own width, which is the art's.
+/// The panel's own width, which is the art's — what it is drawn at before
+/// anything has measured it.
 const PANEL_W: f64 = 444.0;
+
+/// What it actually came out as, once the page has been laid out.
+///
+/// Reported as "Squished Panel": the chips are fixed widths with `nowrap`
+/// inside a fixed 444, so on a machine where the text comes out wider — a
+/// substituted font, a system text size, a webview minimum font size — it has
+/// nowhere to go and spills over the row. Nothing in Settings could help,
+/// because none of those move a CSS pixel.
+///
+/// The height has been measured from the panel and handed back since the row
+/// toggles went in. This is the same arrangement for the other axis.
+static PANEL_WIDTH: AtomicU32 = AtomicU32::new(0);
+
 /// The control strip beside it: the lock and four plates, each the height of a
 /// chip so the column keeps the panel's own rhythm, and flush against the frame
 /// rather than floating clear of it.
@@ -54,6 +68,66 @@ const STRIP_GAP: f64 = 0.0;
 /// rather than on its frame. A webview cannot paint past its own window, so
 /// "beside the panel" and "inside the window" are the same requirement.
 const BASE_W: f64 = PANEL_W + STRIP_GAP + STRIP_W;
+
+fn panel_w() -> f64 {
+    match PANEL_WIDTH.load(Ordering::Relaxed) {
+        0 => PANEL_W,
+        w => w as f64,
+    }
+}
+
+fn base_w() -> f64 {
+    panel_w() + STRIP_GAP + STRIP_W
+}
+
+/// Take a measurement of the panel, never narrower than it was drawn for.
+///
+/// A page that has not finished laying out reports a small width for a frame —
+/// zero, on the very first — and a window that shrank to it would clip the panel
+/// it exists to hold. The ceiling is there for the same reason in reverse:
+/// nothing the panel legitimately contains is 1600 CSS px wide.
+fn remember_width(w: f64) {
+    if !w.is_finite() {
+        return;
+    }
+    let w = w.clamp(PANEL_W, 1600.0);
+    PANEL_WIDTH.store(w.round() as u32, Ordering::Relaxed);
+}
+
+/// The icon strip's rect, in overlay CSS px, and what it takes to summon it.
+///
+/// The strip stands beside the panel rather than on it — see .strip in
+/// App.svelte — so this is simply everything past the panel's right edge. It
+/// used to be two constants reading `x 444..472`; the panel can be wider than
+/// 444 now, so the edge is asked for rather than remembered.
+///
+/// It stood for the lock alone, and twice it stood in the wrong place. It once
+/// reached x 412 and y 34, wider and taller than the button, and the corner it
+/// left over lay on top of the Reset Stats button below — a locked overlay is
+/// click-through everywhere but here, so that corner of the button quietly
+/// belonged to the lock. Trimming it to a 24x24 corner then missed the button
+/// the other way, because `.lock` was laid out against the panel's PADDING box
+/// and sat at x 415..436, not 420..444. A strip fixed to the window has one
+/// origin and one set of numbers, which is most of why it is one.
+///
+/// `held` is whether the strip is already open. Click-through is a whole-window
+/// switch — `set_ignore_cursor_events` is one boolean and there is no partial
+/// input region in this stack — so every pixel the poller watches is a pixel
+/// where the overlay stops passing clicks to the game beneath it. Watching the
+/// whole column all the time would mean brushing the right-hand edge of the
+/// panel costs the player a click in a fight.
+///
+/// So the column is entered through the corner the lock has always occupied,
+/// and only then does the rest of it start being watched. Reaching for the
+/// buttons is deliberate; crossing the edge on the way somewhere else is not.
+/// One cell and the gap under it — 31, not the 62 this was first given, which
+/// reached over the Dashboard button as well and made a one-click action live
+/// before the strip that carries it had appeared.
+fn strip_rect(held: bool) -> (f64, f64, f64, f64) {
+    let end = if held { STRIP_H } else { STRIP_W + 3.0 };
+    (panel_w(), 0.0, base_w(), end)
+}
+
 /// The rows that add height to the overlay. "vitals" is no longer one of them —
 /// magic find moved into the session row and the two levels went away, so that
 /// setting hides a chip rather than a row. It keeps its id and its place in the
@@ -83,36 +157,6 @@ const HK_LOCK: &str = "ctrl+shift+l";
 const HK_RESET: &str = "ctrl+shift+r";
 const HK_PAUSE: &str = "ctrl+shift+p";
 
-// The icon strip's rect, in overlay CSS px. The strip stands beside the panel
-// rather than on it — see .strip in App.svelte — so this is simply everything
-// past the panel's right edge: x 444..472, y 0..147.
-//
-// It stood for the lock alone, and twice it stood in the wrong place. It once
-// reached x 412 and y 34, wider and taller than the button, and the corner it
-// left over lay on top of the Reset Stats button below — a locked overlay is
-// click-through everywhere but here, so that corner of the button quietly
-// belonged to the lock. Trimming it to a 24x24 corner then missed the button
-// the other way, because `.lock` was laid out against the panel's PADDING box
-// and sat at x 415..436, not 420..444. A strip fixed to the window has one
-// origin and one set of numbers, which is most of why it is one.
-const STRIP_RECT: (f64, f64, f64, f64) = (PANEL_W, 0.0, BASE_W, STRIP_H);
-
-/// What it takes to summon the strip: the lock's cell alone, at the top of it.
-///
-/// Click-through is a whole-window switch — `set_ignore_cursor_events` is one
-/// boolean and there is no partial input region in this stack — so every pixel
-/// the poller watches is a pixel where the overlay stops passing clicks to the
-/// game beneath it. Watching the whole column all the time would mean brushing
-/// the right-hand edge of the panel costs the player a click in a fight.
-///
-/// So the column is entered through the corner the lock has always occupied,
-/// and only then does the rest of it start being watched. Reaching for the
-/// buttons is deliberate; crossing the edge on the way somewhere else is not.
-///
-/// One cell and the gap under it — 31, not the 62 this was first given, which
-/// reached over the Dashboard button as well and made a one-click action live
-/// before the strip that carries it had appeared.
-const STRIP_REACH: (f64, f64, f64, f64) = (PANEL_W, 0.0, BASE_W, STRIP_W + 3.0);
 
 /// Five cells, 1px between them and 3 more under the lock — see .strip in
 /// App.svelte, which is the same arithmetic in the other language.
@@ -1013,7 +1057,7 @@ fn spawn_ticker_glue(app: AppHandle) {
                 // The panel's width, not the window's: the window carries the
                 // control strip beside the panel now, and a ticker as wide as
                 // the window would hang past the overlay it belongs under.
-                let width = (PANEL_W * scale * dpi) as u32;
+                let width = (panel_w() * scale * dpi) as u32;
                 let want = (
                     tauri::PhysicalPosition::new(pos.x, y),
                     tauri::PhysicalSize::new(width, height),
@@ -1079,7 +1123,10 @@ fn spawn_stats_pusher(app: AppHandle) {
         let mut snap_at = Instant::now() - SNAP_HEARTBEAT;
         let mut extra_at = Instant::now() - EXTRA_MIN_GAP;
         let (mut had_main, mut had_dash) = (false, false);
-        let mut had_mail = false;
+        // `None` until the server has answered once, so the first answer sets
+        // the mark rather than sounding it. Starting at `false` meant every
+        // launch announced whatever was already in the box.
+        let mut had_mail: Option<bool> = None;
         loop {
             std::thread::sleep(Duration::from_millis(200));
             // The mail chime is announced on its own, before anything about
@@ -1089,11 +1136,13 @@ fn spawn_stats_pusher(app: AppHandle) {
             // divided into the per-hour figures. This is the only thread with a
             // heartbeat, so it is the one that has to ask.
             app.state::<Shared>().stats().watch_idle();
-            let mail = app.state::<Shared>().stats().has_mail();
-            if mail && !had_mail {
+            let mail = app.state::<Shared>().stats().mail_state();
+            if mail == Some(true) && had_mail == Some(false) {
                 let _ = app.emit("mail", ());
             }
-            had_mail = mail;
+            if mail.is_some() {
+                had_mail = mail;
+            }
             // And the same for the zone moving on: the overlay is the window
             // that plays sounds whether it is on screen or not, and a player
             // who has hidden it still wants to know the drops got better.
@@ -1355,7 +1404,7 @@ fn spawn_strip_poller(app: AppHandle) {
                 let cur = app.cursor_position().ok()?;
                 let z = dpi * SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
                 // The corner opens it; the whole column keeps it open.
-                let (x0, y0, x1, y1) = if held { STRIP_RECT } else { STRIP_REACH };
+                let (x0, y0, x1, y1) = strip_rect(held);
                 Some(
                     cur.x >= pos.x as f64 + x0 * z
                         && cur.x <= pos.x as f64 + x1 * z
@@ -1921,7 +1970,7 @@ fn about() -> About {
         platform: std::env::consts::OS,
         repo: REPO,
         // the panel without its strip: the size to give a window capture
-        overlay_w: PANEL_W as u32,
+        overlay_w: panel_w() as u32,
         overlay_h: {
             let measured = PANEL_H.load(Ordering::Relaxed);
             if measured > 0 { measured } else { 199 }
@@ -1954,14 +2003,17 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn fit_overlay(app: AppHandle, height: f64) {
+fn fit_overlay(app: AppHandle, height: f64, width: Option<f64>) {
     let height = height.clamp(60.0, 1200.0);
     // kept for the scale slider: zoom changes the window without changing a
     // single CSS pixel of the panel, so nothing would measure it again
     PANEL_H.store(height.round() as u32, Ordering::Relaxed);
+    if let Some(w) = width {
+        remember_width(w);
+    }
     let Some(w) = app.get_webview_window("main") else { return };
     let scale = SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
-    let wanted = LogicalSize::new(BASE_W * scale, height.max(STRIP_H) * scale);
+    let wanted = LogicalSize::new(base_w() * scale, height.max(STRIP_H) * scale);
     // a resize that changes nothing still goes through the window manager, and
     // on X11 that can shift the window out from under the player
     if let (Ok(now), Ok(factor)) = (w.inner_size(), w.scale_factor()) {
@@ -3173,6 +3225,50 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The strip follows the panel's edge instead of remembering where it was.
+    ///
+    /// The panel was a fixed 444 on both sides of the process boundary, and the
+    /// strip's column was two constants written from it. Reported as "Squished
+    /// Panel": where the text drew wider, the chips spilled over the row and no
+    /// setting could help. Now the panel is measured — so the strip has to be
+    /// asked, not told, or it would sit on top of a panel that had grown past it.
+    ///
+    /// One test rather than several: `PANEL_WIDTH` is a process-wide static and
+    /// cargo runs tests in parallel, so its value is only safely anyone's while
+    /// a single test owns it.
+    #[test]
+    fn the_strip_stands_where_the_panel_now_ends() {
+        let before = PANEL_WIDTH.load(Ordering::Relaxed);
+        PANEL_WIDTH.store(0, Ordering::Relaxed);
+
+        // unmeasured, it is exactly what the two constants used to read
+        assert_eq!(panel_w(), PANEL_W);
+        assert_eq!(base_w(), BASE_W);
+        assert_eq!(strip_rect(false), (444.0, 0.0, 472.0, STRIP_W + 3.0));
+        assert_eq!(strip_rect(true), (444.0, 0.0, 472.0, STRIP_H));
+
+        // measured wider, the column moves with the edge and keeps its width
+        remember_width(520.4);
+        assert_eq!(panel_w(), 520.0);
+        let (x0, _, x1, _) = strip_rect(false);
+        assert_eq!((x0, x1 - x0), (520.0, STRIP_W), "the strip is beside the panel, not on it");
+
+        // a page mid-layout reports nothing useful, and the window must not
+        // shrink to it and clip the panel
+        for narrow in [0.0, -1.0, 12.0, 443.9, f64::NAN] {
+            remember_width(narrow);
+            assert_eq!(
+                panel_w(),
+                PANEL_W,
+                "a width of {narrow} narrowed the panel below what it is drawn at"
+            );
+        }
+        remember_width(9000.0);
+        assert_eq!(panel_w(), 1600.0, "and nothing legitimate is wider than this");
+
+        PANEL_WIDTH.store(before, Ordering::Relaxed);
+    }
 
     /// Seven commands build a filesystem path out of an id that came from the
     /// web side, and `list_sound` once skipped this check outright — its own

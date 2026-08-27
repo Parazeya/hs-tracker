@@ -166,8 +166,12 @@
   $effect(() => {
     if (!panelEl) return;
     const report = () => {
-      const height = panelEl.getBoundingClientRect().height;
-      if (height > 0) invoke('fit_overlay', { height }).catch(() => {});
+      const { width, height } = panelEl.getBoundingClientRect();
+      // The width goes with it now. It used to be a constant on both sides, and
+      // on a machine whose text came out wider the chips — fixed widths, no
+      // wrapping — spilled over the row instead of the panel giving way. See
+      // "Squished Panel".
+      if (height > 0) invoke('fit_overlay', { height, width }).catch(() => {});
     };
     const observer = new ResizeObserver(report);
     observer.observe(panelEl);
@@ -462,7 +466,10 @@
   .panel {
     position: relative;
     box-sizing: border-box;
-    width: 444px;
+    /* A floor, not a size. The chips below set the rhythm; if a machine draws
+       them wider than this, the panel widens and the window follows it. */
+    min-width: 444px;
+    width: max-content;
     border: 14px solid transparent;
     border-image-slice: 14 fill;
     border-image-width: 14px;
@@ -534,8 +541,8 @@
      after its bracketed figures came out — the same total, so nothing
      overflowed, but its first boundary sat 16px left of every other row's and
      the panel read as crooked. The widths are the grid, not the content. */
-  .chip.lg { width: 140px; }
-  .chip.md { width: 124px; }
+  .chip.lg { min-width: 140px; }
+  .chip.md { min-width: 124px; }
 
   .ic {
     height: 20px;

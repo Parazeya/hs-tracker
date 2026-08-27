@@ -758,11 +758,16 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
             }
         }
     }
-    // A whole word, not a substring. "Lost Master's Platemail" is a real Set
-    // item, the server announces Set finds to everybody on the shard, and the
-    // announcement of a stranger's drop was ringing our mail chime and latching
-    // the indicator until the next authoritative mail packet.
-    if says_mail(&message) || has(d, MAIL_FIELDS) {
+    // A whole word, not a substring, and not something a person said.
+    //
+    // "Lost Master's Platemail" is a real Set item and the server announces Set
+    // finds to everybody on the shard, so a stranger's drop was ringing our
+    // chime; whole words settled that. They do not settle a player typing the
+    // word, and in one capture three did — "mail", "mailbox", "mailbox in
+    // town" — each of which rang the chime and latched the indicator for
+    // everyone on the shard. It was reported by a player on Bloodpact, a mode
+    // with no mailbox in it at all.
+    if !is_chat(d) && (says_mail(&message) || has(d, MAIL_FIELDS)) {
         events.push(GameEvent::Mail(mail_is_present(d)));
     }
     // server chat announcement: "Someone just found [Item Name]"
@@ -1379,6 +1384,17 @@ fn mail_is_present(d: &Value) -> bool {
     says_mail(&t) || t == "1" || t == "true" || t == "yes"
 }
 
+/// Whether this packet is somebody talking.
+///
+/// A chat line carries who said it and where: a room, a colour for the name, an
+/// account behind it. The server's own answers carry none of that — mail is
+/// `{"message": "New mail!", "status": 1}` and nothing else. So the shape tells
+/// them apart without having to read the words.
+fn is_chat(d: &Value) -> bool {
+    has(d, &["chatRoom", "chat_room", "room"])
+        && has(d, &["nameColor", "name_color", "msgColor", "msg_color"])
+}
+
 /// Whether a line is about mail, rather than merely containing the letters.
 fn says_mail(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -1606,6 +1622,49 @@ mod tests {
     /// message below is the one that reported this, verbatim — the item is a
     /// Mana Bender's Will, and it went into `fortune_item` in the save rather
     /// than into the world.
+    /// Somebody saying "mailbox" is not mail arriving.
+    ///
+    /// All three lines are out of one capture, verbatim but for the account
+    /// numbers: three strangers in the global chat, each of whom rang the mail
+    /// chime and lit the indicator for everyone reading. Reported by a player
+    /// on Bloodpact, which has no mailbox in it.
+    #[test]
+    fn a_stranger_saying_mailbox_is_not_mail() {
+        for said in ["mail", "mailbox", "mailbox in town"] {
+            let line = json!({
+                "chatRoom": 0,
+                "language": 0,
+                "message": said,
+                "msgColor": 16777215,
+                "msgPlus": 0,
+                "msgType": 0,
+                "name": "Hior",
+                "nameColor": 7844807,
+                "platform": 0,
+                "region": 7,
+                "slot": 1,
+                "uid": 5070307
+            });
+            let events = events_from_messages(std::slice::from_ref(&line));
+            assert!(
+                !events.iter().any(|e| matches!(e, GameEvent::Mail(_))),
+                "{said:?} in chat rang the chime: {events:?}"
+            );
+        }
+
+        // and the server's own answers still do, both ways round
+        let came = json!({"message": "New mail!", "status": 1});
+        assert!(
+            matches!(events_from_messages(&[came]).first(), Some(GameEvent::Mail(true))),
+            "the server saying so is still mail"
+        );
+        let none = json!({"message": "No new mail", "status": "0"});
+        assert!(
+            matches!(events_from_messages(&[none]).first(), Some(GameEvent::Mail(false))),
+            "and so is the server saying there is none"
+        );
+    }
+
     #[test]
     fn a_quest_reward_waiting_to_be_earned_is_not_a_drop() {
         let fortune = json!({
