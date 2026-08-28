@@ -2,7 +2,7 @@
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
-  import { ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
+  import { BY_ID, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { RARITIES, soundUrl, play } from './audio.js';
   import { ALL_BUFFS } from './buffs.js';
 
@@ -15,6 +15,30 @@
   // nameless, so the list has nothing to match. Being on one of the five
   // rarities the journal keeps is what "named" actually means.
   const LISTABLE = new Set(['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy']);
+
+  // Vaults are numbered by identity rather than by a slot in a base table, so
+  // a drop of one always arrives named — which is what makes all seven
+  // listable, where an ordinary item outside the five never arrives named at
+  // all and could not fire.
+  const VAULT = 19;
+
+  // Two items can wear one name — the game calls both a Set gun and a Heroic
+  // orb "Angel" — and the seven Essence Vaults share theirs across every
+  // rarity there is. A list keyed on the name alone fires for all of them and
+  // says nothing about which dropped, so where the tables answer by identity
+  // each is offered on its own and listed as "Name (Rarity)". That spelling is
+  // what the engine matches; the bare name still means any of them.
+  const SPLIT = Object.entries(BY_ID)
+    .map(([key, [name, rarity, tier]]) => ({
+      name: `${name} (${rarity})`,
+      type: Number(key.split(':')[0]),
+      rarity,
+      tier,
+      rate: DROP_RATE[name.toLowerCase()] ?? 0,
+      key: `${name} (${rarity})`.toLowerCase(),
+    }))
+    .filter((it) => LISTABLE.has(it.rarity) || it.type === VAULT);
+
   const NAMED = [
     ...new Map(
       Object.entries(ITEMS)
@@ -31,7 +55,21 @@
           },
         ]),
     ).values(),
+    ...SPLIT,
   ].sort((a, b) => a.name.localeCompare(b.name));
+
+  /// What the tables say about one entry of a list, whichever way it is spelled.
+  const BY_ENTRY = new Map(SPLIT.map((it) => [it.key, it]));
+  const facts = (entry) => {
+    const key = entry.toLowerCase();
+    return (
+      BY_ENTRY.get(key) ?? {
+        rarity: RARITY_BY_NAME[key],
+        tier: TIER_BY_NAME[key] ?? 0,
+        rate: DROP_RATE[key] ?? 0,
+      }
+    );
+  };
 
   // what a character wears and carries. Orbs, vials, reagents and the like are
   // named too, but nobody wants a chime for a Goblin orb in a gear band — they
@@ -934,14 +972,15 @@
 
     <div class="items">
       {#each shown as name}
-        <div class="row {rarityCls[RARITY_BY_NAME[name.toLowerCase()]] ?? ''}">
-          <span class={rarityCls[RARITY_BY_NAME[name.toLowerCase()]] ?? ''}>{name}</span>
+        {@const it = facts(name)}
+        <div class="row {rarityCls[it.rarity] ?? ''}">
+          <span class={rarityCls[it.rarity] ?? ''}>{name}</span>
           {#if clashWith(name)}
             <span class="clash" title="also in {clashWith(name)}">?</span>
           {/if}
           <span class="grade">
-            <span class="letter">{tierLabel(TIER_BY_NAME[name.toLowerCase()] ?? 0)}</span>
-            <span class="odds">{odds(DROP_RATE[name.toLowerCase()] ?? 0)}</span>
+            <span class="letter">{tierLabel(it.tier)}</span>
+            <span class="odds">{odds(it.rate)}</span>
           </span>
           <button class="del" onclick={() => removeItem(name)} title="Remove" aria-label="remove">×</button>
         </div>

@@ -929,15 +929,27 @@ impl GameStats {
         self.extra_rev
     }
 
-    fn listed_sound(&self, name: &str) -> Option<String> {
+    /// Which list this drop is on, if any.
+    ///
+    /// A list holds the name the game prints, and for most items that is the
+    /// whole story. Eleven names belong to two items each, though, and the
+    /// seven Essence Vaults share one name between every rarity there is — so
+    /// a list naming a vault would fire for all seven and say nothing about
+    /// which had dropped. Where the identity answers for an item its name
+    /// cannot, the list may say so as `Essence Vault (Angelic)`, and both
+    /// spellings are matched: the bare name still means any of them.
+    fn listed_sound(&self, name: &str, known: Option<&crate::items::Known>) -> Option<String> {
         if name.is_empty() {
             return None;
         }
         let lower = name.to_lowercase();
+        let qualified = known.map(|k| format!("{lower} ({})", k.rarity.to_lowercase()));
         self.prefs
             .sound_lists
             .iter()
-            .find(|(_, names)| names.contains(&lower))
+            .find(|(_, names)| {
+                names.contains(&lower) || qualified.as_ref().is_some_and(|q| names.contains(q))
+            })
             .map(|(key, _)| key.clone())
     }
 
@@ -1440,10 +1452,13 @@ impl GameStats {
                 // names belong to two items each, and a grade read by name gave
                 // a Common relic the S of the weapon sharing its name.
                 let id = (*item_type, *item_id, *weapon_type);
+                let known = crate::parser::known_item(name, *unscaled, id);
                 let mut tier = *tier;
                 if tier == 0 && !name.is_empty() {
-                    tier = crate::parser::known_item(name, *unscaled, id)
-                        .map_or_else(|| crate::items::tier_by_name(name), |k| k.tier);
+                    tier = known.as_ref().map_or_else(
+                        || crate::items::tier_by_name(name),
+                        |k| k.tier,
+                    );
                 }
                 if !hash.is_empty() {
                     if tier > 0 {
@@ -1514,7 +1529,7 @@ impl GameStats {
                 // The other way round still means only the bag: an item nobody
                 // picks up is not something the player asked to be told about.
                 // a list the user built outranks every switch below it
-                let listed = self.listed_sound(name);
+                let listed = self.listed_sound(name, known.as_ref());
                 let listed_hit = listed.is_some();
                 let wanted = *announced || listed_hit || self.prefs.prefer_ground || !*ground;
                 let announce = *announced
@@ -2150,6 +2165,51 @@ mod tests {
         // a collectible is counted as one, and the grade columns are gear only
         assert_eq!(snap.resources["collectibles"], 1);
         assert_eq!(snap.items["Common"].total, 0);
+    }
+
+    /// A vault can be listed by the rarity it came in.
+    ///
+    /// Seven Essence Vaults share one display name, so a list naming it fired
+    /// for all seven. The packet is a pickup out of a capture — the ground
+    /// sighting of a vault is refused, `c: 0` being an ordinary base there —
+    /// with `-19` the vault type and `b` saying which of the seven.
+    #[test]
+    fn a_list_can_name_one_of_the_seven_vaults() {
+        let vault = |which: i64, sh: &str| {
+            crate::parser::events_from_messages(&[json!({
+                "status": 1,
+                "message": "Success on inventory update ext",
+                "goldAmount": 0,
+                "newHashes": {},
+                "operations": { "add": {
+                    "99-4964607-1a042be8def-19": {"a": 98768726, "b": which, "c": 0, "d": 8,
+                                                  "e": 0, "j": 0, "sh": sh}
+                }}
+            })])
+            .into_iter()
+            .next()
+            .expect("a pickup")
+        };
+
+        // named at all, which a vault was not: nothing marks it, and its type
+        // is not one the packet's own rarity would have got it named for
+        let GameEvent::ItemAdded { name, item_type, item_id, .. } = &vault(5, "a") else {
+            panic!("not an item")
+        };
+        assert_eq!((name.as_str(), *item_type, *item_id), ("Essence Vault", 19, 5));
+
+        let mut s = GameStats::default();
+        s.set_sound_lists(vec![("list-vault".into(), vec!["Essence Vault (Angelic)".into()])]);
+        let angelic = s.apply(&vault(5, "a")).expect("the one the list names");
+        assert_eq!(angelic.rarity, "Angelic");
+        assert_eq!(angelic.sound.as_deref(), Some("list-vault"));
+        assert!(s.apply(&vault(0, "b")).is_none(), "the Superior one is another item");
+
+        // the bare name still means any of them
+        s.set_sound_lists(vec![("list-any".into(), vec!["Essence Vault".into()])]);
+        let superior = s.apply(&vault(0, "c")).expect("any vault");
+        assert_eq!(superior.rarity, "Superior");
+        assert_eq!(superior.sound.as_deref(), Some("list-any"));
     }
 
     #[test]

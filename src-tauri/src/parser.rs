@@ -867,9 +867,13 @@ fn xp_gain(d: &Value) -> i64 {
 }
 
 /// The item types whose id is their identity rather than a slot in a base
-/// table: keys, collectibles, materials, socketables. `stats::RESOURCES` names
-/// the same four for the counters they feed.
-const RESOURCE_TYPES: [i64; 4] = [12, 13, 14, 15];
+/// table: keys, collectibles, materials, socketables and vaults.
+///
+/// `stats::RESOURCES` names the first four, which feed counters. A vault feeds
+/// none — it is here to be named, which is what a custom list needs to match
+/// one. Type 19 holds the seven Essence Vaults and nothing else, so `c == 0`
+/// on it is simply what a vault is.
+const SELF_NUMBERED: [i64; 5] = [12, 13, 14, 15, 19];
 
 /// What only a market message carries. See `item_sources`.
 const MARKET_FIELDS: &[&str] =
@@ -1351,7 +1355,7 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
         claimed_tier
     };
     let named_flag = int_field(obj, &["c"]) == 1;
-    let resource = RESOURCE_TYPES.contains(&item_type);
+    let resource = SELF_NUMBERED.contains(&item_type);
     let worth_naming = crate::stats::rarity_from_packet(&rarity)
         .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
     let name = if !explicit_name.is_empty() {
