@@ -786,6 +786,12 @@ export const RARITY_BY_NAME = {json.dumps(rarities, ensure_ascii=False, separato
 
 export const TIER_BY_NAME = {json.dumps(tiers, ensure_ascii=False, separators=(",", ":"))};
 
+// What an identity is, where the name it goes by says otherwise: [name, rarity,
+// grade], keyed the same way as ITEMS. Two items can wear one name — the game
+// calls both a Set gun and a Heroic orb "Angel" — and the seven Essence Vaults
+// share theirs across every rarity there is.
+export const BY_ID = {json.dumps({k: [n, r, t or 0] for k, (n, r, t) in sorted(by_id.items())}, ensure_ascii=False, separators=(",", ":"))};
+
 // how rare a named item is: "one in N", so a bigger number is a rarer drop
 export const DROP_RATE = {json.dumps(drops, ensure_ascii=False, separators=(",", ":"))};
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.3 — 2026-08-28
+
+### Added
+
+- A custom filter's list can name one Essence Vault of the seven, or either
+  Angel, spelled `Essence Vault (Angelic)`. The bare name still means any.
+
+### Fixed
+
+- An Essence Vault drop arrives named rather than nameless.
+
 ## 1.0.2 — 2026-08-28
 
 ### Fixed
