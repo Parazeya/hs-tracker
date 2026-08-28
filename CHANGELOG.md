@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.0.2 — 2026-08-28
+
+### Fixed
+
+- **Items that are not Angelic were announced as Angelic finds** ([#4]).
+  Shrunken Head is a Satanic charm and Angel a Set gun, and both came up green
+  in the journal with the Angelic chime. Neither name was in the rarity table,
+  and for a reason: eleven names belong to two items each — the charm to a
+  Common relic of the same name, the gun to a Heroic orb the game also calls
+  Angel — and a name two items disagree about was dropped rather than answered
+  wrongly. The note beside that said the packet's own claim would stand
+  instead, "which is right for both of them". It is not. Over one 45-minute
+  capture the packet's rarity field says 8 on 155,459 of 171,295 items and
+  takes four other values between them, every one of which is wrong about the
+  item carrying it; on the reporter's session it said 7, which reads as
+  Angelic.
+
+  A drop packet does not have the problem the tables do. It names the exact
+  item — `(type, id, weaponType)` — and the parser already reads that triple to
+  get the name in the first place; only the name was passed on. It is now
+  passed on whole, and the nineteen identities the name tables cannot answer
+  for are answered by it. In the same capture that is 15 finds named Angel that
+  are the Set gun, 5 that are the Heroic orb, and 23 named Justice that are the
+  Common tarot card, each told apart by the triple its own packet carried.
+
+  A find announced in the chat line still carries a name and nothing else, and
+  for the three names two of the five answer to — Angel, Essence Vault and
+  Justice — it now reads Unknown rather than taking the packet's word. Unknown
+  is a plain answer where Angelic was a wrong one.
+
+  Two things follow from the same change. Where only one claimant is one of the
+  five, that one settles the name: Shrunken Head is Satanic and Death's Scythe
+  is Set, and their grades follow the same claimant rather than the relic's.
+  And picking up the Common relic that shares one of those names no longer
+  borrows the weapon's rarity and grade — the identity says which one it is.
+
+### Added
+
+- A capture can be read back through the parser. `lib.rs` has written
+  `debug-capture.jsonl` since the beginning so that a session could be replayed
+  "when counters look wrong", and nothing ever replayed it; every check was a
+  packet built by hand. `cargo test replay_a_capture -- --ignored --nocapture`,
+  with `HS_CAPTURE` pointing at one, prints every named find with the rarity
+  and grade the counters would give it, and what the packet claimed instead.
+
+[#4]: https://github.com/Parazeya/hs-tracker/issues/4
+
 ## 1.0.1 — 2026-08-27
 
 ### Fixed

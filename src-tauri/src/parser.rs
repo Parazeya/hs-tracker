@@ -1141,7 +1141,38 @@ fn fingerprint_type(fingerprint: Option<&str>) -> Option<i64> {
 
 /// Packet rarity is unreliable (inventory syncs report Common/Rare for
 /// Satanic gear); the wiki-sourced rarity of the resolved NAME wins over it.
-pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool) -> String {
+/// What the tables know about the item a packet is announcing, where the name
+/// it goes by cannot say. See `items::BY_ID`.
+///
+/// A drop packet names the exact item — `(type, id, weaponType)` — and the
+/// naming above already reads that triple. Only the name is passed on, though,
+/// and two items can answer to one name, so the fact that the packet had said
+/// which of them this was got thrown away on the way here.
+///
+/// Only where the identity names the same item. A find announced in the chat
+/// line has no identity of its own, and the zeroes it carries are a real triple
+/// belonging to a real item. Odyssey is refused here as it is everywhere: it
+/// numbers its items in a space of its own, so a triple read on that scale is
+/// not the triple this table is keyed by.
+pub fn known_item(name: &str, unscaled: bool, id: (i64, i64, i64)) -> Option<crate::items::Known> {
+    if unscaled || name.is_empty() {
+        return None;
+    }
+    crate::items::known_by_identity(id.0, id.1, id.2)
+        .filter(|k| k.name.eq_ignore_ascii_case(name.trim()))
+}
+
+pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool, id: (i64, i64, i64)) -> String {
+    // The identity first, because it is the only exact answer here. A name is
+    // what an item goes by, and eleven of them are gone by twice: the tables
+    // below can say what "Angel" is worth only by picking one of the two items
+    // called that, and picking wrongly cost a Common relic named Shrunken Head
+    // the Satanic charm's rarity, its grade and its chime.
+    if let Some(k) = known_item(name, unscaled, id) {
+        if !k.rarity.is_empty() {
+            return k.rarity.to_string();
+        }
+    }
     // An item off a scale these tables do not read claims nothing at all.
     //
     // This used to fall out by accident: the name table held only the five
@@ -1154,7 +1185,7 @@ pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool) -> String {
     } else {
         crate::items::rarity_by_name(name)
     };
-    // A named item's grade is a fact about that item, and the tables carry it
+    // A named item's rarity is a fact about that item, and the tables carry it
     // from the game's own data. The packet does not: over the 6,617 rolls one
     // session's capture recorded, its rarity field took two values, and one of
     // them reads as "Angelic" here.
@@ -1166,6 +1197,23 @@ pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool) -> String {
     // consulted for items the tables have never heard of.
     if let Some(k) = known {
         return k.to_string();
+    }
+    // A name the tables refuse on purpose gets no answer from the packet either.
+    //
+    // Two of the five can answer to one name — the game calls both a Set gun and
+    // a Heroic orb "Angel" — and the tables drop such a name rather than pick.
+    // A drop packet is answered by its identity above; what reaches here is a
+    // find announced in the chat line, which carries the name and nothing else,
+    // and about that one there is genuinely nothing to say.
+    //
+    // The silence used to fall through to the packet, which claims Angelic for
+    // nearly everything, so a Satanic charm named Shrunken Head and a Set gun
+    // named Angel were both announced, chimed and journalled as Angelic finds.
+    // Reported as "Non-Angelics showing up as angelic items".
+    //
+    // Unknown is a plain answer. Angelic is a wrong one.
+    if crate::items::muddled(name) {
+        return "Unknown".into();
     }
     crate::stats::rarity_from_packet(packet).unwrap_or_else(|| "Unknown".into())
 }
@@ -1798,13 +1846,13 @@ mod tests {
         assert_eq!(crate::items::tier_by_name(relic), 1, "tier D");
         for claim in [json!(7), json!(10), json!(2), Value::Null] {
             assert_eq!(
-                resolve_rarity(&claim, relic, false),
+                resolve_rarity(&claim, relic, false, NO_IDENTITY),
                 "Common",
                 "a packet claiming {claim} must not outrank the tables"
             );
         }
         // and an item off a scale these tables do not read still claims nothing
-        assert_eq!(resolve_rarity(&json!(7), relic, true), "Angelic");
+        assert_eq!(resolve_rarity(&json!(7), relic, true, NO_IDENTITY), "Angelic");
     }
 
     /// The client's heartbeat, as one really arrived on 2026-08-21 — the
@@ -1980,6 +2028,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A find announced in the chat line carries a name and nothing else.
+    const NO_IDENTITY: (i64, i64, i64) = (-1, -1, -1);
+
     #[test]
     fn renamed_fields_are_recognized() {
         let cases = json!([
@@ -2104,11 +2155,280 @@ mod tests {
         assert_eq!(crate::items::rarity_by_name(ring), Some("Satanic"), "the table is right");
         assert_eq!(crate::items::tier_by_name(ring), 1, "and grades it D");
         // whatever the packet claims about it
-        assert_eq!(resolve_rarity(&json!(7), ring, false), "Satanic", "a packet claiming Angelic");
-        assert_eq!(resolve_rarity(&json!(2), ring, false), "Satanic", "and one claiming Superior");
-        assert_eq!(resolve_rarity(&Value::Null, ring, false), "Satanic", "and one claiming nothing");
+        assert_eq!(resolve_rarity(&json!(7), ring, false, NO_IDENTITY), "Satanic", "a packet claiming Angelic");
+        assert_eq!(resolve_rarity(&json!(2), ring, false, NO_IDENTITY), "Satanic", "and one claiming Superior");
+        assert_eq!(resolve_rarity(&Value::Null, ring, false, NO_IDENTITY), "Satanic", "and one claiming nothing");
         // an item the tables have never heard of still keeps what it was sent
-        assert_eq!(resolve_rarity(&json!(7), "No Such Item", false), "Angelic");
+        assert_eq!(resolve_rarity(&json!(7), "No Such Item", false, NO_IDENTITY), "Angelic");
+    }
+
+    /// Two items, one name, and both were announced as Angelic finds.
+    ///
+    /// Reported as "Non-Angelics showing up as angelic items": Shrunken Head is
+    /// a Satanic charm and Angel a Set gun. Neither was in the rarity table,
+    /// because each name is claimed by two different items — the charm and a
+    /// Common relic, the gun and a Heroic orb — and a name two items disagree
+    /// about is dropped rather than answered wrongly. The silence then fell
+    /// through to the packet, which claims Angelic for nearly everything.
+    ///
+    /// Where only one of the claimants is one of the five, that one is the
+    /// answer: a Common relic sharing a name with a Satanic charm is not a
+    /// competing claim about which of the five a find is. Where two of the five
+    /// answer to one name, a name is not enough, and the packet is refused too
+    /// — a drop packet is answered by its identity instead, below.
+    #[test]
+    fn a_name_two_items_answer_to_is_never_angelic_by_default() {
+        // settled, because only one claimant is one of the five
+        assert_eq!(crate::items::rarity_by_name("Shrunken Head"), Some("Satanic"));
+        assert_eq!(crate::items::rarity_by_name("Death's Scythe"), Some("Set"));
+        for claim in [json!(7), json!(2), Value::Null] {
+            assert_eq!(resolve_rarity(&claim, "Shrunken Head", false, NO_IDENTITY), "Satanic");
+            assert_eq!(resolve_rarity(&claim, "Death's Scythe", false, NO_IDENTITY), "Set");
+        }
+
+        // and the grade follows the same claimant, not the relic's D
+        assert_eq!(crate::items::tier_by_name("Shrunken Head"), 5, "the charm is S");
+
+        // unsettled, because the game calls both a Set gun and a Heroic orb this
+        assert!(crate::items::muddled("Angel"));
+        assert_eq!(crate::items::rarity_by_name("Angel"), None, "the table will not pick");
+        assert_eq!(
+            resolve_rarity(&json!(7), "Angel", false, NO_IDENTITY),
+            "Unknown",
+            "and the packet does not get to call it Angelic"
+        );
+
+        // an item the tables have never heard of is a different case: nothing
+        // has refused it, so what it was sent still stands
+        assert!(!crate::items::muddled("No Such Item"));
+        assert_eq!(resolve_rarity(&json!(7), "No Such Item", false, NO_IDENTITY), "Angelic");
+    }
+
+    /// The identity says which of the two a drop is, where the name cannot.
+    ///
+    /// A capture of 45 minutes of play holds 20 finds named Angel and 23 named
+    /// Justice — 15 of the Angels the Set gun and 5 the Heroic orb, told apart
+    /// by the triple every one of those packets carried.
+    #[test]
+    fn an_identity_tells_apart_two_items_of_one_name() {
+        let angel_gun = (3, 11, 14);
+        let angel_orb = (15, 116, 0);
+        let justice = (13, 30, 0);
+
+        for claim in [json!(7), json!(8), Value::Null] {
+            assert_eq!(resolve_rarity(&claim, "Angel", false, angel_gun), "Set");
+            assert_eq!(resolve_rarity(&claim, "Angel", false, angel_orb), "Heroic");
+            assert_eq!(resolve_rarity(&claim, "Justice", false, justice), "Common");
+        }
+        assert_eq!(known_item("Angel", false, angel_gun).map(|k| k.tier), Some(5));
+        assert_eq!(known_item("Angel", false, angel_orb).map(|k| k.tier), Some(6));
+
+        // and it answers for the loser of a settled name too: the relic is
+        // Common D, and took the charm's Satanic S for as long as the name
+        // alone was asked
+        let relic = (16, 28, 0);
+        assert_eq!(crate::items::rarity_by_name("Shrunken Head"), Some("Satanic"));
+        assert_eq!(resolve_rarity(&json!(7), "Shrunken Head", false, relic), "Common");
+        assert_eq!(known_item("Shrunken Head", false, relic).map(|k| k.tier), Some(1));
+        assert_eq!(resolve_rarity(&json!(7), "Shrunken Head", false, (10, 37, 0)), "Satanic");
+
+        // the identity answers for the item it names and no other. A chat-line
+        // find carries zeroes, which are Harlequinn's Crest's own triple.
+        assert!(known_item("Angel", false, (0, 0, 0)).is_none());
+        assert!(known_item("", false, angel_gun).is_none(), "a nameless base is not this");
+        assert!(known_item("Angel", true, angel_gun).is_none(), "Odyssey numbers its own");
+    }
+
+    /// Read a whole session back through the parser.
+    ///
+    /// `lib.rs` has been writing `debug-capture.jsonl` since the beginning so
+    /// that a real session could be replayed "when counters look wrong", and
+    /// until now nothing replayed it: every check here is a packet built by
+    /// hand, which proves the rule and not the traffic.
+    ///
+    /// Ignored, because it wants a file the repository does not carry. Point it
+    /// at one and read the report:
+    ///
+    ///     HS_CAPTURE=... cargo test replay_a_capture -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs a capture; see the doc comment"]
+    fn replay_a_capture() {
+        use std::collections::BTreeMap;
+        use std::io::{BufRead, BufReader};
+
+        let path = std::env::var("HS_CAPTURE").expect("set HS_CAPTURE to a capture file");
+        let file = std::fs::File::open(&path).expect("open the capture");
+        let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+        // name -> (what the tables answer, what the packet claims) -> how often
+        let mut found: BTreeMap<String, BTreeMap<(String, String), usize>> = BTreeMap::new();
+        // for the refused names: which item each of them actually was
+        let mut who: BTreeMap<String, BTreeMap<(i64, i64, i64), usize>> = BTreeMap::new();
+        let mut tiers: BTreeMap<String, i64> = BTreeMap::new();
+        // Counted, not skipped: a base with no name still lands in a rarity
+        // column, which is where a practice run once filled up with Angelic.
+        let mut nameless: BTreeMap<String, usize> = BTreeMap::new();
+        let mut lines = 0usize;
+
+        for line in BufReader::new(file).lines() {
+            let line = line.expect("read");
+            if line.trim().is_empty() {
+                continue;
+            }
+            lines += 1;
+            let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+            for event in events_from_messages(std::slice::from_ref(&value)) {
+                let kind = match &event {
+                    GameEvent::Gold(_) => "gold",
+                    GameEvent::XpGain(_) => "xp",
+                    GameEvent::ItemsLetGo(_) => "let go",
+                    GameEvent::WhoseAccount(_) => "account",
+                    GameEvent::Account { .. } => "login",
+                    GameEvent::ItemAdded { .. } => "item",
+                    GameEvent::SatanicZone { .. } => "satanic zone",
+                    _ => "other",
+                };
+                *kinds.entry(kind).or_default() += 1;
+                let GameEvent::ItemAdded {
+                    name, rarity, tier, unscaled, item_type, item_id, weapon_type, ..
+                } = &event
+                else {
+                    continue;
+                };
+                let said =
+                    resolve_rarity(rarity, name, *unscaled, (*item_type, *item_id, *weapon_type));
+                if name.is_empty() {
+                    *nameless.entry(said).or_default() += 1;
+                    continue;
+                }
+                let packet = crate::stats::rarity_from_packet(rarity)
+                    .unwrap_or_else(|| "-".into());
+                *found.entry(name.clone()).or_default().entry((said, packet)).or_default() += 1;
+                // the grade as the counters settle it, not as the packet
+                // left it: a named item's grade is never on the wire
+                let mut grade = *tier;
+                if grade == 0 {
+                    grade = known_item(name, *unscaled, (*item_type, *item_id, *weapon_type))
+                        .map_or_else(|| crate::items::tier_by_name(name), |k| k.tier);
+                }
+                tiers.insert(name.clone(), grade);
+                if crate::items::muddled(name) {
+                    *who.entry(name.clone())
+                        .or_default()
+                        .entry((*item_type, *item_id, *weapon_type))
+                        .or_default() += 1;
+                }
+            }
+        }
+
+        println!("
+{lines} lines of {path}");
+        for (kind, n) in &kinds {
+            println!("  {n:>7}  {kind}");
+        }
+        let bases: usize = nameless.values().sum();
+        println!("  {bases:>7}  of them nameless bases, which still fill a column:");
+        for (said, n) in &nameless {
+            println!("  {n:>7}    {said}");
+        }
+
+        let grade = |name: &String| {
+            ["", "D", "C", "B", "A", "S", "SS"]
+                .get(tiers[name] as usize)
+                .copied()
+                .unwrap_or("?")
+        };
+        let total = |by: &BTreeMap<(String, String), usize>| by.values().sum::<usize>();
+
+        // What the fix is for: names the tables refuse, which used to be handed
+        // to the packet, whose claim here is the one the report complained of.
+        println!("
+names the tables refuse on purpose:");
+        for (name, by) in found.iter().filter(|(n, _)| crate::items::muddled(n)) {
+            for ((said, packet), n) in by {
+                println!("  {n:>4}x  {name} -> {said} (the packet said {packet})");
+            }
+            for ((t, id, wt), n) in &who[name] {
+                println!("          {n:>4}x  as ({t}, {id}, {wt})");
+            }
+        }
+
+        // Everywhere else the two differ, the tables are the ones being trusted.
+        println!("
+where the tables and the packet disagree:");
+        let mut rows: Vec<_> = found
+            .iter()
+            .flat_map(|(name, by)| by.iter().map(move |(k, n)| (name, k, n)))
+            .filter(|(_, (said, packet), _)| said != packet && packet != "-")
+            .collect();
+        rows.sort_by_key(|(name, (said, _), n)| (said.clone(), std::cmp::Reverse(**n), (*name).clone()));
+        for (name, (said, packet), n) in &rows {
+            println!("  {n:>4}x  {said:<9} {:<2} {name} (the packet said {packet})", grade(name));
+        }
+
+        println!("
+named things, by what the tracker made of them:");
+        let mut rows: Vec<_> = found.iter().collect();
+        rows.sort_by_key(|(name, by)| {
+            let said = by.keys().next().map(|(s, _)| s.clone()).unwrap_or_default();
+            (said, std::cmp::Reverse(total(by)), (*name).clone())
+        });
+        for (name, by) in rows {
+            let said: Vec<_> = by.keys().map(|(s, _)| s.as_str()).collect();
+            println!("  {:>4}x  {:<9} {:<2} {name}", total(by), said.join("/"), grade(name));
+        }
+    }
+
+    /// The same two, through a whole packet rather than one function.
+    ///
+    /// Built on a drop packet taken out of a real capture — the shape, the
+    /// fields and the fingerprint are the server's, and only the identity is
+    /// changed: `-10` and `b: 37` is Shrunken Head, `-3` with `b: 11` and
+    /// `j: 14` is Angel. `d: 7` is the packet claiming Angelic, which is what
+    /// it claims for nearly everything — over one session it says 8 on 155,459
+    /// of 171,295 items, and the four other values it takes there are wrong
+    /// about the item every time.
+    #[test]
+    fn a_real_drop_packet_named_by_two_items_is_not_announced_as_angelic() {
+        let dropped = |fingerprint: &str, id: i64, wt: i64| {
+            json!({
+                "status": 1,
+                "message": "ok",
+                "itemGenHash": "abc",
+                "operationTime": 1,
+                "itemData": {
+                    fingerprint: {"a": 61067529, "b": id, "c": 1, "d": 7, "e": 0,
+                                  "gd": {"pos": [11, 0]}, "j": wt, "sh": "ecc3352481d6"}
+                }
+            })
+        };
+        // exactly what the counters are handed, identity and all
+        let found = |packet: Value| {
+            events_from_messages(&[packet]).into_iter().find_map(|e| match e {
+                GameEvent::ItemAdded { name, rarity, item_type, item_id, weapon_type, .. } => {
+                    Some((rarity, name, (item_type, item_id, weapon_type)))
+                }
+                _ => None,
+            })
+        };
+
+        let (rarity, name, id) = found(dropped("7-4964607-65a04f84c51d80001-10", 37, 0))
+            .expect("a named drop");
+        assert_eq!(name, "Shrunken Head");
+        assert_eq!(
+            resolve_rarity(&rarity, &name, false, id),
+            "Satanic",
+            "the charm, not the relic that shares its name"
+        );
+
+        let (rarity, name, id) = found(dropped("7-4964607-65a04f84c51d80001-3", 11, 14))
+            .expect("a named drop");
+        assert_eq!(name, "Angel");
+        assert_eq!(id, (3, 11, 14), "the packet said which Angel this is");
+        assert_eq!(
+            resolve_rarity(&rarity, &name, false, id),
+            "Set",
+            "the gun, and not the Angelic the packet claimed"
+        );
     }
 
     /// Refusing the packet's rarity must not cost a resource its name: the dull
@@ -2231,7 +2551,7 @@ mod tests {
         });
         let events = events_from_messages(std::slice::from_ref(&odyssey));
         let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
-        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Unknown", "its scale is not ours to read");
+        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Unknown", "its scale is not ours to read");
 
         // the seasonal shape of the same capture keeps working
         let seasonal = json!({
@@ -2243,7 +2563,7 @@ mod tests {
         });
         let events = events_from_messages(std::slice::from_ref(&seasonal));
         let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
-        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Superior");
+        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Superior");
     }
 
     #[test]
@@ -2259,7 +2579,7 @@ mod tests {
         let events = events_from_messages(std::slice::from_ref(&payload));
         let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
         assert_eq!(name, "", "an ordinary base is nameless; the table knows only uniques");
-        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Superior", "and it keeps the rarity it was sent with");
+        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Superior", "and it keeps the rarity it was sent with");
 
         // the same slot, flagged by the game as a named item, still resolves
         let named = json!({
@@ -2270,7 +2590,7 @@ mod tests {
         let events = events_from_messages(std::slice::from_ref(&named));
         let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
         assert_eq!(name, "Gold Inlaid Mysterious Potion");
-        assert_eq!(resolve_rarity(rarity, name, *unscaled), "Angelic");
+        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Angelic");
     }
 
     #[test]

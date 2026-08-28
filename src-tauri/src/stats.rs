@@ -1436,9 +1436,14 @@ impl GameStats {
                 // ever carries two different grades. Ordinary bases do — they
                 // arrive at every grade from 1 to 6, and at 6666 — which is why
                 // this stays a fallback rather than becoming an override.
+                // The identity first, where the name alone cannot say: eleven
+                // names belong to two items each, and a grade read by name gave
+                // a Common relic the S of the weapon sharing its name.
+                let id = (*item_type, *item_id, *weapon_type);
                 let mut tier = *tier;
                 if tier == 0 && !name.is_empty() {
-                    tier = crate::items::tier_by_name(name);
+                    tier = crate::parser::known_item(name, *unscaled, id)
+                        .map_or_else(|| crate::items::tier_by_name(name), |k| k.tier);
                 }
                 if !hash.is_empty() {
                     if tier > 0 {
@@ -1450,7 +1455,7 @@ impl GameStats {
                         self.tier_seen.clear();
                     }
                 }
-                let rarity_key = crate::parser::resolve_rarity(rarity, name, *unscaled);
+                let rarity_key = crate::parser::resolve_rarity(rarity, name, *unscaled, id);
                 let is_resource =
                     RESOURCES.iter().any(|(t, _)| t == item_type) || is_container(name);
                 // A sighting counts once, whichever of the two got here first:
@@ -2104,6 +2109,47 @@ mod tests {
         assert_eq!(snap.items["Satanic"].total, 3);
         assert_eq!(snap.items["Satanic"].mf, 1);
         assert_eq!(s.extra().drops.len(), 3);
+    }
+
+    /// A real drop packet, all the way to the line the journal shows.
+    ///
+    /// `resolve_rarity` is checked on its own in `parser`, and the counters
+    /// were never checked against a packet at all — which is how a Set gun
+    /// reached the journal green and chiming as an Angelic find. The shape and
+    /// the fingerprint are the server's, out of a capture; `-3` with `b: 11`
+    /// and `j: 14` is Angel the Set gun, `-13` with `b: 30` is Justice the
+    /// tarot card, and `d: 7` is the packet calling both of them Angelic.
+    #[test]
+    fn a_drop_reaches_the_journal_as_the_item_it_is() {
+        let dropped = |fingerprint: &str, id: i64, wt: i64, sh: &str| {
+            crate::parser::events_from_messages(&[json!({
+                "status": 1,
+                "message": "ok",
+                "itemGenHash": "abc",
+                "operationTime": 1,
+                "itemData": {
+                    fingerprint: {"a": 61067529, "b": id, "c": 1, "d": 7, "e": 0,
+                                  "gd": {"pos": [11, 0]}, "j": wt, "sh": sh}
+                }
+            })])
+        };
+
+        let mut s = GameStats::default();
+        let gun = s.apply(&dropped("7-4964607-65a04f84c51d80001-3", 11, 14, "ecc3352481d6")[0]);
+        let gun = gun.expect("a Set find is worth announcing");
+        assert_eq!((gun.name.as_str(), gun.rarity.as_str(), gun.tier), ("Angel", "Set", 5));
+
+        // the card shares that name with nothing but a Heroic orb, and is
+        // neither: it is a Common the journal has no reason to announce
+        let card = s.apply(&dropped("7-4964607-65a04f84c51d80002-13", 30, 0, "b0a1c2d3e4f5")[0]);
+        assert!(card.is_none(), "a Common tarot card is not news");
+
+        let snap = s.snapshot(String::new());
+        assert_eq!(snap.items["Set"].total, 1);
+        assert_eq!(snap.items["Angelic"].total, 0, "which is what the packet claimed for both");
+        // a collectible is counted as one, and the grade columns are gear only
+        assert_eq!(snap.resources["collectibles"], 1);
+        assert_eq!(snap.items["Common"].total, 0);
     }
 
     #[test]

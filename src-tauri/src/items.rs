@@ -1462,7 +1462,7 @@ static ITEMS: [(u32, &str); 1456] = [
     (318768640, "Essence Vault"),
 ];
 
-static RARITY_BY_NAME: [(&str, &str); 1702] = [
+static RARITY_BY_NAME: [(&str, &str); 1704] = [
     ("1000 kg", "Common"),
     ("a wizard's hat", "Common"),
     ("aaron's staff", "Common"),
@@ -1832,6 +1832,7 @@ static RARITY_BY_NAME: [(&str, &str); 1702] = [
     ("death's grasp", "Set"),
     ("death's infernal sigil", "Common"),
     ("death's mirror", "Satanic"),
+    ("death's scythe", "Set"),
     ("death's sigil", "Common"),
     ("death's soulgem", "Common"),
     ("deathquill", "Heroic"),
@@ -2750,6 +2751,7 @@ static RARITY_BY_NAME: [(&str, &str); 1702] = [
     ("shredder", "Common"),
     ("shroud of elements", "Runeword"),
     ("shroud of enigma", "Runeword"),
+    ("shrunken head", "Satanic"),
     ("sidewinder", "Heroic"),
     ("siege breakers", "Satanic"),
     ("sight of the gods", "Heroic"),
@@ -3167,7 +3169,7 @@ static RARITY_BY_NAME: [(&str, &str); 1702] = [
     ("zombie's face", "Common"),
 ];
 
-static TIER_BY_NAME: [(&str, u8); 1696] = [
+static TIER_BY_NAME: [(&str, u8); 1698] = [
     ("1000 kg", 1),
     ("a wizard's hat", 1),
     ("aaron's staff", 1),
@@ -3536,6 +3538,7 @@ static TIER_BY_NAME: [(&str, u8); 1696] = [
     ("death's grasp", 5),
     ("death's infernal sigil", 3),
     ("death's mirror", 6),
+    ("death's scythe", 5),
     ("death's sigil", 3),
     ("death's soulgem", 5),
     ("deathquill", 6),
@@ -4450,6 +4453,7 @@ static TIER_BY_NAME: [(&str, u8); 1696] = [
     ("shredder", 1),
     ("shroud of elements", 3),
     ("shroud of enigma", 3),
+    ("shrunken head", 5),
     ("sidewinder", 6),
     ("siege breakers", 4),
     ("sight of the gods", 6),
@@ -4866,17 +4870,92 @@ static TIER_BY_NAME: [(&str, u8); 1696] = [
     ("zombie's face", 1),
 ];
 
+/// Names two of the five answer to, which nothing but an identity could
+/// tell apart — the game calls both a Set gun and a Heroic orb "Angel".
+///
+/// Written out because the silence about them is deliberate, and what
+/// filled it before was worse: `resolve_rarity` fell through to the
+/// packet, whose rarity field takes two values over a whole session and
+/// one of them reads as Angelic.
+static MUDDLED: [&str; 3] = [
+    "angel",
+    "essence vault",
+    "justice",
+];
+
+/// What an identity is, where the name it goes by says otherwise.
+///
+/// The tables above are keyed by name because a find announced in the chat
+/// line carries a name and nothing else. A drop packet is not so poor: it
+/// names the exact item, and the parser reads that triple to get the name
+/// in the first place. So the two items sharing one name, which no name
+/// table can tell apart, are told apart here.
+///
+/// Name, rarity, then grade — the name so a caller can check that the
+/// identity and the name it was handed mean the same item.
+static BY_ID: [(u32, &str, &str, u8); 19] = [
+    (50334478, "Angel", "Set", 5),
+    (184550400, "Minor Mana Potion", "Common", 3),
+    (184550912, "Mana Potion", "Common", 3),
+    (184554752, "Superior Mana Potion", "Common", 3),
+    (184555008, "Colossal Mana Potion", "Common", 3),
+    (218105600, "Satan's Horn", "Common", 3),
+    (218111488, "Justice", "Common", 6),
+    (251687936, "Angel", "Heroic", 6),
+    (268442624, "Shrunken Head", "Common", 1),
+    (268448512, "Dirge", "Common", 1),
+    (268450816, "Death's Scythe", "Common", 1),
+    (268460288, "Satan's Horn", "Common", 1),
+    (318767104, "Essence Vault", "Superior", 1),
+    (318767360, "Essence Vault", "Rare", 2),
+    (318767616, "Essence Vault", "Mythic", 3),
+    (318767872, "Essence Vault", "Satanic", 4),
+    (318768128, "Essence Vault", "Heroic", 5),
+    (318768384, "Essence Vault", "Angelic", 6),
+    (318768640, "Essence Vault", "Unholy", 6),
+];
+
+/// What the tables know about one item.
+pub struct Known {
+    pub name: &'static str,
+    pub rarity: &'static str,
+    /// 1 = D .. 6 = SS.
+    pub tier: i64,
+}
+
+/// What an identity is, for the few whose name cannot say. See BY_ID.
+pub fn known_by_identity(item_type: i64, id: i64, weapon_type: i64) -> Option<Known> {
+    let by = |wt| {
+        packed(item_type, id, wt)
+            .and_then(|key| BY_ID.binary_search_by_key(&key, |(k, ..)| *k).ok())
+            .map(|i| BY_ID[i])
+    };
+    let (_, name, rarity, tier) = by(weapon_type).or_else(|| by(0))?;
+    Some(Known { name, rarity, tier: tier as i64 })
+}
+
 /// Item name by identity; falls back to the weapon-type-agnostic key.
 pub fn item_name(item_type: i64, id: i64, weapon_type: i64) -> Option<&'static str> {
     lookup(item_type, id, weapon_type).or_else(|| lookup(item_type, id, 0))
 }
 
 fn lookup(item_type: i64, id: i64, weapon_type: i64) -> Option<&'static str> {
+    let key = packed(item_type, id, weapon_type)?;
+    ITEMS.binary_search_by_key(&key, |(k, _)| *k).ok().map(|i| ITEMS[i].1)
+}
+
+/// The identity triple as the tables key it, or None if it is not one.
+fn packed(item_type: i64, id: i64, weapon_type: i64) -> Option<u32> {
     if !(0..256).contains(&item_type) || !(0..65536).contains(&id) || !(0..256).contains(&weapon_type) {
         return None;
     }
-    let key = ((item_type as u32) << 24) | ((id as u32) << 8) | weapon_type as u32;
-    ITEMS.binary_search_by_key(&key, |(k, _)| *k).ok().map(|i| ITEMS[i].1)
+    Some(((item_type as u32) << 24) | ((id as u32) << 8) | weapon_type as u32)
+}
+
+/// Whether the tables refuse this name on purpose. See MUDDLED.
+pub fn muddled(name: &str) -> bool {
+    let key = name.trim().to_lowercase();
+    MUDDLED.binary_search(&key.as_str()).is_ok()
 }
 
 /// Rarity of a named item; names are matched lowercased.
