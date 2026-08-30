@@ -7,12 +7,13 @@ import heroicWav from './assets/sounds/heroic.wav';
 import angelicWav from './assets/sounds/angelic.wav';
 import unholyWav from './assets/sounds/unholy.wav';
 import mailWav from './assets/sounds/mail.wav';
+import relicWav from './assets/sounds/relic.wav';
 import zoneMp3 from './assets/sounds/zone.mp3';
 
 /// Every key that owns a sound of its own. Two of them are not rarities at all
 /// — the mail chime and the satanic zone rotating — and they are on this list
 /// because everything that loads, tests or replaces a sound walks it.
-export const RARITIES = ['satanic', 'set', 'heroic', 'angelic', 'unholy', 'mail', 'zone'];
+export const RARITIES = ['satanic', 'set', 'heroic', 'angelic', 'unholy', 'mail', 'zone', 'relic'];
 
 export const DEFAULTS = {
   satanic: satanicWav,
@@ -26,6 +27,11 @@ export const DEFAULTS = {
   // where on the screen something happened. Browse… puts any other file over
   // it, as for every key here.
   zone: zoneMp3,
+  // A relic gets a chime of its own. It borrowed the mail one at first, for
+  // want of anything better — every relic in the game is Common, so there was
+  // no rarity sound to take — and a borrowed chime meant a relic and a letter
+  // arriving sounded the same. Browse… replaces it like any other key.
+  relic: relicWav,
 };
 
 // A custom file beside the exe wins over the built-in chime. It is streamed

@@ -56,6 +56,11 @@ const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "ma
 /// an SS could never have been anything but this.
 const GEAR: [i64; 11] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 18];
 
+/// The relic type. Relics are not gear and not a resource — they reach no
+/// counter at all — so this is here for the one thing that asks about them:
+/// whether a drop is a relic the player ticked. See `hunted_relic`.
+const RELIC: i64 = 16;
+
 /// Containers, which carry a real rarity and are worth keeping in the tables —
 /// the game shows an Angelic Vault in gold and a Superior one in blue — but
 /// which nobody wants a chime for. They come in seven rarities under one
@@ -432,6 +437,63 @@ pub struct GameStats {
     extra_rev: u64,
 }
 
+/// One list of the active custom filter, ready to be matched against a drop.
+///
+/// Two ways of saying which items it holds, and a drop is on the list if
+/// EITHER answers. Names came first and still carry the ordinary case; rules
+/// arrived with the category picker, where writing out "every Satanic helmet"
+/// as 36 names would have frozen today's table into the settings file.
+pub struct Listed {
+    /// the sound key, `list-<id>`
+    pub key: String,
+    /// item names, lowercased; see `listed_sound` for the qualified spelling
+    pub names: Vec<String>,
+    pub rules: Vec<Rule>,
+}
+
+/// A whole category on a list: every item of a rarity, of a type, or of both.
+///
+/// It is matched against the drop itself rather than expanded into names, and
+/// that is the point of it. The item tables ship inside the binary, so a list
+/// of names written out today would go on meaning today's table after an
+/// update added items to the category — the player ticked "every Satanic
+/// helmet" and would get every Satanic helmet the app knew in August. Asking
+/// the question of the drop keeps the answer current, and it costs nothing:
+/// the rarity, the type and the weapon type are all in hand at the one place
+/// the decision is made.
+///
+/// `None` is "any", on every field. A rule with all three None matches every
+/// named drop there is, which is not a category — `apply_stats_settings`
+/// refuses it rather than letting one silently swallow the whole game.
+#[derive(Clone, Default)]
+pub struct Rule {
+    /// lowercased, against the rarity the TABLES give the item — not the one
+    /// the packet claims. See `listed_sound` for why those are two vocabularies.
+    pub rarity: Option<String>,
+    pub item_type: Option<i64>,
+    /// the weapon type inside item type 3; ignored without an item type
+    pub weapon: Option<i64>,
+}
+
+impl Rule {
+    fn matches(&self, rarity: Option<&str>, item_type: i64, weapon_type: i64) -> bool {
+        if let Some(want) = self.rarity.as_deref() {
+            if rarity != Some(want) {
+                return false;
+            }
+        }
+        if let Some(want) = self.item_type {
+            if want != item_type {
+                return false;
+            }
+            if self.weapon.is_some_and(|w| w != weapon_type) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Everything the player chose, as against everything the session earned.
 ///
 /// It is one struct so that a reset cannot mislay a piece of it. These were
@@ -454,11 +516,17 @@ pub struct Prefs {
     /// announce anything the custom filter's lists match, whatever its rarity
     pub fx_listed: bool,
     pub notable_defs: Vec<(String, Vec<String>)>,
-    /// (sound key, item names) — an item on one of these is announced by it
-    pub sound_lists: Vec<(String, Vec<String>)>,
+    /// The custom lists, in the order the player put them in — an item matched
+    /// by one is announced by it, and the FIRST that matches wins. The order is
+    /// the whole reason this is a Vec and not a map.
+    pub sound_lists: Vec<Listed>,
     /// Satanic zone buffs worth an alert. Empty means every rotation — see
     /// `take_zone_change`.
     pub zone_buffs: Vec<u8>,
+    /// Which relics are hunted, by id-in-type. Empty means NONE, the opposite
+    /// of `zone_buffs` above: that list narrows an alert the game already
+    /// makes, this one is the whole alert. See `hunted_relic`.
+    pub relics: Vec<u16>,
 }
 
 impl Default for Prefs {
@@ -474,6 +542,8 @@ impl Default for Prefs {
             sound_lists: Vec::new(),
             // every rotation, until the player narrows it
             zone_buffs: Vec::new(),
+            // and no relic at all, until the player picks one
+            relics: Vec::new(),
         }
     }
 }
@@ -938,19 +1008,76 @@ impl GameStats {
     /// which had dropped. Where the identity answers for an item its name
     /// cannot, the list may say so as `Essence Vault (Angelic)`, and both
     /// spellings are matched: the bare name still means any of them.
-    fn listed_sound(&self, name: &str, known: Option<&crate::items::Known>) -> Option<String> {
+    ///
+    /// A list may also hold a whole category as a `Rule`, and a drop is on the
+    /// list if either the names or a rule answers. The rarity a rule is asked
+    /// about is the one the TABLES give this item, identity first: the packet's
+    /// ten-value scale is a different vocabulary — it has no Runeword and its
+    /// `Common` is not the tables' — and a rule the player built from a list of
+    /// rarities on the screen must be answered in the vocabulary that screen
+    /// used. Identity before name because the name lies for eleven items:
+    /// `Shrunken Head` is a Satanic charm by name and a Common relic by
+    /// identity, and only one of them should answer to "every Satanic charm".
+    fn listed_sound(
+        &self,
+        name: &str,
+        known: Option<&crate::items::Known>,
+        item_type: i64,
+        weapon_type: i64,
+    ) -> Option<String> {
         if name.is_empty() {
             return None;
         }
         let lower = name.to_lowercase();
         let qualified = known.map(|k| format!("{lower} ({})", k.rarity.to_lowercase()));
+        // Only looked up when some list actually holds a category. Every named
+        // drop passes through here and most filters have no rules at all;
+        // `to_lowercase` allocates, and this is the hot path.
+        let rarity = self
+            .prefs
+            .sound_lists
+            .iter()
+            .any(|l| !l.rules.is_empty())
+            .then(|| {
+                known
+                    .map(|k| k.rarity)
+                    .or_else(|| crate::items::rarity_by_name(name))
+                    .map(str::to_lowercase)
+            })
+            .flatten();
         self.prefs
             .sound_lists
             .iter()
-            .find(|(_, names)| {
-                names.contains(&lower) || qualified.as_ref().is_some_and(|q| names.contains(q))
+            .find(|l| {
+                l.names.contains(&lower)
+                    || qualified.as_ref().is_some_and(|q| l.names.contains(q))
+                    || l.rules.iter().any(|r| {
+                        r.matches(rarity.as_deref(), item_type, weapon_type)
+                    })
             })
-            .map(|(key, _)| key.clone())
+            .map(|l| l.key.clone())
+    }
+
+    /// Whether this drop is a relic the player is hunting.
+    ///
+    /// By identity, and it has to be by identity: all 156 relics are Common, so
+    /// the rarity a list can qualify a name with says nothing here, and three
+    /// relic names belong to another item as well — `Shrunken Head` to a
+    /// Satanic charm, `Death's Scythe` to a Set polearm, `Satan's Horn` to a
+    /// Common collectible. The last of those shares the rarity too, so no
+    /// spelling of the name, qualified or bare, could ever tell the two apart.
+    /// `resolve_rarity` records what picking by name cost the first of them.
+    ///
+    /// It answers into the same slot `listed_sound` does rather than beside it,
+    /// so a hunted relic travels the one path everything else travels — it is
+    /// wanted, it announces, it reaches the journal, and it takes the flourish
+    /// where a listed item would. Two questions, one decision point.
+    fn hunted_relic(&self, item_type: i64, item_id: i64) -> Option<String> {
+        if item_type != RELIC || self.prefs.relics.is_empty() {
+            return None;
+        }
+        let id = u16::try_from(item_id).ok()?;
+        self.prefs.relics.contains(&id).then(|| "relic".to_string())
     }
 
     /// Every setting at once.
@@ -993,13 +1120,22 @@ impl GameStats {
 
     #[cfg(test)]
     pub fn set_sound_lists(&mut self, lists: Vec<(String, Vec<String>)>) {
-        self.revision += 1;
-        self.prefs.sound_lists = lists
+        let lists = lists
             .into_iter()
-            .map(|(key, names)| {
-                (key, names.into_iter().map(|n| n.trim().to_lowercase()).collect())
+            .map(|(key, names)| Listed {
+                key,
+                names: names.into_iter().map(|n| n.trim().to_lowercase()).collect(),
+                rules: Vec::new(),
             })
             .collect();
+        self.set_listed(lists);
+    }
+
+    /// The same, for the tests that care about rules or about which list wins.
+    #[cfg(test)]
+    pub fn set_listed(&mut self, lists: Vec<Listed>) {
+        self.revision += 1;
+        self.prefs.sound_lists = lists;
     }
 
     fn count_notable(&mut self, name: &str, amount: i64) {
@@ -1529,7 +1665,9 @@ impl GameStats {
                 // The other way round still means only the bag: an item nobody
                 // picks up is not something the player asked to be told about.
                 // a list the user built outranks every switch below it
-                let listed = self.listed_sound(name, known.as_ref());
+                let listed = self
+                    .listed_sound(name, known.as_ref(), *item_type, *weapon_type)
+                    .or_else(|| self.hunted_relic(*item_type, *item_id));
                 let listed_hit = listed.is_some();
                 let wanted = *announced || listed_hit || self.prefs.prefer_ground || !*ground;
                 let announce = *announced
@@ -2652,6 +2790,160 @@ mod tests {
         assert_eq!(plain.sound.as_deref(), Some("heroic"), "still the rarity's sound");
     }
 
+    /// A category on a list matches by what the item IS, not by a list of names.
+    ///
+    /// The whole reason rules exist: writing "every Satanic helmet" out as the
+    /// 36 names the tables hold today would freeze August's table into the
+    /// settings file, and the 37th Satanic helmet an update adds would fall in
+    /// silence on a list the player believes says "every Satanic helmet".
+    #[test]
+    fn a_rule_puts_a_whole_category_on_a_list() {
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        // nothing armed by rarity, so only the list can speak
+        s.set_filter(vec![], 6);
+        s.set_listed(vec![Listed {
+            key: "list-helms".into(),
+            names: Vec::new(),
+            rules: vec![Rule {
+                rarity: Some("satanic".into()),
+                item_type: Some(0),
+                weapon: None,
+            }],
+        }]);
+        let drop = |name: &str, item_type: i64, item_id: i64, weapon_type: i64, hash: &str| {
+            GameEvent::ItemAdded {
+                rarity: json!(6), // Satanic
+                unscaled: false,
+                mf: false,
+                tier: 0,
+                item_type,
+                item_id,
+                weapon_type,
+                seed: 1,
+                name: name.into(),
+                announced: false,
+                amount: 1,
+                fingerprint: String::new(),
+                hash: hash.into(),
+                ground: true,
+            }
+        };
+
+        let helm = s.apply(&drop("Harlequinn's Crest", 0, 0, 0, "a")).expect("a Satanic helmet");
+        assert_eq!(helm.sound.as_deref(), Some("list-helms"), "the rule put it on the list");
+
+        // The same rarity, the wrong type.
+        assert!(
+            s.apply(&drop("Godfather", 3, 0, 1, "b")).is_none(),
+            "a Satanic sword is not a Satanic helmet"
+        );
+        // The right type, the wrong rarity.
+        assert!(
+            s.apply(&drop("Uabel's Helmet", 0, 7, 0, "c")).is_none(),
+            "a Set helmet is not a Satanic one"
+        );
+    }
+
+    /// The order of the lists is the priority, whichever way each one is written.
+    ///
+    /// The "earlier list wins" rule was a search through the names of each list
+    /// in turn. With rules beside the names it is still one search through the
+    /// lists in turn — not names first and rules afterwards, which would have
+    /// let a later list's name quietly outrank an earlier list's category.
+    #[test]
+    fn the_earlier_list_wins_whether_it_says_a_name_or_a_category() {
+        let drop = || GameEvent::ItemAdded {
+            rarity: json!(6),
+            unscaled: false,
+            mf: false,
+            tier: 0,
+            item_type: 0,
+            item_id: 0,
+            weapon_type: 0,
+            seed: 1,
+            name: "Harlequinn's Crest".into(),
+            announced: false,
+            amount: 1,
+            fingerprint: String::new(),
+            hash: "one".into(),
+            ground: true,
+        };
+        let category = || Listed {
+            key: "list-category".into(),
+            names: Vec::new(),
+            rules: vec![Rule { rarity: Some("satanic".into()), item_type: Some(0), weapon: None }],
+        };
+        let by_name = || Listed {
+            key: "list-name".into(),
+            names: vec!["harlequinn's crest".into()],
+            rules: Vec::new(),
+        };
+
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_listed(vec![category(), by_name()]);
+        assert_eq!(
+            s.apply(&drop()).and_then(|d| d.sound).as_deref(),
+            Some("list-category"),
+            "the category is first, so the category sounds"
+        );
+
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_listed(vec![by_name(), category()]);
+        assert_eq!(
+            s.apply(&drop()).and_then(|d| d.sound).as_deref(),
+            Some("list-name"),
+            "the name is first, so the name sounds"
+        );
+    }
+
+    /// A rule asks the tables what the item is, and the identity answers first.
+    ///
+    /// `Shrunken Head` is two items: a Satanic charm at 10:37:0 and a Common
+    /// relic at 16:28:0. Reading the rarity off the name alone would have put
+    /// the relic in "every Satanic charm" — the very mistake `resolve_rarity`
+    /// records having cost that relic its own chime once already.
+    #[test]
+    fn a_rule_reads_the_identity_before_the_name_it_shares() {
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_filter(vec![], 6);
+        s.set_listed(vec![Listed {
+            key: "list-charms".into(),
+            names: Vec::new(),
+            rules: vec![Rule { rarity: Some("satanic".into()), item_type: Some(10), weapon: None }],
+        }]);
+
+        let charm = s
+            .apply(&GameEvent::ItemAdded {
+                rarity: json!(6),
+                unscaled: false,
+                mf: false,
+                tier: 0,
+                item_type: 10,
+                item_id: 37,
+                weapon_type: 0,
+                seed: 1,
+                name: "Shrunken Head".into(),
+                announced: false,
+                amount: 1,
+                fingerprint: String::new(),
+                hash: "charm".into(),
+                ground: true,
+            })
+            .expect("the Satanic charm is in the category");
+        assert_eq!(charm.sound.as_deref(), Some("list-charms"));
+
+        // The relic of the same name. It arrives nameless, as every relic does,
+        // and a rule needs a name before it will look at anything.
+        assert!(
+            s.apply(&relic(28, "relic28", true)).is_none(),
+            "the Common relic sharing that name is not a Satanic charm"
+        );
+    }
+
     #[test]
     fn a_list_outranks_the_rarity_alerts() {
         let mut s = GameStats::default();
@@ -3612,6 +3904,157 @@ mod tests {
             s.take_zone_change().is_some(),
             "the same room with a different set on it is a new rotation, and under a              filter that alerts on the buffs it is exactly the one worth hearing"
         );
+    }
+
+    /// One relic sighting, as the parser now hands it over: nameless, type 16,
+    /// and carrying the packet rarity the capture actually shows.
+    fn relic(id: i64, hash: &str, ground: bool) -> GameEvent {
+        GameEvent::ItemAdded {
+            // `d: 9` on the wire, which reads as "Heroic" in the rarity table.
+            // The parser nulls it because no `c == 0` base can be Heroic — that
+            // is what keeps 459 of the 1,652 relic sightings out of the Heroic
+            // column and out of the chime.
+            rarity: Value::Null,
+            unscaled: false,
+            mf: false,
+            tier: 0,
+            item_type: 16,
+            item_id: id,
+            weapon_type: 0,
+            seed: 24533420,
+            name: String::new(),
+            announced: false,
+            amount: 1,
+            fingerprint: format!("99-4964607-{hash}-16"),
+            hash: hash.into(),
+            ground,
+        }
+    }
+
+    /// A relic nobody ticked is silent, and one that was ticked chimes once.
+    ///
+    /// The silence half is the half that protects a shipping install: relics
+    /// drop 43 times an hour in the owner's own capture — one every 83 seconds
+    /// — so letting them off the floor must change nothing at all until a relic
+    /// is picked. They reach no counter and no chime because their rarity comes
+    /// out "Unknown", which is on none of the five alert lists.
+    #[test]
+    fn a_relic_is_silent_until_it_is_hunted() {
+        let mut s = GameStats::default();
+        assert!(s.prefs.relics.is_empty(), "nothing hunted out of the box");
+        let quiet = s.apply(&relic(127, "8b5bdb8ad9be", true));
+        assert!(
+            quiet.is_none_or(|d| d.sound.is_none()),
+            "an unticked relic passes in silence, however many of them fall"
+        );
+        // And moves nothing a player reads. This is the half that protects a
+        // shipping install: 827 relic drops appeared out of nowhere the moment
+        // the floor was opened to them, and if any of those had landed in a
+        // rarity column or a grade column the panel would have started lying.
+        // They cannot, because a relic resolves to no journal rarity and is not
+        // gear — but "cannot" is what the `d == 9` reading of "Heroic" also
+        // looked like, so it is asserted rather than argued.
+        let snap = s.snapshot(String::new());
+        for (rarity, count) in &snap.items {
+            assert_eq!(count.total, 0, "{rarity} moved on a relic drop");
+        }
+        assert_eq!(snap.ss, 0, "and the SS figure a run is judged on did not move");
+        assert!(s.graded.is_empty(), "nor any grade column behind it");
+        assert!(s.extra().drops.is_empty(), "and nothing reached the drop feed");
+
+        // Now hunt it. A fresh engine, because the first sighting is already
+        // counted against that hash.
+        let mut s = GameStats::default();
+        s.prefs.relics = vec![127];
+        let hit = s.apply(&relic(127, "8b5bdb8ad9be", true)).expect("a hunted relic is announced");
+        assert_eq!(hit.sound.as_deref(), Some("relic"), "and it chimes on its own key");
+        // The chime is not the whole alert: the drop feed is where a player
+        // looks to see WHICH relic it was, and the entry carries no name, so
+        // the windows read it off the identity. `item_name` is what they call.
+        let journal = s.extra().drops;
+        assert_eq!(journal.len(), 1, "and it reaches the drop feed");
+        assert_eq!((journal[0].item_type, journal[0].item_id), (16, 127));
+        assert_eq!(crate::items::item_name(16, 127, 0), Some("Jungle Vial"), "which is how it is named there");
+
+        // The pickup that follows carries the same hash, so it is the same
+        // item and must not chime again — the rule every other drop obeys.
+        let picked = s.apply(&relic(127, "8b5bdb8ad9be", false));
+        assert!(picked.is_none_or(|d| d.sound.is_none()), "one relic, one chime");
+
+        // A different relic on the same list-less engine stays quiet: ticking
+        // one is not ticking the type.
+        let other = s.apply(&relic(134, "cc808046c7c7", true));
+        assert!(other.is_none_or(|d| d.sound.is_none()), "relic 134 was not ticked");
+    }
+
+    /// The relic pick is the OPPOSITE way round to the zone-buff pick above it
+    /// in the settings, and this is the test that says so.
+    ///
+    /// `zone_buffs` narrows an alert the game already makes, so an empty list
+    /// lets every rotation through. `relics` IS the alert, so an empty list is
+    /// silence. The two sit one section apart on the same panel; a reader who
+    /// carries the first rule to the second gets it exactly backwards, which is
+    /// why both screens say what their empty state means in words.
+    #[test]
+    fn an_empty_relic_pick_is_silence_where_an_empty_buff_pick_is_everything() {
+        let mut s = GameStats::default();
+        s.prefs.relics = Vec::new();
+        for (i, id) in [0, 55, 127, 155].into_iter().enumerate() {
+            let hash = format!("hash{i}");
+            let d = s.apply(&relic(id, &hash, true));
+            assert!(d.is_none_or(|d| d.sound.is_none()), "relic {id}: an empty pick hunts nothing");
+        }
+
+        s.prefs.relics = vec![0, 155];
+        assert_eq!(
+            s.apply(&relic(0, "edge-low", true)).and_then(|d| d.sound).as_deref(),
+            Some("relic"),
+            "id 0 is a real relic and must not be read as 'no relic'"
+        );
+        assert_eq!(
+            s.apply(&relic(155, "edge-high", true)).and_then(|d| d.sound).as_deref(),
+            Some("relic"),
+            "155 is the last id the table holds"
+        );
+    }
+
+    /// Ticking a relic must not change what a list already on disk matches.
+    ///
+    /// Three relic names belong to another item too — `Shrunken Head` to a
+    /// Satanic charm, `Death's Scythe` to a Set polearm, `Satan's Horn` to a
+    /// Common collectible — and the last shares the rarity as well, so no
+    /// spelling could separate it. That is why relics are matched by identity
+    /// and left nameless: a list holding "death's scythe" goes on meaning the
+    /// polearm and nothing else.
+    #[test]
+    fn hunting_a_relic_does_not_touch_a_list_that_shares_its_name() {
+        let mut s = GameStats::default();
+        s.set_sound_lists(vec![("list-a".into(), vec!["death's scythe".into()])]);
+        s.prefs.relics = vec![60]; // relic 60 IS "Death's Scythe"
+
+        let d = s.apply(&relic(60, "relic60", true)).expect("the relic is hunted");
+        assert_eq!(d.sound.as_deref(), Some("relic"), "by identity, not by the name it shares");
+
+        // The Set polearm of that name, arriving named as it always has.
+        let polearm = s
+            .apply(&GameEvent::ItemAdded {
+                rarity: json!(4),
+                unscaled: false,
+                mf: false,
+                tier: 0,
+                item_type: 3,
+                item_id: 2,
+                weapon_type: 6,
+                seed: 7,
+                name: "Death's Scythe".into(),
+                announced: false,
+                amount: 1,
+                fingerprint: "3-7-2".into(),
+                hash: "polearm".into(),
+                ground: true,
+            })
+            .expect("still on the list it was always on");
+        assert_eq!(polearm.sound.as_deref(), Some("list-a"), "the list is untouched");
     }
 
     #[test]

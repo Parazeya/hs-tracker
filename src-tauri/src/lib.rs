@@ -18,7 +18,8 @@ use tauri::{AppHandle, Emitter, LogicalSize, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Alert kinds that own a configurable sound (not item rarities — see stats).
-const SOUND_KEYS: [&str; 7] = ["satanic", "set", "heroic", "angelic", "unholy", "mail", "zone"];
+const SOUND_KEYS: [&str; 8] =
+    ["satanic", "set", "heroic", "angelic", "unholy", "mail", "zone", "relic"];
 
 /// A sound is either one of the built-in alerts or a list's own file,
 /// named `list-<id>`. Anything else must not reach the filesystem.
@@ -128,12 +129,12 @@ fn strip_rect(held: bool) -> (f64, f64, f64, f64) {
     (panel_w(), 0.0, base_w(), end)
 }
 
-/// The rows that add height to the overlay. "vitals" is no longer one of them —
-/// magic find moved into the session row and the two levels went away, so that
-/// setting hides a chip rather than a row. It keeps its id and its place in the
-/// Settings list, so no stored preference is orphaned; it just stops counting
-/// towards the guessed height, which `PANEL_H` corrects on the first frame
-/// anyway.
+/// The rows that add height to the overlay. "vitals" is not one of them and has
+/// no Settings entry any more: magic find had moved into the session row, and
+/// then the readout itself came out because the heartbeat that carried it went
+/// tens of minutes between packets. A stored `hidden: ["vitals"]` from an older
+/// version hides nothing and costs nothing, which is why it is not migrated
+/// away.
 const OVERLAY_ROWS: [&str; 5] = ["session", "gold", "xp", "items", "zone"];
 
 fn overlay_height(settings: &Settings) -> f64 {
@@ -225,12 +226,41 @@ pub struct SoundList {
     pub enabled: bool,
     pub volume: f32,
     pub items: Vec<String>,
+    /// Whole categories the list holds — "every Satanic helmet" — as a rule
+    /// rather than as the 36 names it stands for today. See `stats::Rule` for
+    /// why it is a rule, and `SoundRule` below for what None means.
+    ///
+    /// No `serde(default)` of its own: the struct already carries one, so a
+    /// settings file written before the category picker existed loads with an
+    /// empty vector and every list in it goes on meaning exactly what it meant.
+    pub rules: Vec<SoundRule>,
 }
 
 impl Default for SoundList {
     fn default() -> Self {
-        Self { id: String::new(), name: String::new(), enabled: true, volume: 0.5, items: Vec::new() }
+        Self {
+            id: String::new(),
+            name: String::new(),
+            enabled: true,
+            volume: 0.5,
+            items: Vec::new(),
+            rules: Vec::new(),
+        }
     }
+}
+
+/// A category on a list, as the settings file spells it.
+///
+/// `null` is "any" on every field, which is why they are Options and not
+/// sentinel numbers: a missing `item_type` defaulting to 0 would silently mean
+/// Helmet. `weapon` only says anything alongside `item_type` 3, the wire's one
+/// type for every weapon there is.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct SoundRule {
+    pub rarity: Option<String>,
+    pub item_type: Option<i64>,
+    pub weapon: Option<i64>,
 }
 
 /// A pack of lists, the way a loot filter is a pack of rules. One is active at
@@ -267,6 +297,16 @@ pub struct Settings {
     /// — the struct already carries one, and a second would outlive a change to
     /// `Default` and quietly keep handing old files a list nobody chose.
     pub zone_buffs: Vec<u8>,
+    /// The hunted-relic chime: whether it sounds, and how loud. A relic is not
+    /// a rarity, so it could not borrow one of the five — every relic in the
+    /// game is Common.
+    pub relic: SoundCfg,
+    /// Which relics are worth the alert, by id-in-type. Empty is NONE, which is
+    /// the opposite of `zone_buffs` right above and the one thing about this
+    /// pair that has to be said out loud wherever either is shown: that list
+    /// narrows an alert the game already makes, so narrowing by nothing lets
+    /// everything through; this list IS the alert, so an empty one is silence.
+    pub relics: Vec<u16>,
     /// rarities worth announcing at all, and the tier they must reach
     pub alerts: Vec<String>,
     pub min_tier: i64,
@@ -363,6 +403,11 @@ impl Default for Settings {
             zone: SoundCfg::default(),
             // every rotation, until the player narrows it
             zone_buffs: Vec::new(),
+            // Off out of the box, unlike `zone` above, and for the reason the
+            // field says: an empty relic list is silence either way, so the
+            // switch has nothing to announce until a relic is ticked.
+            relic: SoundCfg::default(),
+            relics: Vec::new(),
             alerts: stats::JOURNAL_RARITIES.iter().map(|r| r.to_string()).collect(),
             min_tier: 0,
             notable: stats::default_notable()
@@ -1257,6 +1302,29 @@ fn migrate_notable(settings: &mut Settings) {
     }
 }
 
+/// One category rule as the engine wants it, or nothing if it is not a category.
+///
+/// A rule that names neither a rarity nor a type matches every named drop in
+/// the game. Nothing in the picker can build one — it offers the bulk add only
+/// once a dropdown is set — but an imported filter or a hand-edited file can,
+/// and a list that quietly swallowed every drop would look exactly like the app
+/// being broken. It is refused here, where every settings file passes.
+fn engine_rule(rule: &SoundRule) -> Option<stats::Rule> {
+    let rarity = rule
+        .rarity
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_lowercase);
+    let item_type = rule.item_type;
+    if rarity.is_none() && item_type.is_none() {
+        return None;
+    }
+    // A weapon type says nothing on its own: it numbers the kinds inside item
+    // type 3, and 6 means Polearm there and nothing anywhere else.
+    Some(stats::Rule { rarity, item_type, weapon: item_type.and(rule.weapon) })
+}
+
 fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
     let active = settings
         .use_filter
@@ -1289,16 +1357,26 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         // the rotation asks a different question again, of the zone rather
         // than of a drop
         zone_buffs: settings.zone_buffs.clone(),
+        // and this one of an item, but by identity rather than by name — see
+        // `hunted_relic`. Emptied when the chime is switched off, so the engine
+        // is told the alert is gone rather than being left to fire into a muted
+        // channel: a hunted relic also takes the journal and the pillar, and
+        // those are not the volume slider's to decide.
+        relics: if settings.relic.enabled { settings.relics.clone() } else { Vec::new() },
         sound_lists: active
             .map(|f| {
                 f.lists
                     .iter()
-                    .filter(|l| l.enabled && !l.id.is_empty() && !l.items.is_empty())
-                    .map(|l| {
-                        let names =
-                            l.items.iter().map(|n| n.trim().to_lowercase()).collect::<Vec<_>>();
-                        (format!("list-{}", l.id), names)
+                    .filter(|l| l.enabled && !l.id.is_empty())
+                    .map(|l| stats::Listed {
+                        key: format!("list-{}", l.id),
+                        names: l.items.iter().map(|n| n.trim().to_lowercase()).collect(),
+                        rules: l.rules.iter().filter_map(engine_rule).collect(),
                     })
+                    // An empty list is not a silent one — it is nothing at all,
+                    // and it used to be dropped by `items.is_empty()` alone. A
+                    // list can now be empty of names and still say something.
+                    .filter(|l| !l.names.is_empty() || !l.rules.is_empty())
                     .collect()
             })
             .unwrap_or_default(),
@@ -2194,6 +2272,12 @@ struct ExportedList {
     volume: f32,
     #[serde(default)]
     items: Vec<String>,
+    /// Categories, the same way `SoundList` carries them. A file written before
+    /// they existed has none and imports as it always did; one written after
+    /// them opens on an older build with its rules skipped rather than
+    /// refused, which serde's default gives for free.
+    #[serde(default)]
+    rules: Vec<SoundRule>,
     #[serde(default)]
     sound: Option<ExportedSound>,
 }
@@ -2331,6 +2415,7 @@ fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, 
                 enabled: l.enabled,
                 volume: l.volume,
                 items: l.items,
+                rules: l.rules,
             })
             .collect(),
     };
@@ -2466,6 +2551,7 @@ fn import_filter(app: AppHandle) -> Result<Option<SoundFilter>, String> {
             enabled: list.enabled,
             volume: list.volume.clamp(0.0, 1.0),
             items: list.items,
+            rules: list.rules,
         });
     }
     Ok(Some(SoundFilter { id: format!("{:x}", now_id()), name: exported.name, lists }))
@@ -3321,6 +3407,112 @@ mod tests {
     /// one comes back unparseable — hand-edited, or half-written by a power cut
     /// — answering with defaults means the next lock toggle writes those
     /// defaults over the only copy of every filter and list the user has.
+    /// A settings file written before relics existed opens without complaint.
+    ///
+    /// The 22 keys below are exactly the ones in the owner's own 0.9.x file,
+    /// which is still on disk at `src-tauri/target/release/settings.json` — no
+    /// `zone`, no `zone_buffs`, no `theme`, no `flourish_*`, and now no `relic`
+    /// or `relics` either. `#[serde(default)]` on the struct is what carries
+    /// it, and the thing worth asserting is not that it parses but WHAT the
+    /// missing relic fields come back as: an empty hunt list is silence, so an
+    /// upgrade must not start chiming at a player who never picked a relic.
+    #[test]
+    fn a_settings_file_from_before_relics_opens_and_hunts_nothing() {
+        let old = r#"{
+            "satanic": {"enabled": true, "volume": 0.02},
+            "set": {"enabled": true, "volume": 0.02},
+            "heroic": {"enabled": true, "volume": 0.18},
+            "angelic": {"enabled": true, "volume": 0.2},
+            "unholy": {"enabled": true, "volume": 0.24},
+            "mail": {"enabled": true, "volume": 0.23},
+            "alerts": ["Satanic", "Set", "Heroic", "Angelic", "Unholy"],
+            "min_tier": 0, "notable": [], "filters": [], "filter": "",
+            "use_filter": true, "locked": false, "opacity": 1.0, "scale": 1.0,
+            "auto_show": true, "autostart": false, "ticker": false,
+            "debug_log": false, "compact": false, "hidden": ["vitals"],
+            "sound_on_ground": true
+        }"#;
+        let settings: Settings = serde_json::from_str(old).expect("an old file still parses");
+        assert!(settings.relics.is_empty(), "no relic is hunted by an upgrade");
+        assert!(settings.relic.enabled, "the switch is on, which costs nothing while the list is empty");
+        assert_eq!(settings.unholy.volume, 0.24, "and the settings it did carry are untouched");
+
+        // The engine has to agree, not just the file: an empty pick reaches
+        // `Prefs` as an empty pick, and `hunted_relic` answers None to every
+        // relic there is.
+        assert!(
+            crate::stats::Prefs::default().relics.is_empty(),
+            "and the default the engine starts from hunts nothing either"
+        );
+    }
+
+    /// A filter saved before categories existed opens meaning what it meant.
+    ///
+    /// This is the thing a shipping product cannot get wrong. The list below is
+    /// the shape 1.0.3 wrote: an id, a name, a tick, a volume and some items,
+    /// and no `rules` key at all. It has to load with no rules — never with one
+    /// that matches something — and the names it does hold have to survive the
+    /// trip through `apply_stats_settings` untouched.
+    #[test]
+    fn a_filter_from_before_categories_opens_with_none_of_them() {
+        let old = r#"{
+            "use_filter": true,
+            "filter": "f1",
+            "filters": [{
+                "id": "f1",
+                "name": "Chase",
+                "lists": [{
+                    "id": "abc123",
+                    "name": "Vaults",
+                    "enabled": true,
+                    "volume": 0.7,
+                    "items": ["Essence Vault (Angelic)", "AK-47"]
+                }]
+            }]
+        }"#;
+        let settings: Settings = serde_json::from_str(old).expect("a 1.0.3 filter still parses");
+        let list = &settings.filters[0].lists[0];
+        assert!(list.rules.is_empty(), "no category is invented for it");
+        assert_eq!(list.items.len(), 2, "and the names it does hold are all there");
+
+        // Round-tripping it must not put a `rules` key in front of an older
+        // build either — an empty vector serialises as `[]`, which older serde
+        // ignores, but the names are what matter and they come back verbatim.
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(back.filters[0].lists[0].items, list.items);
+    }
+
+    /// A rule that names neither a rarity nor a type is not a category.
+    ///
+    /// It would match every named drop in the game, and a list that swallowed
+    /// everything reads as the app being broken rather than as a setting. The
+    /// picker cannot build one; a hand-edited or imported file can, so the
+    /// refusal lives where every settings file passes.
+    #[test]
+    fn a_rule_that_narrows_nothing_is_refused() {
+        assert!(engine_rule(&SoundRule::default()).is_none(), "any rarity, any type: not a rule");
+        assert!(
+            engine_rule(&SoundRule { rarity: Some("  ".into()), ..Default::default() }).is_none(),
+            "and a blank rarity is no rarity"
+        );
+
+        let rarity = engine_rule(&SoundRule { rarity: Some("Satanic".into()), ..Default::default() })
+            .expect("a rarity on its own is a category");
+        assert_eq!(rarity.rarity.as_deref(), Some("satanic"), "lowercased for the engine");
+        assert!(rarity.item_type.is_none());
+
+        // A weapon type numbers the kinds inside item type 3 and means nothing
+        // without one — 6 is Polearm there and nothing at all anywhere else.
+        let stray = engine_rule(&SoundRule {
+            rarity: Some("Set".into()),
+            item_type: None,
+            weapon: Some(6),
+        })
+        .expect("the rarity still makes it a category");
+        assert!(stray.weapon.is_none(), "the weapon type is dropped with no item type to hold it");
+    }
+
     #[test]
     fn a_file_that_will_not_parse_is_kept_rather_than_answered_with_defaults() {
         let dir = std::env::temp_dir().join(format!("hs-tracker-read-{}", std::process::id()));
