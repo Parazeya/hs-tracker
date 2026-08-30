@@ -125,7 +125,6 @@
     ['gold', 'Gold'],
     ['xp', 'Experience'],
     ['items', 'Item counters'],
-    ['vitals', 'Magic find'],
     ['zone', 'Satanic zone'],
   ];
 

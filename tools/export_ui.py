@@ -8,12 +8,24 @@ from datawin import DataWin
 
 DEST = Path(r"e:\Workspace\HeroSiege\src\assets\game")
 BUFFS = Path(r"e:\Workspace\HeroSiege\src\assets\buffs")
-# the overlay's row icons, which are not panel sprites
-UI_ICONS = Path(r"e:\Workspace\HeroSiege\src\assets\icons")
 
 dw = DataWin()
 DEST.mkdir(parents=True, exist_ok=True)
 BUFFS.mkdir(parents=True, exist_ok=True)
+
+#: The one overlay icon that comes out of the game rather than being drawn by
+#: hand. `Mapscreen_Skull_spr` is what the game's own map screen puts over a
+#: boss dungeon, so it already means "a boss is here" to anyone who has looked
+#: at that screen — and hs-map marks its boss dungeons with the same sprite.
+#:
+#: Kept here rather than dropped in by hand so the next season can regenerate
+#: it. The other five icons in src/assets/icons are hand-drawn and have no
+#: entry.
+ICONS = Path(r"e:\Workspace\HeroSiege\src\assets\icons")
+ICONS.mkdir(parents=True, exist_ok=True)
+skull = dw.sprite_frames("Mapscreen_Skull_spr")[0]
+skull.save(ICONS / "boss.png")
+print("boss.png", skull.size)
 
 SIMPLE = {
     "panel.png": ("Chat_Command_Background_spr", 0),
@@ -99,12 +111,6 @@ for i, fname in enumerate(["check_off.png", "check_on.png"]):
     bright.putalpha(frame.getchannel("A"))
     bright.save(DEST / fname)
 print("settings sprites done")
-
-UI_ICONS.mkdir(parents=True, exist_ok=True)
-# magic find: the game's own badge, which already reads "MF" — the drops row
-# next to it uses the chest, and one icon must not stand for two things
-dw.sprite_frames("Buff_Magic_Find_spr")[0].save(UI_ICONS / "mf.png")
-print("mf.png written")
 
 # The app icon used to be made here from the gold coin. It is the app's own mark
 # now — tools/gen_icon.py owns icon.png, the .ico and the tray, and this file
