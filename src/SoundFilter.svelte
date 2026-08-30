@@ -2,79 +2,9 @@
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
-  import { BY_ID, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
+  import { ITEMS } from './items.js';
   import { RARITIES, soundUrl, play } from './audio.js';
   import { ALL_BUFFS } from './buffs.js';
-
-  // Only named items can be listed: an ordinary base has no identity of its own.
-  //
-  // "Has a rarity" used to say that, and stopped: the tables now carry a rarity
-  // for every item, ordinary bases included, so this offered 1,440 names of
-  // which 476 could never fire. Pick "War Axe" out of the search, put it on a
-  // list, and nothing ever chimes — the parser leaves an ordinary pickup
-  // nameless, so the list has nothing to match. Being on one of the five
-  // rarities the journal keeps is what "named" actually means.
-  const LISTABLE = new Set(['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy']);
-
-  // Vaults are numbered by identity rather than by a slot in a base table, so
-  // a drop of one always arrives named — which is what makes all seven
-  // listable, where an ordinary item outside the five never arrives named at
-  // all and could not fire.
-  const VAULT = 19;
-
-  // Two items can wear one name — the game calls both a Set gun and a Heroic
-  // orb "Angel" — and the seven Essence Vaults share theirs across every
-  // rarity there is. A list keyed on the name alone fires for all of them and
-  // says nothing about which dropped, so where the tables answer by identity
-  // each is offered on its own and listed as "Name (Rarity)". That spelling is
-  // what the engine matches; the bare name still means any of them.
-  const SPLIT = Object.entries(BY_ID)
-    .map(([key, [name, rarity, tier]]) => ({
-      name: `${name} (${rarity})`,
-      type: Number(key.split(':')[0]),
-      rarity,
-      tier,
-      rate: DROP_RATE[name.toLowerCase()] ?? 0,
-      key: `${name} (${rarity})`.toLowerCase(),
-    }))
-    .filter((it) => LISTABLE.has(it.rarity) || it.type === VAULT);
-
-  const NAMED = [
-    ...new Map(
-      Object.entries(ITEMS)
-        .filter(([, name]) => LISTABLE.has(RARITY_BY_NAME[name.toLowerCase()]))
-        .map(([key, name]) => [
-          name,
-          {
-            name,
-            type: Number(key.split(':')[0]),
-            rarity: RARITY_BY_NAME[name.toLowerCase()],
-            tier: TIER_BY_NAME[name.toLowerCase()] ?? 0,
-            rate: DROP_RATE[name.toLowerCase()] ?? 0,
-            key: name.toLowerCase(),
-          },
-        ]),
-    ).values(),
-    ...SPLIT,
-  ].sort((a, b) => a.name.localeCompare(b.name));
-
-  /// What the tables say about one entry of a list, whichever way it is spelled.
-  const BY_ENTRY = new Map(SPLIT.map((it) => [it.key, it]));
-  const facts = (entry) => {
-    const key = entry.toLowerCase();
-    return (
-      BY_ENTRY.get(key) ?? {
-        rarity: RARITY_BY_NAME[key],
-        tier: TIER_BY_NAME[key] ?? 0,
-        rate: DROP_RATE[key] ?? 0,
-      }
-    );
-  };
-
-  // what a character wears and carries. Orbs, vials, reagents and the like are
-  // named too, but nobody wants a chime for a Goblin orb in a gear band — they
-  // can still be added to a list by hand.
-  const GEAR = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 10]);
 
   const ALERT_RARITIES = ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'];
   const TIERS = [
@@ -89,9 +19,6 @@
   const rarityCls = { Satanic: 'c-sat', Set: 'c-set', Heroic: 'c-her', Angelic: 'c-ang', Unholy: 'c-unh' };
 
   let settings = $state(null);
-  let selected = $state(0);
-  let query = $state('');
-  let status = $state({});
   let saveTimer;
 
   // The same five rarities used to be configured in two places — whether they
@@ -193,119 +120,104 @@
     save();
   }
 
+  // Every relic in the game, by the id the wire numbers it with.
+  //
+  // Type 16 is the relics and nothing else, and the table's ids run 0..155 with
+  // no gaps — which is also every id seen dropping across the owner's captures.
+  // So the id IS the relic, and that is what gets stored: the picker never
+  // writes a name, because three relic names belong to another item as well
+  // (`Shrunken Head` to a Satanic charm, `Death's Scythe` to a Set polearm,
+  // `Satan's Horn` to a Common collectible) and the last shares the rarity too,
+  // so no spelling could have separated it. `hunted_relic` matches the id.
+  const RELIC_TYPE = 16;
+  // Grouped by name, not one row per id. Two of the 156 are both called "Bomb"
+  // — ids 65 and 150 — and as two rows they were two identical ticks: pick one,
+  // and the other Bomb drops in silence with nothing on the screen to say why.
+  // A player means "the relic called Bomb", so the row carries both ids and
+  // ticks both. That leaves 155 rows for 156 relics, which is why the counts
+  // below say 155.
+  const ALL_RELICS = [
+    ...Object.entries(ITEMS)
+      .filter(([key]) => key.startsWith(`${RELIC_TYPE}:`))
+      .reduce((by, [key, name]) => {
+        const row = by.get(name) ?? { name, ids: [], key: name.toLowerCase() };
+        row.ids.push(Number(key.split(':')[1]));
+        return by.set(name, row);
+      }, new Map())
+      .values(),
+  ].sort((a, b) => a.name.localeCompare(b.name));
+
+  // How often a relic falls, measured over the owner's own captures: 827 of
+  // them across 19.16 hours of active play. It is on the screen because "tick
+  // all" reads like a harmless convenience and is not one.
+  const RELICS_PER_HOUR = 43;
+
+  let relicQuery = $state('');
+  let relicsBrowsing = $state(false);
+  // Counted in ROWS, so the number on the screen and the number of rows ticked
+  // are the same thing. `settings.relics` holds ids and is one longer whenever
+  // Bomb is hunted, which is the engine's business and not the note's.
+  //
+  // `every`, not `some`: only this picker writes the field and it always writes
+  // a row's ids together, so a half-ticked Bomb can only come from a file
+  // edited by hand — and showing that as unticked while one of them still
+  // chimes is the error a player can hear and then act on.
+  let pickedIds = $derived(new Set(settings?.relics ?? []));
+  let relicsPicked = $derived(ALL_RELICS.filter((r) => r.ids.every((id) => pickedIds.has(id))).length);
+  let allRelicsPicked = $derived(relicsPicked === ALL_RELICS.length);
+  let relicVolume = $derived(Math.round((settings?.relic?.volume ?? 0.5) * 100));
+
+  // At rest this shows what is being hunted, not the whole table: the question
+  // a player has when they open the panel is "what am I listening for", and 156
+  // rows do not answer it. Typing searches all of them; "show all" is there for
+  // browsing, which is a different question and a rarer one.
+  let relicShown = $derived.by(() => {
+    const q = relicQuery.trim().toLowerCase();
+    if (q) return ALL_RELICS.filter((r) => r.key.includes(q));
+    if (relicsBrowsing) return ALL_RELICS;
+    return ALL_RELICS.filter((r) => r.ids.every((id) => pickedIds.has(id)));
+  });
+
+  function toggleRelic(row) {
+    const on = new Set(settings.relics ?? []);
+    const hunted = row.ids.every((id) => on.has(id));
+    for (const id of row.ids) (hunted ? on.delete(id) : on.add(id));
+    // sorted, so the settings file does not churn its order on every click
+    settings.relics = [...on].sort((a, b) => a - b);
+    save();
+  }
+
+  function tickAllRelics() {
+    settings.relics = ALL_RELICS.flatMap((r) => r.ids).sort((a, b) => a - b);
+    save();
+  }
+
+  function clearRelics() {
+    settings.relics = [];
+    save();
+  }
+
   function setVolume(key, v) {
     if (!settings?.[key] || settings[key].volume === v) return;
     settings[key].volume = v;
     save();
   }
 
-  let filters = $derived(settings?.filters ?? []);
-  let filter = $derived(filters.find((f) => f.id === settings?.filter) ?? filters[0] ?? null);
-  let lists = $derived(filter?.lists ?? []);
-  let current = $derived(lists[selected] ?? null);
-  let soundKey = $derived(current ? `list-${current.id}` : null);
-
-  let matches = $derived.by(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    const owned = new Set((current?.items ?? []).map((n) => n.toLowerCase()));
-    return NAMED.filter((it) => it.key.includes(q) && !owned.has(it.key)).slice(0, 40);
-  });
-
-  // An item in two lists is a conflict: only the first list's sound plays, and
-  // the order of the lists decides which. Both the tab and the row say so.
-  let clashes = $derived.by(() => {
-    const owners = new Map();
-    for (const list of lists) {
-      for (const name of list.items) {
-        const key = name.toLowerCase();
-        owners.set(key, [...(owners.get(key) ?? []), list.name]);
-      }
-    }
-    return new Map([...owners].filter(([, names]) => names.length > 1));
-  });
-
-  const clashesIn = (list) => list.items.filter((n) => clashes.has(n.toLowerCase())).length;
-  const clashWith = (name) =>
-    (clashes.get(name.toLowerCase()) ?? []).filter((n) => n !== current?.name).join(', ');
-
-  // an item can sit in two lists, but only the first one's sound plays — so
-  // say where else it is before it is added again
-  let elsewhere = $derived.by(() => {
-    const seen = new Map();
-    for (const list of lists) {
-      if (list === current) continue;
-      for (const name of list.items) seen.set(name.toLowerCase(), list.name);
-    }
-    return seen;
-  });
-
-  /// Clear removes what the search is showing, so what it would remove changes
-  /// with the search as well as with the list. Both belong in the key that
-  /// arms it, or the confirmation is for one set and the deletion for another.
-  let clearKey = $derived(`clear:${current?.id}:${query.trim().toLowerCase()}`);
-  // The key names what is armed, and the template has to compare against the
-  // same key it armed with. Comparing against a bare 'filter' or 'list' while
-  // arming with `filter:<id>` was always false: the button never turned red,
-  // never read "delete?", and the first click looked like nothing had
-  // happened — on the two controls that destroy a whole filter or list.
-  let filterKey = $derived(`filter:${filter?.id}`);
-  let listKey = $derived(`list:${current?.id}`);
-
-  // sorted by name, and narrowed by the same query that searches for new ones
-  let shown = $derived.by(() => {
-    const q = query.trim().toLowerCase();
-    const items = [...(current?.items ?? [])].sort((a, b) => a.localeCompare(b));
-    return q ? items.filter((n) => n.toLowerCase().includes(q)) : items;
-  });
-
   $effect(() => {
     invoke('get_settings').then((s) => (settings = s));
     refreshSounds();
     const unsubs = [
       listen('settings-changed', (e) => ((settings = e.payload), (picking = null))),
-      listen('sounds-changed', (e) => {
-        refreshStatus(e.payload);
-        refreshSounds();
-      }),
+      listen('sounds-changed', () => refreshSounds()),
     ];
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
-
-  let known = '';
-  $effect(() => {
-    const keys = lists.map((l) => l.id).join(',');
-    if (keys === known) return;
-    known = keys;
-    for (const list of lists) refreshStatus(`list-${list.id}`);
-  });
-
-  /// The answer is written after it arrives, never around it. Written as
-  /// `status = { ...status, [key]: await … }` the spread is evaluated before
-  /// the await — so eight lists asked at once each copied the same empty map
-  /// and the last reply overwrote the other seven. An imported filter then
-  /// claimed to have no sounds while its files sat on disk and Test played
-  /// them.
-  async function refreshStatus(key) {
-    const name = await invoke('sound_status', { rarity: key }).catch(() => null);
-    status[key] = name;
-  }
 
   function save() {
     clearTimeout(saveTimer);
     const snapshot = $state.snapshot(settings);
     saveTimer = setTimeout(() => invoke('save_settings', { settings: snapshot }).catch(() => {}), 150);
   }
-
-  // "one in 576425" is true but unreadable in a row; "1/576k" is not
-  function odds(rate) {
-    if (!rate) return '';
-    if (rate >= 1e6) return `1/${(rate / 1e6).toFixed(rate >= 1e7 ? 0 : 1)}M`;
-    if (rate >= 1e3) return `1/${(rate / 1e3).toFixed(rate >= 1e4 ? 0 : 1)}k`;
-    return `1/${rate}`;
-  }
-
-  const id = () => Math.random().toString(36).slice(2, 8);
 
   // Deleting a filter takes its lists and their sounds with it, and clearing a
   // list is just as final — so anything destructive asks once. The second click
@@ -327,196 +239,10 @@
     armTimer = setTimeout(() => (armed = null), 4000);
   }
 
-  function addFilter(name, lists = []) {
-    const made = { id: id(), name, lists };
-    settings.filters = [...filters, made];
-    settings.filter = made.id;
-    selected = 0;
-    save();
-    return made;
-  }
-
-  function removeFilter() {
-    for (const list of lists) invoke('clear_sound', { rarity: `list-${list.id}` }).catch(() => {});
-    settings.filters = filters.filter((f) => f.id !== filter.id);
-    settings.filter = settings.filters[0]?.id ?? '';
-    selected = 0;
-    save();
-  }
-
-  // Angelic and Unholy drop under their own rules, so a drop-rate band would
-  // put them next to items they have nothing in common with. They get a list
-  // each instead.
-  const APART = ['Angelic', 'Unholy'];
-
-  const band = (name, items) => ({
-    id: id(),
-    name,
-    enabled: true,
-    volume: 0.7,
-    items: items.map((it) => it.name),
-  });
-
-  // Drop rates are "one in N", so sorting by them splits a grade into the
-  // items you see often, the ones you do not, and the chase pieces.
-  function generate() {
-    const bands = [];
-    for (const [tier, letter] of [
-      [5, 'S'],
-      [6, 'SS'],
-    ]) {
-      const pool = NAMED.filter(
-        (it) => it.tier === tier && it.rate > 0 && GEAR.has(it.type) && !APART.includes(it.rarity),
-      ).sort((a, b) => a.rate - b.rate);
-      if (pool.length < 3) continue;
-      const cut = Math.ceil(pool.length / 3);
-      for (const [n, name] of [[0, 'Common'], [1, 'Rare'], [2, 'VeryRare']]) {
-        const slice = pool.slice(n * cut, (n + 1) * cut);
-        if (slice.length) bands.push(band(`${letter}-${name}`, slice));
-      }
-    }
-    for (const rarity of APART) {
-      const own = NAMED.filter((it) => it.rarity === rarity && GEAR.has(it.type)).sort((a, b) =>
-        a.name.localeCompare(b.name),
-      );
-      if (own.length) bands.push(band(rarity, own));
-    }
-    addFilter('Drop rate bands', bands);
-  }
-
-  /// The first list that matches wins, so the order is the priority.
-  function moveList(step) {
-    const to = selected + step;
-    if (to < 0 || to >= lists.length) return;
-    const next = [...lists];
-    [next[selected], next[to]] = [next[to], next[selected]];
-    filter.lists = next;
-    selected = to;
-    save();
-  }
-
-  function addList() {
-    filter.lists = [...lists, { id: id(), name: `List ${lists.length + 1}`, enabled: true, volume: 0.7, items: [] }];
-    selected = filter.lists.length - 1;
-    save();
-  }
-
-  function removeList(i) {
-    invoke('clear_sound', { rarity: `list-${lists[i].id}` }).catch(() => {});
-    filter.lists = lists.filter((_, n) => n !== i);
-    selected = Math.max(0, Math.min(selected, filter.lists.length - 1));
-    save();
-  }
-
-  function addItem(name) {
-    current.items = [...current.items, name].sort((a, b) => a.localeCompare(b));
-    save();
-  }
-
-  /// Removes what the search is showing, or the whole list when it is not
-  /// searching — the count on the button says which.
-  function removeShown() {
-    const gone = new Set(shown.map((n) => n.toLowerCase()));
-    current.items = current.items.filter((n) => !gone.has(n.toLowerCase()));
-    save();
-  }
-
-  let notice = $state('');
-  let noticeTimer;
-  function say(text) {
-    notice = text;
-    clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => (notice = ''), 4000);
-  }
-
-  async function exportFilter() {
-    try {
-      const name = await invoke('export_filter', { filter: $state.snapshot(filter) });
-      if (name) say(`saved as ${name}`);
-    } catch (e) {
-      say(String(e));
-    }
-  }
-
-  /// The wait here is as long as the player takes to find the file, and the
-  /// app stays usable throughout — so the settings this panel was holding when
-  /// the dialog opened may be old news by the time it closes. The import is
-  /// added to what is on disk now, not to the copy in hand, and saved outright
-  /// rather than through the debounce: the listener above brings the panel
-  /// back into step.
-  async function importFilter() {
-    try {
-      const imported = await invoke('import_filter');
-      if (!imported) return;
-      const base = (await invoke('get_settings').catch(() => null)) ?? $state.snapshot(settings);
-      base.filters = [...(base.filters ?? []), imported];
-      base.filter = imported.id;
-      clearTimeout(saveTimer);
-      saveTimer = null;
-      await invoke('save_settings', { settings: base });
-      settings = base;
-      selected = 0;
-      say(`imported ${imported.name} — ${imported.lists.length} lists`);
-    } catch (e) {
-      say(String(e));
-    }
-  }
-
-  /// A copy gets fresh list ids so it cannot fight with the original — and a
-  /// list's sound is a file named after its id, so the copy has to be given
-  /// one of its own too. Without that the copy came out mute while the button
-  /// said "sounds and all".
-  function duplicateFilter() {
-    const pairs = lists.map((l) => [l.id, id()]);
-    const made = addFilter(
-      `${filter.name} copy`,
-      lists.map((l, i) => ({ ...l, id: pairs[i][1], items: [...l.items] })),
-    );
-    for (const [from, to] of pairs) {
-      invoke('copy_sound', { from: `list-${from}`, to: `list-${to}` })
-        .then(() => refreshStatus(`list-${to}`))
-        .catch(() => {});
-    }
-    return made;
-  }
-
-  function removeItem(name) {
-    current.items = current.items.filter((n) => n !== name);
-    save();
-  }
-
-  function toggleAlert(rarity) {
-    const on = new Set(settings.alerts ?? []);
-    on.has(rarity) ? on.delete(rarity) : on.add(rarity);
-    settings.alerts = [...on];
-    save();
-  }
-
-  function setNumber(key, value) {
-    if (!settings || !Number.isFinite(value) || settings[key] === value) return;
-    settings[key] = value;
-    save();
-  }
-
-  async function pickSound() {
-    try {
-      await invoke('pick_sound', { rarity: soundKey });
-      refreshStatus(soundKey);
-    } catch {}
-  }
-
-  /// The volume is read before the wait, not after it. `play(await …, current.volume)`
-  /// reads `current` only once the file has loaded, and by then the player may
-  /// have picked another list — so one list's sound played at another's volume.
-  async function test() {
-    const volume = current?.volume ?? 0.7;
-    play(await soundUrl(soundKey), volume);
-  }
-
 </script>
 
 <div class="panel two">
-  <div class="col rules">
+  <div class="col">
   {#if settings}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>Rarity alerts — what makes a sound at all</div>
@@ -689,6 +415,122 @@
         </div>
       {/if}
     </div>
+  {/if}
+  </div>
+
+  <div class="col">
+  {#if settings}
+    <!-- Beside the buff picker, and the opposite way round. That list narrows
+         an alert the game already makes, so an empty one lets every rotation
+         through; this list IS the alert, so an empty one is silence. A player
+         who has just read that section carries the wrong rule into this one —
+         it is the next thing along in either layout — which is why the note
+         below never leaves it unsaid. -->
+    <div class="section" style:border-image-source="url({art('chip_dark')})">
+      <div class="sechead" data-tauri-drag-region>Relics — a chime for the ones you are hunting</div>
+
+      <div class="rrow" class:off={!settings.relic?.enabled}>
+        <button class="check" onclick={() => { settings.relic.enabled = !settings.relic.enabled; save(); }} aria-label="relic chime">
+          <img src={settings.relic?.enabled ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="rname c-relic" title="A relic you ticked hitting the floor: the chime, the drop feed and the pillar">Relic</span>
+        <input
+          class="vol"
+          type="range"
+          min="0"
+          max="100"
+          disabled={!settings.relic?.enabled}
+          value={relicVolume}
+          oninput={(e) => setVolume('relic', e.currentTarget.value / 100)}
+        />
+        <span class="pct">{relicVolume}%</span>
+        <span class="src" title={custom.relic ? `sounds/${custom.relic}` : 'the built-in relic chime'}>{custom.relic ?? 'built-in'}</span>
+        <span class="btns">
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('relic')}>Test</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('relic')}>Browse…</button>
+          <button
+            class="btn sm"
+            style:--btn="url({art('button')})"
+            style:--btn-hover="url({art('button_hover')})"
+            style:--btn-down="url({art('button_down')})"
+            disabled={!custom.relic}
+            onclick={() => danger('snd-relic', () => invoke('clear_sound', { rarity: 'relic' }).catch(() => {}))}
+          >{armed === 'snd-relic' ? 'Sure?' : 'Default'}</button>
+        </span>
+      </div>
+
+      {#if !settings.relic?.enabled}
+        <!-- The switch above answers before any of the rest of it does: with
+             the chime off the engine is sent an empty list, so a screen that
+             says "3 of 155 hunted" is describing a hunt that is not running.
+             The grid goes with it, the way the buff picker's does. -->
+        <div class="note">
+          The relic chime is off, so none of these sound
+          {#if relicsPicked}, including the {relicsPicked} ticked{/if}. Switch it on above.
+        </div>
+      {:else if relicsPicked === 0}
+        <!-- The misleading state, and it is misleading the other way round from
+             the buff picker's empty list: nothing ticked here is silence, not
+             everything. Said in words, where they are looking. -->
+        <div class="note warn">Nothing ticked, so no relic chimes. Search below and click one to hunt it.</div>
+      {:else if allRelicsPicked}
+        <!-- The other one. All 156 is not a filter at all, and the rate is the
+             only thing that makes that concrete. -->
+        <div class="note warn">
+          All {ALL_RELICS.length} ticked — that is about {RELICS_PER_HOUR} chimes an hour, one every
+          83 seconds, and every one of them reaches the drop feed too. Clear it and tick the few you
+          are actually hunting.
+        </div>
+      {:else}
+        <div class="note">
+          {relicsPicked} of {ALL_RELICS.length} hunted — every other relic falls in silence.
+        </div>
+      {/if}
+
+      {#if settings.relic?.enabled}
+      <input
+        class="field"
+        style:border-image-source="url({art('chip_dark')})"
+        placeholder="search relics by name…"
+        bind:value={relicQuery}
+      />
+
+      {#if relicShown.length}
+        <div class="grid relics">
+          {#each relicShown as r (r.name)}
+            {@const on = r.ids.every((id) => pickedIds.has(id))}
+            <button class="secopt relic" class:off={!on} onclick={() => toggleRelic(r)} title={r.name}>
+              <img src={on ? art('check_on') : art('check_off')} alt="" />
+              <span class="bname">{r.name}</span>
+            </button>
+          {/each}
+        </div>
+      {:else if relicQuery.trim()}
+        <div class="note">no relic matches “{relicQuery.trim()}”.</div>
+      {/if}
+
+      <div class="line ends">
+        <button class="link" onclick={() => (relicsBrowsing = !relicsBrowsing)}>
+          {relicsBrowsing ? 'show only the ones I hunt' : `show all ${ALL_RELICS.length}`}
+        </button>
+        <!-- The one link on this panel that asks twice. "tick all" reads like
+             the buff picker's harmless one above and is the opposite: there it
+             restores the default, here it buys 43 chimes an hour. The cost is
+             on the link rather than in a note beside it, because the note is
+             not what gets clicked. -->
+        <button class="link" class:armed={armed === 'relics-all'} onclick={() => danger('relics-all', tickAllRelics)}>
+          {armed === 'relics-all'
+            ? `all ${ALL_RELICS.length}? that is ~${RELICS_PER_HOUR} chimes an hour`
+            : `tick all ${ALL_RELICS.length}`}
+        </button>
+        {#if relicsPicked}
+          <button class="link" class:armed={armed === 'relics'} onclick={() => danger('relics', clearRelics)}>
+            {armed === 'relics' ? 'clear it?' : 'clear — hunt no relic'}
+          </button>
+        {/if}
+      </div>
+      {/if}
+    </div>
 
     {#if canAnnounce}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
@@ -711,13 +553,18 @@
             >
               <img src={settings.flourish_listed ? art('check_on') : art('check_off')} alt="" />
             </button>
-            <span class="opt" title="Anything on a list of the selected filter is announced, whatever its rarity or grade">
-              Announce everything the custom filter lists
+            <span class="opt" title="Anything on a list of the selected watchlist is announced, whatever its rarity or grade">
+              Announce everything the watchlist names
             </span>
           </div>
           {#if settings.flourish_listed && !settings.use_filter}
+            <!-- It used to say "switched off below", and below is where it was.
+                 The watchlist has a tab of its own now, so the sentence has to
+                 name it: a warning that points at a place the reader is already
+                 looking at, and it is not there, reads as the warning being
+                 wrong rather than the setting. -->
             <div class="note warn">
-              The custom filter is switched off below, so this does nothing yet.
+              The watchlist is switched off on its own tab, so this does nothing yet.
             </div>
           {/if}
 
@@ -793,221 +640,23 @@
       </div>
     {/if}
 
-  {/if}
-  </div>
-
-  <div class="col detail">
-  {#if settings}
-    <div class="section" style:border-image-source="url({art('chip_dark')})">
-      <div class="sechead" data-tauri-drag-region>Custom filter — a sound of its own for the items you name</div>
-
-      <div class="line">
-        <button class="check" onclick={() => { settings.use_filter = !settings.use_filter; save(); }} aria-label="use filter">
-          <img src={settings.use_filter ? art('check_on') : art('check_off')} alt="" />
-        </button>
-        <span class="opt">Use the selected filter</span>
-      </div>
-      <!-- The header used to read "lists that outrank the above", which is true
-           of an item that is on one and was read as true of everything else:
-           people believed a filter switched the rarity alerts off and asked for
-           the adding behaviour the app already had. It says which it is now. -->
-      <div class="hint" data-tauri-drag-region>
-        A list adds a voice, it does not take the others away. An item you name here plays
-        that list's sound instead of its rarity's; everything you have not named carries on
-        exactly as the rarity alerts above say.
-      </div>
-
-      <div class="line">
-        <select
-          class="picker"
-          value={filter?.id ?? ''}
-          onchange={(e) => { settings.filter = e.currentTarget.value; selected = 0; save(); }}
-        >
-          {#each filters as f}
-            <option value={f.id}>{f.name} · {f.lists.length} lists</option>
-          {:else}
-            <option value="">no filters yet</option>
-          {/each}
-        </select>
-        <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => addFilter(`Filter ${filters.length + 1}`)}>New</button>
-        <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={generate} title="Split S and SS gear into three bands by how rare their drop is">Generate</button>
-        {#if filter}
-          <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={duplicateFilter} title="Copy this filter, sounds and all">Copy</button>
-        {/if}
-        {#if filter}
-          <button
-            class="del"
-            class:armed={armed === filterKey}
-            onclick={() => danger(filterKey, removeFilter)}
-            title="Delete this filter with all its lists and sounds"
-          >{armed === filterKey ? 'delete?' : '×'}</button>
-        {/if}
-      </div>
-
-      <div class="line">
-        <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={importFilter} title="Load a filter someone shared with you, sounds included">Import…</button>
-        {#if filter}
-          <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={exportFilter} title="Save this filter to a file, sounds included">Export…</button>
-        {/if}
-        {#if notice}
-          <span class="notice">{notice}</span>
-        {/if}
-      </div>
-
-      {#if filter}
-        <input
-          class="field name"
-          style:border-image-source="url({art('chip_dark')})"
-          value={filter.name}
-          oninput={(e) => { filter.name = e.currentTarget.value; save(); }}
-        />
-      {/if}
-    </div>
-  {/if}
-
-  {#if filter}
-    <div class="tabs">
-      {#each lists as list, i}
-        <button class="tab" class:on={i === selected} onclick={() => (selected = i)}>
-          {list.name}
-          {#if clashesIn(list)}
-            <span class="clash" title="{clashesIn(list)} of these items are in another list too — only the list that comes first will sound">?</span>
-          {/if}
-          <span class="count">{list.items.length}</span>
-        </button>
-      {/each}
-      <button class="btn add" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={addList}>+ list</button>
-    </div>
-  {/if}
-
-  {#if current}
-    <div class="head" style:border-image-source="url({art('chip_dark')})">
-      <button class="check" onclick={() => { current.enabled = !current.enabled; save(); }} aria-label="enabled">
-        <img src={current.enabled ? art('check_on') : art('check_off')} alt="" />
-      </button>
-      <input
-        class="name"
-        value={current.name}
-        oninput={(e) => { current.name = e.currentTarget.value; save(); }}
-      />
-      <button class="move" disabled={selected === 0} onclick={() => moveList(-1)} title="Earlier — an earlier list wins a conflict">◀</button>
-      <button class="move" disabled={selected === lists.length - 1} onclick={() => moveList(1)} title="Later">▶</button>
-      <button
-        class="del"
-        class:armed={armed === listKey}
-        onclick={() => danger(listKey, () => removeList(selected))}
-        title="Delete this list and its sound"
-      >{armed === listKey ? 'delete?' : '×'}</button>
-    </div>
-
-    <div class="sound" style:border-image-source="url({art('chip_dark')})">
-      <span class="file">{status[soundKey] ?? 'no sound yet — the rarity alert plays instead'}</span>
-      <input
-        class="vol"
-        type="range"
-        min="0"
-        max="1"
-        step="0.05"
-        value={current.volume}
-        oninput={(e) => { current.volume = +e.currentTarget.value; save(); }}
-      />
-      <!-- A list with no file of its own has nothing of its own to play: when
-           one of its items drops it is announced by that item's rarity, and
-           which rarity that is depends on the item. So the button says so
-           rather than being pressed and doing nothing, which is what it did. -->
-      <button
-        class="btn"
-        style:--btn="url({art('button')})"
-        style:--btn-hover="url({art('button_hover')})"
-        style:--btn-down="url({art('button_down')})"
-        disabled={!status[soundKey]}
-        title={status[soundKey] ? "play this list’s sound" : "this list has no sound of its own — a drop on it is announced by the item’s rarity"}
-        onclick={test}
-      >Test</button>
-      <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={pickSound}>Browse…</button>
-    </div>
-
-    <input
-      class="field"
-      style:border-image-source="url({art('chip_dark')})"
-      placeholder="search to add, or to narrow the list below…"
-      bind:value={query}
-      onkeydown={(e) => e.key === 'Enter' && matches[0] && addItem(matches[0].name)}
-    />
-
-    {#if matches.length}
-      <div class="listhead"><span>Not in this list</span></div>
-    {/if}
-
-    {#if matches.length}
-      <div class="results" style:border-image-source="url({art('chip_dark')})">
-        {#each matches as it}
-          <button class="hit" onclick={() => addItem(it.name)}>
-            <span class={rarityCls[it.rarity]}>{it.name}</span>
-            {#if elsewhere.has(it.key)}
-              <span class="already">in {elsewhere.get(it.key)}</span>
-            {/if}
-            <span class="grade">
-              <span class="letter">{tierLabel(it.tier)}</span>
-              <span class="odds">{odds(it.rate)}</span>
-            </span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    <div class="listhead">
-      <span>Items in {current.name}</span>
-      {#if shown.length}
-        <button class="link" class:armed={armed === clearKey} onclick={() => danger(clearKey, removeShown)}>
-          {#if armed === clearKey}
-            {query.trim() ? `remove ${shown.length}?` : 'clear the list?'}
-          {:else}
-            {query.trim() ? `remove ${shown.length} shown` : 'clear'}
-          {/if}
-        </button>
-      {/if}
-      <span class="count">{query.trim() ? `${shown.length} of ${current.items.length}` : current.items.length}</span>
-    </div>
-
-    <div class="items">
-      {#each shown as name}
-        {@const it = facts(name)}
-        <div class="row {rarityCls[it.rarity] ?? ''}">
-          <span class={rarityCls[it.rarity] ?? ''}>{name}</span>
-          {#if clashWith(name)}
-            <span class="clash" title="also in {clashWith(name)}">?</span>
-          {/if}
-          <span class="grade">
-            <span class="letter">{tierLabel(it.tier)}</span>
-            <span class="odds">{odds(it.rate)}</span>
-          </span>
-          <button class="del" onclick={() => removeItem(name)} title="Remove" aria-label="remove">×</button>
-        </div>
-      {:else}
-        <div class="empty">
-          {query.trim() ? 'nothing in this list matches the search' : 'nothing listed yet — search above and click an item to add it'}
-        </div>
-      {/each}
-    </div>
-  {:else if filter}
-    <div class="empty">this filter has no lists yet — press “+ list”</div>
-  {:else if settings}
-    <div class="empty">
-      no filters yet — press “New” for an empty one, or “Generate” to build S and SS
-      bands from the drop rates: the items you see often, the ones you do not, and
-      the chase pieces, each ready for a sound of its own.
+    <!-- A feature that moves without a sign left behind reads as a feature
+         that was deleted. This is where the custom filter used to be. -->
+    <div class="note pointer">
+      Named items, and a sound of their own, live on the Watchlist tab.
     </div>
   {/if}
   </div>
 </div>
 
 <style>
-  /* Two columns: what alerts on the left, the filter and its lists on the
-     right. One screen, because it is one decision — and the page had grown
-     long enough that a rarity's sound and the list that overrides it could
-     not be seen at the same time. A narrow window falls back to one column,
-     where side by side would leave neither half readable. */
+  /* Two columns: what makes a sound at all on the left, the two narrower
+     alerts and the pillar on the right. The right column used to be the custom
+     filter, which now has a tab of its own — without a second column the page
+     was one 1,150px-wide strip of rows on the owner's own 1400px window, with
+     a rarity row's controls half a screen from its name.
+     A narrow window falls back to one column, where side by side would leave
+     neither half readable. */
   .panel.two {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -1023,7 +672,7 @@
      is where a rarity row finally fits, on one line, in the column it is
      given. Under it the single column is the better page, not the fallback. */
   @media (min-width: 1200px) {
-    .panel.two { grid-template-columns: minmax(360px, 1fr) minmax(380px, 1.1fr); }
+    .panel.two { grid-template-columns: minmax(360px, 1fr) minmax(380px, 1fr); }
     /* A column owns its scrolling only while the two are side by side. Stacked,
        `max-height: 100%` cut each of them to half the page with the page itself
        unable to scroll, so both halves were read through a slit. */
@@ -1075,10 +724,7 @@
   .panel::-webkit-scrollbar { width: 6px; }
   .panel::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
 
-  .section,
-  .head,
-  .sound,
-  .results {
+  .section {
     box-sizing: border-box;
     border: 6px solid transparent;
     border-image-slice: 6 fill;
@@ -1092,16 +738,6 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-  }
-
-  /* How the two halves of this page fit together — the one thing about it that
-     was not obvious from either half on its own. */
-  .hint {
-    font-size: 10px;
-    line-height: 15px;
-    color: var(--bone-6);
-    padding: 0 2px 6px 30px;
-    max-width: 620px;
   }
 
   .sechead {
@@ -1263,111 +899,7 @@
   .tier.on { color: var(--bone-13); border-color: var(--edge-4); background: rgba(150, 37, 56, 0.45); }
 
   .note { color: var(--dim-2); font-size: 10px; line-height: 1.4; }
-  .notice {
-    flex: 1 1 auto;
-    min-width: 0;
-    color: #45c15a;
-    font-size: 10px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* WebView2 leaves a select alone; WebKitGTK draws it as a native widget with
-     a pale background and a blue focus ring, which is a hole in the panel. The
-     appearance is taken over completely, arrow included. */
-  .picker {
-    flex: 1 1 auto;
-    min-width: 0;
-    box-sizing: border-box;
-    appearance: none;
-    -webkit-appearance: none;
-    font: inherit;
-    font-size: 11px;
-    color: var(--bone-13);
-    background-color: rgba(0, 0, 0, 0.35);
-    background-image: linear-gradient(45deg, transparent 50%, var(--bone-6) 50%),
-      linear-gradient(135deg, var(--bone-6) 50%, transparent 50%);
-    background-position: calc(100% - 12px) 50%, calc(100% - 7px) 50%;
-    background-size: 5px 5px, 5px 5px;
-    background-repeat: no-repeat;
-    border: 1px solid var(--ground-10);
-    border-radius: 0;
-    padding: 3px 22px 3px 6px;
-    height: 24px;
-    cursor: pointer;
-  }
-  .picker:hover { border-color: var(--edge-4); }
-  .picker:focus,
-  .picker:focus-visible {
-    outline: none;
-    border-color: var(--edge-4);
-  }
-  /* the popup list is the toolkit's own window; these are the only two
-     properties it honours */
-  .picker option {
-    background: var(--ground-7);
-    color: var(--bone-9);
-  }
-
-  .tabs {
-    flex: none;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .tab {
-    font: inherit;
-    font-size: 11px;
-    color: var(--bone-3);
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid var(--ground-10);
-    padding: 3px 7px;
-    cursor: pointer;
-  }
-  .tab.on { color: var(--bone-13); border-color: var(--edge-4); background: rgba(150, 37, 56, 0.35); }
-  .tab .count { color: var(--edge-5); margin-left: 4px; }
-  .clash {
-    color: var(--gold-1);
-    font-size: 11px;
-    margin-left: 4px;
-    cursor: help;
-  }
-
-  .move {
-    flex: none;
-    font: inherit;
-    font-size: 10px;
-    color: var(--bone-3);
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid var(--ground-10);
-    padding: 2px 5px;
-    cursor: pointer;
-  }
-  .move:hover:not(:disabled) { color: var(--bone-13); border-color: var(--edge-4); }
-  .move:disabled { opacity: 0.35; cursor: default; }
-
-  .head,
-  .sound {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 6px;
-    min-height: 28px;
-  }
-
-  input.name {
-    flex: 1 1 auto;
-    min-width: 0;
-    font: inherit;
-    color: var(--bone-13);
-    background: none;
-    border: none;
-    outline: none;
-  }
-
-  .file { flex: 1 1 auto; min-width: 0; color: var(--dim-2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .note.pointer { padding: 2px 2px 4px; }
   /* drawn by us, like the sliders on the other panels: an engine left to its
      own devices renders a different control on every platform */
   .vol {
@@ -1409,58 +941,6 @@
     padding: 0 6px;
   }
 
-  .results {
-    flex: none;
-    max-height: 150px;
-    overflow-y: auto;
-    padding: 2px;
-    display: flex;
-    flex-direction: column;
-  }
-  .hit {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    font: inherit;
-    font-size: 11px;
-    color: inherit;
-    background: none;
-    border: none;
-    text-align: left;
-    padding: 3px 5px;
-    cursor: pointer;
-  }
-  .hit:hover { background: rgba(150, 37, 56, 0.45); }
-  .already { margin-left: auto; color: var(--edge-2b); font-size: 10px; }
-
-  .items {
-    flex: 1 1 auto;
-    min-height: 170px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding-right: 2px;
-  }
-  .items::-webkit-scrollbar,
-  .results::-webkit-scrollbar { width: 6px; }
-  .items::-webkit-scrollbar-thumb,
-  .results::-webkit-scrollbar-thumb { background: var(--dim-1); border-radius: 3px; }
-
-  .listhead {
-    flex: none;
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    margin-top: 2px;
-    padding: 0 2px 2px;
-    border-bottom: 1px solid var(--ground-10);
-    color: var(--edge-2b);
-    font-size: 10px;
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
-  }
-  .listhead .count { margin-left: auto; color: var(--edge-5); }
   .link {
     font: inherit;
     font-size: 10px;
@@ -1474,67 +954,12 @@
   }
   .link:hover { color: var(--bone-13); }
 
-  /* flat rows with a rarity edge: unmistakably contents, not controls */
-  .row {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px 4px 6px;
-    min-height: 24px;
-    background: rgba(0, 0, 0, 0.22);
-    border-left: 3px solid var(--ground-10);
-  }
-  .row:nth-child(even) { background: rgba(0, 0, 0, 0.12); }
-  .row:hover { background: rgba(150, 37, 56, 0.22); }
-  .row.c-sat { border-left-color: #d24b4b; }
-  .row.c-set { border-left-color: #45c15a; }
-  .row.c-her { border-left-color: #35d3c1; }
-  .row.c-ang { border-left-color: var(--gold-1); }
-  .row.c-unh { border-left-color: #e04a7a; }
-  .row span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .grade {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--dim-2);
-    font-size: 10px;
-  }
-  .letter { min-width: 16px; text-align: right; }
-  .odds {
-    min-width: 48px;
-    text-align: right;
-    color: var(--edge-5);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .del {
-    flex: none;
-    font: inherit;
-    font-size: 14px;
-    color: var(--edge-1b);
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0 2px;
-  }
-  .del:hover { color: #e05a5a; }
-  .del.armed,
   .link.armed {
     color: #f0c0c0;
     background: rgba(180, 30, 30, 0.55);
     font-size: 10px;
     padding: 2px 6px;
-  }
-
-  .empty {
-    color: var(--dim-2);
-    text-align: center;
-    font-size: 11px;
-    line-height: 1.5;
-    padding: 12px 8px;
   }
 
   .btn {
@@ -1558,7 +983,6 @@
   }
   .btn:hover { border-image-source: var(--btn-hover); }
   .btn:active { border-image-source: var(--btn-down); }
-  .btn.add { height: 24px; font-size: 10px; }
   /* Six rows carry three of these each; at full size they alone were 194px of
      a row that had 360 to live in. The class was on the buttons from the start
      and never had a rule. */
@@ -1580,4 +1004,38 @@
      inherited the ordinary text colour and was the only one of the seven with
      no colour of its own. */
   .c-gold { color: var(--gold-1); }
+  /* A hunted relic is not a rarity either — all 156 of them are Common, which
+     is the whole reason this row exists instead of a rarity switch. Teal, so it
+     reads as its own kind of alert beside the five colours that all mean "an
+     item this good" and the peach the zone owns. */
+  .c-relic { color: #7fd6c2; }
+
+  /* 156 rows against the buffs' 25, so this one scrolls rather than growing the
+     panel by a screen and a half. The height is a little over ten rows: enough
+     that a search reads as a list, short enough that the links under it stay in
+     view — they are how the state is undone, and a control whose escape hatch
+     is below the fold is the one that traps people. */
+  .relics {
+    gap: 2px 8px;
+    max-height: 168px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .relic { gap: 5px; min-width: 0; }
+  /* The buff grid dims what is not ticked. That cannot work here: the usual way
+     to reach this grid is to search with nothing hunted yet, and every result
+     would be dimmed at once — which is the state the buff picker learnt reads
+     as "this whole control is disabled". So ticked is marked by GAINING the
+     relic colour rather than by everything else losing brightness, and the
+     checkbox says the same thing a second time. */
+  .relic:not(.off) .bname { color: #7fd6c2; }
+  .relic img { width: 16px; height: 16px; }
+  .relic .bname {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
 </style>

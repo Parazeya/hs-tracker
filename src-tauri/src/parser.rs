@@ -875,6 +875,29 @@ fn xp_gain(d: &Value) -> i64 {
 /// on it is simply what a vault is.
 const SELF_NUMBERED: [i64; 5] = [12, 13, 14, 15, 19];
 
+/// Relics. Type 16 holds the 156 of them and nothing else.
+///
+/// They are here because the ground path keeps only `c == 1` and a relic is
+/// never that: across the owner's two captures, 1,652 relic sightings — 827 on
+/// the floor, 70 picked up, 755 in inventory snapshots — carry `c == 0` without
+/// a single exception, and every id seen lands inside the table's own 0..155.
+/// So the flag that means "named item" cannot be what admits a relic; the type
+/// has to.
+///
+/// Read off the FINGERPRINT, not the item: a relic packet carries no `type`
+/// field at all, so the trailing number of the key it arrives under is the only
+/// place its type is written. A relic reaching `is_item_like` without a
+/// fingerprint therefore stays refused — none of the 827 did.
+///
+/// Deliberately NOT added to `SELF_NUMBERED` above. That list is what makes a
+/// type nameable, and naming relics would change what lists already saved on
+/// disk mean: `Death's Scythe` is a Set polearm AND relic 60, `Shrunken Head` a
+/// Satanic charm AND relic 28, and a list holding either name today can only
+/// ever have meant the non-relic one, because no relic has ever reached the
+/// engine to match it. Relics stay nameless and are alerted on by identity
+/// instead — see `GameStats::hunted_relic`.
+const RELIC: i64 = 16;
+
 /// What only a market message carries. See `item_sources`.
 const MARKET_FIELDS: &[&str] =
     &["marketId", "market_id", "market_tokens", "marketTokens", "seller_name", "sellerName", "price"];
@@ -1023,7 +1046,9 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         // Will this was reported for.
         return candidates
             .into_iter()
-            .filter(|(_, item)| int_field(item, &["c"]) == 1)
+            .filter(|(fp, item)| {
+                int_field(item, &["c"]) == 1 || fingerprint_type(fp.as_deref()) == Some(RELIC)
+            })
             .filter(|(_, item)| !belongs_to_a_player(item))
             .filter(|(_, item)| lies_on_the_floor(item))
             .map(|(fp, item)| (fp, item, true))
@@ -1832,6 +1857,78 @@ mod tests {
         );
         assert_eq!(rarity, &Value::Null, "but a base claims no rarity");
         assert!(name.is_empty(), "so it is left nameless, not called Wind Token");
+    }
+
+    /// A relic on the floor is seen, and the ordinary bases beside it are not.
+    ///
+    /// Verbatim from the owner's capture, trimmed only of the bases that make
+    /// no new point. Every relic in 1,652 sightings carries `c == 0`, so the
+    /// `c == 1` rule that admits a named drop threw all 827 of them away and no
+    /// relic had ever reached the engine at all — which is why nothing could be
+    /// alerted on one. The type has to do the admitting, read off the
+    /// fingerprint because a relic packet has no `type` field.
+    ///
+    /// The trap is in the same packet on purpose: `99-...-555-3` is a `c == 0`
+    /// type-3 base with a `gd` of its own, and it must still be refused. Letting
+    /// the relic in by type must not let its neighbours in by accident.
+    #[test]
+    fn a_relic_on_the_floor_is_seen_and_the_bases_beside_it_are_not() {
+        let msg = json!({
+            "message": "ok",
+            "status": 1,
+            "itemData": {
+                "99-4964607-1a025650554-16": {
+                    "a": 24533420, "b": 127, "c": 0, "d": 9, "e": 0,
+                    "gd": 2694669, "j": 0, "sh": "8b5bdb8ad9be"
+                },
+                "99-4964607-1a025650555-3": {
+                    "a": 663812958, "b": 4, "c": 0, "d": 9, "e": 0,
+                    "gd": 2694670, "j": 14, "n": 4, "sh": "4e3012a3a7db"
+                }
+            }
+        });
+        let events = events_from_messages(std::slice::from_ref(&msg));
+        assert_eq!(events.len(), 1, "the type-3 base is still refused: {events:?}");
+        let GameEvent::ItemAdded { name, item_type, item_id, weapon_type, ground, hash, .. } =
+            &events[0]
+        else {
+            panic!("not an item: {events:?}")
+        };
+        assert_eq!((*item_type, *item_id, *weapon_type), (16, 127, 0), "relic 127");
+        assert!(*ground, "it is lying on the floor, which is where a relic is worth hearing about");
+        assert_eq!(hash, "8b5bdb8ad9be");
+        // Nameless on purpose. Naming type 16 would change what a list already
+        // saved on disk means — see the comment on `RELIC`. The windows read
+        // the name off the identity instead, and `item_name` is what they call.
+        assert!(name.is_empty(), "relics are not named here");
+        assert_eq!(crate::items::item_name(16, 127, 0), Some("Jungle Vial"));
+    }
+
+    /// The same relic going into the bag, verbatim from the same capture.
+    ///
+    /// The pickup path never had the `c == 1` wall, so this arrived before the
+    /// change too — but 70 pickups against 827 drops is why the floor is the
+    /// sighting that matters. Both carry `sh: 8b5bdb8ad9be`, which is what lets
+    /// the engine treat them as one item and chime once.
+    #[test]
+    fn the_pickup_of_a_relic_is_the_same_item_as_its_drop() {
+        let msg = json!({
+            "message": "Success on inventory update ext",
+            "status": 1,
+            "operations": { "add": {
+                "99-4964607-1a025650554-16": {
+                    "a": 24533420, "b": 127, "c": 0, "d": 9, "e": 0,
+                    "j": 0, "sh": "8b5bdb8ad9be"
+                }
+            }}
+        });
+        let events = events_from_messages(std::slice::from_ref(&msg));
+        let GameEvent::ItemAdded { item_type, item_id, ground, hash, .. } = &events[0] else {
+            panic!("not an item: {events:?}")
+        };
+        assert_eq!((*item_type, *item_id), (16, 127));
+        assert!(!*ground, "this one is in the bag");
+        assert_eq!(hash, "8b5bdb8ad9be", "the same hash the floor sighting carried");
     }
 
     /// A relic is Common and D-graded, and the packet is not allowed to say
