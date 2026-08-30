@@ -115,6 +115,11 @@
   // Four fit. A rotation can carry five, and the box used to cut the list
   // there and say nothing — the two columns read as complete and were not.
   const SHOWN = 4;
+
+  /// Relics. They reach this timeline only when one is being hunted, and they
+  /// are hunted from Alerts by identity rather than by name — see the drop rows
+  /// below, and `hunted_relic` in the engine.
+  const RELIC = 16;
   let allBuffs = $derived(snap?.satanic_zone?.buffs ?? []);
   let allDebuffs = $derived(snap?.satanic_zone?.debuffs ?? []);
   let buffs = $derived(allBuffs.slice(0, SHOWN).map(buffInfo));
@@ -488,7 +493,14 @@
             <span class="dim tier">{tierLabel(d.tier)}</span>
             <span class="c-blue mf">{d.mf ? 'MF' : ''}</span>
             {#if d.announced}<span class="dim">server</span>{/if}
-            {#if lists.length && dropLabel(d)}
+            <!-- Not for a relic, however well `dropLabel` names one. A relic
+                 arrives on the wire with no name at all — every one of them is
+                 Common, and three share a name with another item — so it is
+                 alerted on by identity in Alerts, and `listed_sound` has
+                 nothing to match a list entry against. Offering the button here
+                 would put "Jungle Vial" on a list that can never fire, which
+                 reads as a broken filter rather than as the wrong door. -->
+            {#if lists.length && dropLabel(d) && d.item_type !== RELIC}
               <button class="tolist" title="Add to a sound list" onclick={() => (adding = adding === d.ts_ms ? null : d.ts_ms)}>+</button>
               {#if adding === d.ts_ms}
                 <!-- The timeline scrolls, and this opens inside it: on a drop
@@ -586,10 +598,6 @@
         </span>
       </div>
       <div class="vitals">
-        <span class="dim">Magic find</span>
-        <b class="c-blue" title="the character's magic find as the client last reported it — it arrives with the heartbeat, not with the save">
-          {snap?.mf ? `${fmt(snap.mf)}%` : '—'}
-        </b>
         <span class="dim">Level</span>
         <b>{snap?.character?.level || '—'}</b>
         <span class="dim">Hero</span>
@@ -998,10 +1006,6 @@
   .c-her { color: #00ffae; }
   .c-sat { color: var(--rar-satanic); }
   .c-blue { color: var(--mf); }
-  /* `.vitals b` is (0,1,1) and a bare class is (0,1,0), so the Magic Find figure
-     in the drops panel — the flagship one — has been rendering bone all
-     along and no change to .c-blue could reach it. */
-  .vitals b.c-blue { color: var(--mf); }
   .c-myt { color: #c060e0; }
   .c-unh { color: #e04a7a; }
   .c-set { color: #40d040; }

@@ -138,6 +138,15 @@
 
   const item = (name) => snap?.items?.[name] ?? { total: 0, mf: 0, per_hour: 0 };
 
+  /// Bosses put down this session.
+  ///
+  /// The backend counts each one by name — Statistics lists them that way, and
+  /// so does a finished run — but a chip 124px wide has room for a figure, not
+  /// a table. Grouped exactly as `stats::tallies` groups them, so this figure
+  /// and that list can never disagree.
+  const tallied = (group) =>
+    (snap?.tallies ?? []).reduce((n, t) => (t.group === group ? n + t.total : n), 0);
+
   let buffs = $derived(
     Array.from({ length: 3 }, (_, i) => {
       const id = snap?.satanic_zone?.buffs?.[i];
@@ -276,22 +285,6 @@
         <img src={snap?.paused ? art('frozen_icon') : icon('time')} alt="" class="ic" />
         <span class="val" class:frozen={snap?.paused}>{snap ? dur(sessionSecs) : '0:00:00'}</span>
       </div>
-      <!-- Magic find keeps the top row — it is the one figure the game's own HUD
-           never shows, which is why the two levels and the two purse totals left
-           this panel and this did not. No written tag in a 124px cell: the icon,
-           the size and the blue carry it, and the label would not fit beside a
-           five-digit percentage. Switching it off leaves the row a cell short,
-           the panel's own arithmetic being eleven chips into twelve slots. -->
-      {#if shown('vitals')}
-        <div
-          class="chip md"
-          style:border-image-source="url({art('chip_dark')})"
-          title="magic find, off the client's heartbeat rather than the character save"
-        >
-          <img src={icon('mf')} alt="" class="ic" />
-          <span class="val mf">{snap?.mf ? `${fmt(snap.mf)}%` : '—'}</span>
-        </div>
-      {/if}
       <div
         class="chip md mail"
         class:has={snap?.has_mail}
@@ -301,6 +294,26 @@
       >
         <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
         <span class="val">{snap?.has_mail ? 'Mail!' : 'No mail'}</span>
+      </div>
+      <!-- The third cell of the session row, which stood empty from the day the
+           magic-find figure came out of it: every row on this panel is
+           140 + 124 + 124 and the comment on `.chip` keeps those boundaries
+           down the whole panel, so a row of two ended in a gap.
+
+           The skull is the game's own: `Mapscreen_Skull_spr` is what its map
+           screen puts over a boss dungeon, so it already reads as "boss" to
+           anyone who has opened that screen — and hs-map marks the same
+           dungeons with the same sprite. Exported by tools/export_ui.py rather
+           than dropped in by hand, so a season that redraws it can regenerate
+           it. The chests are counted too and are on the Statistics tab; one
+           number is what fits here and the bosses are the one worth watching. -->
+      <div
+        class="chip md"
+        style:border-image-source="url({art('chip_dark')})"
+        title="bosses put down this session"
+      >
+        <img src={icon('boss')} alt="" class="ic" />
+        <span class="val">{fmt(tallied('boss'))}</span>
       </div>
     </div>
   {/if}
@@ -515,9 +528,10 @@
        the content box exactly, so a full row looks the same either way — but a
        row that is one cell short does not. `space-between` sent the survivors to
        the two edges and moved every column boundary with them; ghost mode drops
-       the Reset button, and switching magic find off drops a chip from the top
-       row, so short rows are ordinary here rather than exotic. The gap goes at
-       the end, where it reads as the panel running out rather than as a hole. */
+       the Reset button, and the session row has stood two chips wide since the
+       magic-find figure came out, so short rows are ordinary here rather than
+       exotic. The gap goes at the end, where it reads as the panel running out
+       rather than as a hole. */
     justify-content: flex-start;
     align-items: center;
   }
@@ -577,12 +591,6 @@
      tooltip because this panel is what a capture card records, and nobody
      hovers a video. Gold measures 10:1 on the plate. */
   .grade { color: var(--gold-2); letter-spacing: 1px; }
-
-  /* Magic find is the panel's headline now, so it is set a size larger. The
-     colour comes from --mf, which is defined per theme in theme.css — the old
-     #5050ae was a dark blue on a dark plate and measured 2.4:1 against the chip,
-     under the 3:1 floor for display text and well under the 4.5:1 for this size. */
-  .val.mf { font-size: 15px; color: var(--mf); }
 
   /* Mail. Blinking while the news is new, gold for as long as it waits. The
      blink is a square wave rather than a fade because everything else in this
