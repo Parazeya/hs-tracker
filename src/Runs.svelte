@@ -3,7 +3,7 @@
   import { fmt, RARITIES, RARITY_CLASS, difficulty } from './format.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
-  import { tierLabel, zoneLabel } from './items.js';
+  import { tierLabel } from './items.js';
   import { cardBytes, drawRunCard } from './runcard.js';
 
   let runs = $state([]);
@@ -144,7 +144,6 @@
               {run.character ?? 'unknown character'}
               {#if run.level}· Lv {run.level}{/if}
               {#if run.herolevel}· HLv {run.herolevel}{/if}
-              {#if run.mf}· MF {fmt(run.mf)}%{/if}
               {#if run.difficulty != null}· {difficulty(run.difficulty, run.hell_sub)}{/if}
             </div>
             <div class="rates">
@@ -202,19 +201,6 @@
                   {/each}
                 </div>
               {/if}
-            </div>
-          {/if}
-
-          {#if run.zones?.length}
-            <div class="box" style:border-image-source="url({art('chip_dark')})">
-              <div class="head"><span class="accent">Where it happened</span></div>
-              {#each run.zones as [room, secs]}
-                <div class="zone">
-                  <span class="name">{zoneLabel(room)}</span>
-                  <span class="bar"><i style:width="{Math.round((secs / run.secs) * 100)}%"></i></span>
-                  <span class="dim">{dur(secs)}</span>
-                </div>
-              {/each}
             </div>
           {/if}
 
@@ -406,29 +392,6 @@
      the bosses and chests rows lost to it and every figure came out bone. */
   .tallyrow b.c-sat { color: var(--rar-satanic); }
   .tallyrow b.c-gold { color: var(--gold-2); }
-
-  .zone { display: flex; align-items: center; gap: 6px; }
-  /* The name was the only fixed part and the bar the only one that could give,
-     so at a narrow window the bar — the whole point of the row — was squeezed
-     to 2px and the duration printed outside the chip. */
-  .zone .name {
-    flex: 1 1 auto;
-    min-width: 60px;
-    max-width: 116px;
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .zone .dim { flex: none; }
-  .bar {
-    flex: 1 1 auto;
-    min-width: 40px;
-    height: 6px;
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid var(--ground-10);
-  }
-  .bar i { display: block; height: 100%; background: var(--edge-2b); }
 
   .find { display: flex; align-items: baseline; gap: 8px; padding: 1px 0; }
   .find .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
