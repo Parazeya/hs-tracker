@@ -6,6 +6,7 @@
   import Runs from './Runs.svelte';
   import Shop from './Shop.svelte';
   import SoundFilter from './SoundFilter.svelte';
+  import Watchlist from './Watchlist.svelte';
   import Settings from './Settings.svelte';
   import About from './About.svelte';
   import Codex from './Codex.svelte';
@@ -25,6 +26,7 @@
     { id: 'stats', label: 'Statistics', component: Stats },
     { id: 'runs', label: 'Runs', component: Runs },
     { id: 'filter', label: 'Alerts', component: SoundFilter },
+    { id: 'watchlist', label: 'Watchlist', component: Watchlist },
     { id: 'codex', label: 'Items', component: Codex },
     { id: 'shop', label: 'Shopping List', component: Shop },
     { id: 'settings', label: 'Settings', component: Settings },
