@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.4 — 2026-08-30
+
+### Added
+
+- A Watchlist tab, and the custom filter moved into it.
+- A whole rarity or item type added to a list at once.
+- Relic alerts, picked by search.
+- Bosses this session, on the overlay.
+
+### Changed
+
+- Relics have a chime of their own.
+
+### Removed
+
+- The magic-find readout, from the overlay, Statistics and Runs.
+- Where it happened, from Runs.
+
+### Fixed
+
+- 183 names get back the drop chance the game states.
+- Each Essence Vault shows its own drop chance.
+- A drop chance the game does not state reads as a dash.
+- A switched-off list no longer counts as the winner of a conflict.
+- Two item categories no longer both read Flask.
+
 ## 1.0.3 — 2026-08-28
 
 ### Added
