@@ -514,7 +514,13 @@ def place_codes(place: str) -> list[str]:
 
 items, rarities, tiers, drops, zones, places, chases, rolls = {}, {}, {}, {}, {}, {}, {}, {}
 # What each identity says about itself, beside the name it goes by. See by_id.
-facts: dict[str, tuple[str, str, int]] = {}
+#
+# The rate is here as well as in `drops` because `drops` is keyed by NAME, and
+# the seven Essence Vaults are one name with seven rates — 1 in 6,750 for the
+# Superior one up to 1 in 100,000 for the Unholy. A name-keyed table cannot
+# hold that, so it holds none of them, and the panel showed seven rows with no
+# chance at all. An identity can.
+facts: dict[str, tuple[str, str, int, int]] = {}
 dropped: list[tuple[str, str, str]] = []
 # What each name is claimed to be, by every item that answers to it. See the
 # pruning below the loop.
@@ -639,7 +645,10 @@ for entry in ENTRIES:
         places.setdefault(name.lower(), sorted({str(w) for w in where}))
     if isinstance(identity, list) and len(identity) == 3 and identity[2] >= 0:
         game_id, weapon_type, item_type = identity
-        facts.setdefault(f"{item_type}:{game_id}:{weapon_type}", (name, rarity, tier))
+        own = rate if isinstance(rate, (int, float)) and rate > 0 and rate != NO_DROP else 0
+        facts.setdefault(
+            f"{item_type}:{game_id}:{weapon_type}", (name, rarity, tier, int(own))
+        )
     if entry.get("stats"):
         rolls.setdefault(name.lower(), entry["stats"])
 
@@ -714,6 +723,24 @@ def disagree(claims: set, field: int) -> bool:
     return len({c[field] for c in claims}) > 1
 
 
+def rates_disagree(claims: set) -> bool:
+    """Whether two claimants really say different things about how often it falls.
+
+    NO_DROP is not one of the things they can say. It is the engine's default,
+    left standing in a record that never states a rate at all, so a claimant
+    carrying it is silent rather than contradicting anyone — the same reason the
+    rarity rule above steps over a Common relic that shares a name.
+
+    Four names turned on this and lost a number the game states outright:
+    Shrunken Head is a Satanic charm the game gives 1 in 52,950 and a Common
+    relic that does not drop, and the charm's figure is exactly what the game's
+    own tooltip prints. Death's Scythe, Satan's Horn and Justice are the same
+    shape. Six names collide here in all; the two that remain — Angel and
+    Essence Vault — really are two items with two different rates.
+    """
+    return len({c[2] for c in claims if c[2] != NO_DROP}) > 1
+
+
 def only_notable(claims: set, field: int):
     """The one claim a notable rarity makes about this, when only one does."""
     mine = [c for c in claims if c[0] in NOTABLE]
@@ -723,7 +750,7 @@ def only_notable(claims: set, field: int):
 muddled = {
     "rarity": {n for n, c in claimed.items() if disagree(c, 0)},
     "tier": {n for n, c in claimed.items() if disagree(c, 1)},
-    "rate": {n for n, c in claimed.items() if disagree(c, 2)},
+    "rate": {n for n, c in claimed.items() if rates_disagree(c)},
 }
 settled, refused = {}, set()
 for name in muddled["rarity"]:
@@ -744,9 +771,22 @@ for name in muddled["tier"]:
 for name in muddled["rate"]:
     for table in (drops, chases, zones, places):
         table.pop(name, None)
+# Where only one claimant states a rate at all, that rate is the answer, and the
+# name keeps it rather than being dropped for a disagreement that is not one.
+settled_rate = 0
+for name, claims in claimed.items():
+    if name in muddled["rate"]:
+        continue
+    stated = {c[2] for c in claims if c[2] != NO_DROP}
+    if len(stated) == 1 and drops.get(name) in (None, NO_DROP):
+        drops[name] = stated.pop()
+        settled_rate += 1
 for field, names in muddled.items():
     if names:
         print(f"note: {len(names)} names two items disagree about, so no {field}: {', '.join(sorted(names))}")
+if settled_rate:
+    print(f"note: {settled_rate} names kept the one rate a claimant actually states, "
+          f"the other saying only the engine's \"does not drop\"")
 if settled:
     print(f"note: {len(settled)} settled by the one notable claimant: "
           f"{', '.join(f'{n} = {r}' for n, r in sorted(settled.items()))}")
@@ -766,12 +806,17 @@ if refused:
 # the name is the same answer and a second copy of it would only be a second
 # thing to keep in step.
 by_id = {
-    key: (name, rarity, tier)
-    for key, (name, rarity, tier) in facts.items()
-    if rarity and (rarities.get(name.lower()) != rarity or tiers.get(name.lower()) != tier)
+    key: (name, rarity, tier, rate)
+    for key, (name, rarity, tier, rate) in facts.items()
+    if rarity
+    and (
+        rarities.get(name.lower()) != rarity
+        or tiers.get(name.lower()) != tier
+        or (rate and drops.get(name.lower()) != rate)
+    )
 }
 print(f"note: {len(by_id)} identities the name tables cannot answer for: "
-      f"{', '.join(sorted({n for n, _, _ in by_id.values()}))}")
+      f"{', '.join(sorted({n for n, _, _, _ in by_id.values()}))}")
 
 rs_rooms = sorted(rooms.items())
 
@@ -790,7 +835,7 @@ export const TIER_BY_NAME = {json.dumps(tiers, ensure_ascii=False, separators=("
 // grade], keyed the same way as ITEMS. Two items can wear one name — the game
 // calls both a Set gun and a Heroic orb "Angel" — and the seven Essence Vaults
 // share theirs across every rarity there is.
-export const BY_ID = {json.dumps({k: [n, r, t or 0] for k, (n, r, t) in sorted(by_id.items())}, ensure_ascii=False, separators=(",", ":"))};
+export const BY_ID = {json.dumps({k: [n, r, t or 0, d or 0] for k, (n, r, t, d) in sorted(by_id.items())}, ensure_ascii=False, separators=(",", ":"))};
 
 // how rare a named item is: "one in N", so a bigger number is a rarer drop
 export const DROP_RATE = {json.dumps(drops, ensure_ascii=False, separators=(",", ":"))};
@@ -886,7 +931,9 @@ def rs_str(value: str) -> str:
 
 rs_items = sorted((rs_key(k), v) for k, v in items.items())
 rs_muddled = sorted(refused)
-rs_by_id = sorted((rs_key(k), n, r, t or 0) for k, (n, r, t) in by_id.items())
+# Three of the four: `Known` carries a name, a rarity and a grade, and nothing
+# in the Rust asks how often a thing falls.
+rs_by_id = sorted((rs_key(k), n, r, t or 0) for k, (n, r, t, _) in by_id.items())
 rs_rarities = sorted(rarities.items())
 rs_tiers = sorted(tiers.items())
 
