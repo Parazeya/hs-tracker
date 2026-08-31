@@ -96,6 +96,46 @@ people change, with the rest a click away under **More settings**.
 
 ![Settings](screenshots/settings.png)
 
+### Skins
+
+**Theme** in Settings changes what every window is wearing, without a restart.
+
+*Hero Siege* is the game's own art — nine-sliced panels, painted buttons and the
+game's pixel face — and *Ebontharn* is the same art in the season's colours.
+
+*Modern* is neither. It takes the art off and draws the chrome in CSS instead:
+hairline borders, a radius, flat surfaces on Tailwind's zinc ramp — the neutrals
+[shadcn/ui](https://ui.shadcn.com) is built from — and the system's own UI font
+in place of the pixel one. The sprites that are genuinely icons become line
+icons, the figures are set in tabular digits so a column of them stops jittering
+as it counts, and the eight crimson headings go neutral so the red is left
+meaning a Satanic drop and a thing that has gone wrong. It is for the second
+monitor: nothing about it is prettier, and all of it is easier to read.
+
+| Statistics | Alerts |
+| --- | --- |
+| ![Statistics, modern skin](screenshots/modern-statistics.png) | ![Alerts, modern skin](screenshots/modern-alerts.png) |
+
+| Items | Watchlist |
+| --- | --- |
+| ![Items, modern skin](screenshots/modern-items.png) | ![Watchlist, modern skin](screenshots/modern-watchlist.png) |
+
+| Runs | Settings |
+| --- | --- |
+| ![Runs, modern skin](screenshots/modern-runs.png) | ![Settings, modern skin](screenshots/modern-settings.png) |
+
+The overlay and the two windows that only appear over the game follow it too —
+the pinned panel, the drop ticker, and the pillar the app throws up when
+something worth it lands.
+
+![The overlay, modern skin](screenshots/modern-overlay.png)
+
+| The loot pillar | A Satanic Zone rotation |
+| --- | --- |
+| ![The loot pillar, modern skin](screenshots/modern-flourish.png) | ![A rotation, modern skin](screenshots/modern-satanic-zone.png) |
+
+![The drop ticker, modern skin](screenshots/modern-ticker.png)
+
 
 ## Install
 

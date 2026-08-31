@@ -1,6 +1,6 @@
 <script>
   import { invoke } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { css } from './skin.svelte.js';
   import appIcon from '../src-tauri/icons/128x128.png';
 
   let info = $state(null);
@@ -75,7 +75,7 @@
 
 <div class="panel">
   <div class="body">
-    <div class="card" style:border-image-source="url({art('chip_dark')})">
+    <div class="card" style:border-image-source={css('chip_dark')}>
       <img class="mark" src={appIcon} alt="" />
       <div class="who">
         <div class="name">HS Tracker</div>
@@ -85,7 +85,7 @@
       </div>
     </div>
 
-    <div class="card" style:border-image-source="url({art('chip_dark')})">
+    <div class="card" style:border-image-source={css('chip_dark')}>
       <div class="row"><span class="k">Made by</span><b>@Parazeya</b></div>
       <div class="row"><span class="k">Found in</span><b>the Hero Siege Discord</b></div>
       <div class="row">
@@ -96,7 +96,7 @@
       </div>
     </div>
 
-    <div class="card" style:border-image-source="url({art('chip_dark')})">
+    <div class="card" style:border-image-source={css('chip_dark')}>
       <div class="head">If something goes wrong</div>
       <div class="note">
         Errors are written down as they happen — panics, and anything a panel
@@ -114,7 +114,7 @@
       </div>
     </div>
 
-    <div class="card" style:border-image-source="url({art('chip_dark')})">
+    <div class="card" style:border-image-source={css('chip_dark')}>
       <div class="head">Updates</div>
       <div class="line">
         <button class="btn" disabled={checking || !info} onclick={check}>

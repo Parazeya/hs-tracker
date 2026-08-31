@@ -148,3 +148,73 @@ body {
   --mf: #7fb2ff;
   --rar-satanic: #ff6a6a;
 }
+
+/* Modern: the app without the game's art on it. Flat surfaces, hairline
+   borders and a system font, on Tailwind's zinc ramp — the neutrals
+   shadcn/ui is built from. The chrome these tokens are worn with is in
+   modern.css; the sprites are replaced by src/assets/modern/*.svg. */
+:root[data-theme='modern'] {
+  --bone-3: #8b8b95;
+  --bone-4: #9a9aa4;
+  --bone-5: #a1a1aa;
+  --bone-6: #c8c8d0;
+  --bone-7: #b4b4bd;
+  --bone-8: #cdcdd4;
+  --bone-9: #dcdce2;
+  --bone-10: #e1e1e6;
+  --bone-11: #e8e8ed;
+  --bone-12: #ebebf0;
+  --bone-13: #f1f1f4;
+  --bone-14: #f4f4f6;
+  --bone-15: #fafafa;
+  --dim-1: #3f3f46;
+  --dim-2: #8b8b95;
+  --edge-1: #202024;
+  --edge-2: #27272a;
+  --edge-3: #2c2c31;
+  --edge-4: #313137;
+  --edge-5: #36363c;
+  --edge-6: #3b3b42;
+  --edge-7: #3f3f46;
+  --edge-8: #52525b;
+  --edge-9: #5b5b65;
+  --edge-1b: #3f3f46;
+  --edge-2b: #46464e;
+  --gold-1: #f5b53c;
+  --gold-2: #fbbf24;
+  --ground-1: #09090b;
+  --ground-2: #0b0b0e;
+  --ground-3: #0e0e11;
+  --ground-4: #111114;
+  --ground-5: #141417;
+  --ground-6: #18181b;
+  --ground-7: #1c1c20;
+  --ground-8: #202024;
+  --ground-9: #27272a;
+  --ground-10: #2a2a2f;
+  --ground-11: #2e2e33;
+  --mf: #7fb2ff;
+  --rar-satanic: #ff6a6a;
+
+  /* the same colours under the names the design system uses */
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #111114;
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #18181b;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #18181b;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+  --border: #27272a;
+  --input: #2e2e33;
+  --ring: #d4d4d8;
+  --radius: 6px;
+}

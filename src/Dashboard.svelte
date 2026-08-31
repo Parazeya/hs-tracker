@@ -1,6 +1,6 @@
 <script>
   import { appWindow, invoke, recall, remember } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import Stats from './Stats.svelte';
   import Runs from './Runs.svelte';
@@ -192,13 +192,13 @@
 </script>
 
 <div
-  class="panel"
+  class="panel window"
   class:scenic={art('backdrop')}
-  style:--backdrop="url({art('backdrop')})"
-  style:border-image-source="url({art('panel')})"
-  style:--btn="url({art('button')})"
-  style:--btn-hover="url({art('button_hover')})"
-  style:--btn-down="url({art('button_down')})"
+  style:--backdrop={css('backdrop')}
+  style:border-image-source={css('panel')}
+  style:--btn={css('button')}
+  style:--btn-hover={css('button_hover')}
+  style:--btn-down={css('button_down')}
   data-tauri-drag-region
 >
   <button
@@ -216,7 +216,7 @@
     <img src={art('close_hover')} alt="" class="close-hover" />
   </button>
 
-  <div class="title" style:background-image="url({art('header')})" data-tauri-drag-region>
+  <div class="title" style:background-image={css('header')} data-tauri-drag-region>
     <span>HS Tracker</span>
   </div>
 
@@ -239,7 +239,7 @@
       {/if}
     </nav>
 
-    <div class="pane" style:border-image-source="url({art('chip_dark')})">
+    <div class="pane" style:border-image-source={css('chip_dark')}>
       {#if trouble}
         <div class="trouble" class:bad={trouble.bad}>
           <div class="tt">{trouble.title}</div>

@@ -1,6 +1,6 @@
 <script>
   import { invoke } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { css } from './skin.svelte.js';
 
   let items = $state([]);
   let draft = $state('');
@@ -41,23 +41,23 @@
   <div class="entry">
     <input
       class="field"
-      style:border-image-source="url({art('chip_dark')})"
+      style:border-image-source={css('chip_dark')}
       placeholder="add item…"
       bind:value={draft}
       onkeydown={(e) => e.key === 'Enter' && add()}
     />
     <button
       class="btn"
-      style:--btn="url({art('button')})"
-      style:--btn-hover="url({art('button_hover')})"
-      style:--btn-down="url({art('button_down')})"
+      style:--btn={css('button')}
+      style:--btn-hover={css('button_hover')}
+      style:--btn-down={css('button_down')}
       onclick={add}>Add</button
     >
   </div>
 
   <div class="list">
     {#each items as it, i}
-      <div class="row" style:border-image-source="url({art('chip_dark')})">
+      <div class="row" style:border-image-source={css('chip_dark')}>
         <button class="text" class:copied={copied === i} onclick={() => copy(i)} title="Click to copy">
           {copied === i ? 'copied!' : it}
         </button>

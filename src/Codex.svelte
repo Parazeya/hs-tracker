@@ -17,7 +17,7 @@
     tierLabel,
     typeLabel,
   } from './items.js';
-  import { art } from './skin.svelte.js';
+  import { css } from './skin.svelte.js';
   import { recall, remember } from './bridge.js';
 
   /// Built once: the tables are keyed by lowercase name, and one item can wear
@@ -118,7 +118,7 @@
       </div>
     </div>
 
-    <div class="box" style:border-image-source="url({art('chip_dark')})">
+    <div class="box" style:border-image-source={css('chip_dark')}>
       {#if view === 'table'}
         <div class="head">
           <span class="hname">Item</span>

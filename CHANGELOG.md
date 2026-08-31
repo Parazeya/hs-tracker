@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A third skin, **Modern**: the app with the game's art taken off it. Flat
+  surfaces, hairline borders and the system's UI font on Tailwind's zinc ramp —
+  the neutrals shadcn/ui is built from — for reading rather than for looking at.
+  Every window follows it, the overlay and the loot pillar included.
+- `tools/preview/` — every window in a browser, with a mocked backend, so a skin
+  can be looked at without building the Rust side or running the game.
+
 ## 1.0.5 — 2026-08-31
 
 ### Fixed

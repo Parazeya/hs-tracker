@@ -1,5 +1,6 @@
 import { mount } from 'svelte';
 import './theme.css';
+import './modern.css';
 import { wearSkin } from './skin.svelte.js';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import App from './App.svelte';

@@ -340,7 +340,11 @@ pub struct Settings {
     pub sound_on_ground: bool,
     /// stop the session clock when nothing has happened for a while, so a break
     /// does not quietly halve every per-hour figure
-    /// which skin the windows wear: "default", or a season's own colours
+    /// Which skin the windows wear: "default", a season's own colours, or
+    /// "modern" — the one that takes the game's art off altogether. Stored as
+    /// written and never checked: the web side falls back to the default for a
+    /// name it does not know, so a settings file from a newer build costs a
+    /// plain-looking window rather than a failure to start.
     pub theme: String,
     /// A window that plays the game's own loot pillar when something worth it
     /// drops. Off by default: it is a window over the game, and that is the

@@ -1,6 +1,6 @@
 <script>
   import { invoke, listen } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
   import { BY_ID, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel, typeLabel } from './items.js';
   import { soundUrl, play } from './audio.js';
 
@@ -616,7 +616,7 @@
     play(await soundUrl(soundKey), volume);
   }
 
-  const btn = (name) => `url(${art(name)})`;
+  const btn = (name) => css(name);
 </script>
 
 <div class="panel">
@@ -624,7 +624,7 @@
   <!-- The switch first, and what it does in one sentence beside it. Every
        other control on this tab is dead while it is off, and it used to sit
        eight controls down a column three screens long. -->
-  <div class="strip" style:border-image-source="url({art('chip_dark')})">
+  <div class="strip" style:border-image-source={css('chip_dark')}>
     <button class="check" onclick={() => { settings.use_filter = !settings.use_filter; save(); }} aria-label="use this watchlist">
       <img src={settings.use_filter ? art('check_on') : art('check_off')} alt="" />
     </button>
@@ -651,7 +651,7 @@
     {#if renaming && filter}
       <input
         class="rename"
-        style:border-image-source="url({art('chip_dark')})"
+        style:border-image-source={css('chip_dark')}
         value={filter.name}
         oninput={(e) => { filter.name = e.currentTarget.value; save(); }}
         onblur={() => (renaming = false)}
@@ -711,7 +711,7 @@
            decides is which sound plays when two lists hold the same item. Up
            and down read as rank on a column in a way left and right on a row
            never did. -->
-      <div class="rail" style:border-image-source="url({art('chip_dark')})">
+      <div class="rail" style:border-image-source={css('chip_dark')}>
         <!-- The heading names the list that actually wins, not the first row.
              A list that is switched off is not in the running at all, so on a
              rail whose first row is unticked "1 wins" is a plain lie about the
@@ -773,7 +773,7 @@
           >{armed === listKey ? 'delete?' : '×'}</button>
         </div>
 
-        <div class="sound" style:border-image-source="url({art('chip_dark')})">
+        <div class="sound" style:border-image-source={css('chip_dark')}>
           <!-- The file is named after the list's id, so what is on disk is
                "list-luu3rf.wav" and says nothing to anybody. What matters here
                is whether there is one at all; the path is in the tooltip for
@@ -816,14 +816,14 @@
           >{armed === `snd-${soundKey}` ? 'Sure?' : 'Clear'}</button>
         </div>
 
-        <div class="box" style:border-image-source="url({art('chip_dark')})">
+        <div class="box" style:border-image-source={css('chip_dark')}>
           <div class="boxhead" data-tauri-drag-region>Add items</div>
           <!-- The Items tab's own toolbar, in its order, so that the two tabs
                are one app: search, then rarity, then kind. -->
           <div class="tools">
             <input
               class="find"
-              style:border-image-source="url({art('chip_dark')})"
+              style:border-image-source={css('chip_dark')}
               placeholder="Search by name"
               bind:value={addQuery}
               onkeydown={(e) => e.key === 'Enter' && matches[0] && addItem(matches[0].name)}
@@ -877,7 +877,7 @@
           {/if}
         </div>
 
-        <div class="box grow" style:border-image-source="url({art('chip_dark')})">
+        <div class="box grow" style:border-image-source={css('chip_dark')}>
           <div class="boxhead" data-tauri-drag-region>In this list</div>
 
           {#if rules.length}
@@ -927,7 +927,7 @@
           </div>
 
           {#if current.items.length > 8 || listQuery.trim()}
-            <input class="find" style:border-image-source="url({art('chip_dark')})" placeholder="Narrow this list…" bind:value={listQuery} />
+            <input class="find" style:border-image-source={css('chip_dark')} placeholder="Narrow this list…" bind:value={listQuery} />
           {/if}
 
           <div class="items">

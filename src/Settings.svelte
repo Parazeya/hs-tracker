@@ -1,6 +1,6 @@
 <script>
   import { invoke, recall, remember } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
 
   let settings = $state(null);
@@ -141,7 +141,7 @@
 <div class="panel">
   <div class="body">
   {#if settings && session}
-    <div class="section" style:border-image-source="url({art('chip_dark')})">
+    <div class="section" style:border-image-source={css('chip_dark')}>
       {#if overlay && advanced}
         <div class="line" data-tauri-drag-region>
           <span class="name">Opacity</span>
@@ -194,6 +194,7 @@
         >
           <option value="default">Hero Siege</option>
           <option value="ebontharn">Ebontharn</option>
+          <option value="modern">Modern</option>
         </select>
       </div>
       <div class="line" data-tauri-drag-region>
@@ -232,17 +233,17 @@
       <div class="line">
         <button
           class="btn"
-          style:--btn="url({art('button')})"
-          style:--btn-hover="url({art('button_hover')})"
-          style:--btn-down="url({art('button_down')})"
+          style:--btn={css('button')}
+          style:--btn-hover={css('button_hover')}
+          style:--btn-down={css('button_down')}
           onclick={() => bundle('export_settings')}
           title="Save every setting, filter and sound to one file"
         >Export all settings…</button>
         <button
           class="btn"
-          style:--btn="url({art('button')})"
-          style:--btn-hover="url({art('button_hover')})"
-          style:--btn-down="url({art('button_down')})"
+          style:--btn={css('button')}
+          style:--btn-hover={css('button_hover')}
+          style:--btn-down={css('button_down')}
           onclick={() => bundle('import_settings')}
           title="Replace every setting with the ones in a file"
         >Import…</button>
@@ -302,9 +303,9 @@
           <div class="line">
             <button
               class="btn wide"
-              style:--btn="url({art('button')})"
-              style:--btn-hover="url({art('button_hover')})"
-              style:--btn-down="url({art('button_down')})"
+              style:--btn={css('button')}
+              style:--btn-hover={css('button_hover')}
+              style:--btn-down={css('button_down')}
               onclick={() => restart(true)}
             >
               Enable the overlay — restart through XWayland
@@ -321,9 +322,9 @@
         <div class="line">
           <button
             class="btn wide"
-            style:--btn="url({art('button')})"
-            style:--btn-hover="url({art('button_hover')})"
-            style:--btn-down="url({art('button_down')})"
+            style:--btn={css('button')}
+            style:--btn-hover={css('button_hover')}
+            style:--btn-down={css('button_down')}
             onclick={() => restart(false)}
             title="Native Wayland is sharper and scales better, but has no overlay"
           >
@@ -335,7 +336,7 @@
     </div>
 
     {#if overlay && advanced}
-      <div class="section" style:border-image-source="url({art('chip_dark')})">
+      <div class="section" style:border-image-source={css('chip_dark')}>
         <div class="sechead" data-tauri-drag-region>Overlay sections</div>
         <div class="grid">
           {#each SECTIONS as [id, label]}

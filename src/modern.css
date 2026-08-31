@@ -1,0 +1,711 @@
+/* The Modern skin's chrome.
+ *
+ * theme.css gives every skin its colours; this gives one skin its shapes. The
+ * other two wear the game's own art — nine-sliced PNGs behind every panel, chip
+ * and button — and everything here exists because this one wears none: with the
+ * sprites gone, `border: 14px solid transparent` is fourteen pixels of nothing
+ * and a panel has no edge at all. So each surface the art used to draw is drawn
+ * again out of a hairline border, a radius and a fill.
+ *
+ * Why a stylesheet of its own rather than a block in each component: the twelve
+ * of them share one vocabulary — .panel, .box, .card, .section, .chip, .btn —
+ * and the same eight rules would otherwise be written out twelve times and then
+ * drift. Svelte scopes a component's own selectors but leaves the class names
+ * alone, so `.box` here reaches every .box in the app.
+ *
+ * Every rule is under `html[data-theme='modern']`, which is two things at once:
+ * the switch that keeps this off the other skins, and the specificity that lets
+ * it win. A component's `.box` compiles to `.box.svelte-1abc2de` — two classes.
+ * `html[data-theme='modern'] .box` is two classes and an element, which beats
+ * it without a single `!important` in the file.
+ *
+ * The layout is not re-done here. Widths, gaps and grid columns were tuned
+ * against the numbers they hold and are the same in any skin; what changes is
+ * the paint, the type, and the space inside a border.
+ */
+
+html[data-theme='modern'] {
+  /* Not bundled. WebView2 resolves system-ui to Segoe UI Variable, which is
+     what Windows itself is set in and near enough to Inter that shipping a
+     300KB face to be sure would be the only reason to. Inter is named first
+     for the machines that already have it. */
+  --font-sans: 'Inter', 'Inter Variable', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+
+  /* One step in from the surface radius, for what sits inside one: a nested box
+     with the same radius as its parent reads as a mistake. */
+  --radius-sm: 4px;
+  --radius-lg: 10px;
+
+  color-scheme: dark;
+}
+
+/* ── Type ────────────────────────────────────────────────────────────────── */
+
+/* The pixel face is set on whichever element each window uses for its root and
+   inherited from there. Unset at those six places rather than with a `*`, which
+   would also take the monospace off the paths and the setcap line. */
+html[data-theme='modern'] .panel,
+html[data-theme='modern'] .body,
+html[data-theme='modern'] .stack,
+html[data-theme='modern'] .stage,
+html[data-theme='modern'] .trouble,
+html[data-theme='modern'] .broke {
+  font-family: var(--font-sans);
+}
+
+html[data-theme='modern'] .panel {
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  color: var(--bone-5);
+}
+
+/* The pixel face had one weight, so the app leans on colour alone to separate a
+   label from its figure. A proportional face has weight to spend, and spending
+   it is most of why this skin is easier to read: the figure is the thing being
+   looked for on a panel of forty of them. */
+html[data-theme='modern'] .value,
+html[data-theme='modern'] .rowval,
+html[data-theme='modern'] .clock .value,
+html[data-theme='modern'] .vitals b,
+html[data-theme='modern'] .tallyrow b {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Digits that do not shuffle sideways as they change. Every one of these is a
+   running count under a heading, and a proportional face sets `1` narrow: a
+   column of them jitters on each update, which the pixel font never did. */
+html[data-theme='modern'] .value,
+html[data-theme='modern'] .rowval,
+html[data-theme='modern'] .rowmf,
+html[data-theme='modern'] .rowrate,
+html[data-theme='modern'] .clock .value,
+html[data-theme='modern'] .pct,
+html[data-theme='modern'] .ts,
+html[data-theme='modern'] .rate,
+html[data-theme='modern'] .odds,
+html[data-theme='modern'] .val,
+html[data-theme='modern'] .len,
+html[data-theme='modern'] .vitals b,
+html[data-theme='modern'] .tallyrow b {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* The small-caps headings. shadcn writes these the same way — muted, tracked
+   out, half a step down — so they keep their letter-spacing and lose only the
+   art they sat on. */
+html[data-theme='modern'] .label,
+html[data-theme='modern'] .sechead,
+html[data-theme='modern'] .subhead,
+html[data-theme='modern'] .box-head,
+html[data-theme='modern'] .head,
+html[data-theme='modern'] .effhead {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* The title of a card — "Loot", "Killed & opened", "Session rates". It is
+   crimson in the other skins, which is the colour the game paints a heading;
+   here nothing else on the window is red except a Satanic drop and a thing
+   that has gone wrong, and eight crimson headings drown both. Neutral and
+   bright is what a card title is in the design system, and it puts the red
+   back to meaning something. */
+html[data-theme='modern'] .box-head .accent,
+html[data-theme='modern'] .head .accent {
+  color: var(--bone-11);
+}
+
+/* A shadow under text is how the game's own UI keeps light letters legible on
+   painted stone. There is no stone here. */
+html[data-theme='modern'] .btn,
+html[data-theme='modern'] .tab,
+html[data-theme='modern'] .caption,
+html[data-theme='modern'] .hint,
+html[data-theme='modern'] .zname,
+html[data-theme='modern'] .znone,
+html[data-theme='modern'] .zkind .txt,
+html[data-theme='modern'] .zkind .zcurse,
+html[data-theme='modern'] .zbuff .bname {
+  text-shadow: none;
+}
+
+/* Nothing in this skin is pixel art, and the icons are SVG: smoothing is what
+   they want. The game's own sprites — buff icons, the app's mark — are only
+   ever drawn smaller than they were made, where it also reads better. */
+html[data-theme='modern'] img,
+html[data-theme='modern'] .panel,
+html[data-theme='modern'] .chip,
+html[data-theme='modern'] .btn,
+html[data-theme='modern'] .tab,
+html[data-theme='modern'] .box,
+html[data-theme='modern'] .card,
+html[data-theme='modern'] .section,
+html[data-theme='modern'] .pane,
+html[data-theme='modern'] .entry,
+html[data-theme='modern'] .clock,
+html[data-theme='modern'] .field,
+html[data-theme='modern'] .find,
+html[data-theme='modern'] .rename {
+  image-rendering: auto;
+}
+/* Except the app's own mark on the About page, which is pixel art at its own
+   size and is the one image here that smoothing only blurs. */
+html[data-theme='modern'] .mark { image-rendering: pixelated; }
+
+/* ── Surfaces ────────────────────────────────────────────────────────────── */
+
+/* The card, as the design system draws it: one hairline, one radius, one fill a
+   shade above the ground it sits on. Everything the sprites used to frame gets
+   it, because everything the sprites used to frame IS a card — the art was the
+   only thing saying so. */
+html[data-theme='modern'] .box,
+html[data-theme='modern'] .card,
+html[data-theme='modern'] .section,
+html[data-theme='modern'] .clock,
+html[data-theme='modern'] .chip,
+html[data-theme='modern'] .entry {
+  border: 1px solid var(--border);
+  border-image: none;
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: none;
+}
+
+/* The sprite frames were six and fourteen pixels of art, and the padding inside
+   them was whatever was left over. A one-pixel border leaves the content
+   against the edge, so each surface takes back the room the art was using. */
+html[data-theme='modern'] .box,
+html[data-theme='modern'] .card,
+html[data-theme='modern'] .section {
+  padding: 10px 12px;
+}
+html[data-theme='modern'] .clock { padding: 8px 12px; }
+html[data-theme='modern'] .chip,
+html[data-theme='modern'] .entry { padding: 0 10px; }
+
+/* The two windows that draw their own frame. `.panel` alone is not enough to
+   pick them out: every section inside the dashboard wraps itself in one too,
+   and those are layout with no edge of their own — framing each of them would
+   put a box around a box. `.window` and `.overlay` say which is which, and are
+   there for no other reason. */
+html[data-theme='modern'] .panel.window,
+html[data-theme='modern'] .panel.overlay {
+  border: 1px solid var(--border);
+  border-image: none;
+  border-radius: var(--radius-lg);
+  background: var(--background);
+}
+
+/* The dashboard's frame was fourteen pixels of painted border, and the padding
+   inside it was the six that were left. Thirteen of those fourteen go back into
+   the padding, so the sections are no tighter than they were. */
+html[data-theme='modern'] .panel.window { padding: 8px; }
+
+/* The overlay's is not a frame to be thinned: the chip grid inside it is 404px
+   wide against a 444px window, and those forty pixels are the border and the
+   padding together. Spend them all on padding and every column stays where the
+   game has taught the eye to look for it. */
+html[data-theme='modern'] .panel.overlay { padding: 19px; }
+
+/* Ghost mode asks for no frame at all, in any skin. */
+html[data-theme='modern'] .panel.ghost {
+  border-color: transparent;
+  background: none;
+}
+
+/* Watchlist's own three surfaces, and the run list in Runs. They are named
+   separately from the block above only because their class names are theirs
+   alone — the paint is the same card.
+
+   `.strip` is reached through `.pane` because the overlay has a `.strip` too:
+   a fixed column of icon buttons down the right-hand edge of the screen, which
+   is a sibling of the panel and never inside a pane. Giving that one a card
+   would put a grey slab over the game. Runs' `.list` is reached through
+   `.cols` for the same reason — Shop and Statistics both have a `.list` that
+   is a plain scrolling column with no edge of its own. */
+html[data-theme='modern'] .pane .strip,
+html[data-theme='modern'] .rail,
+html[data-theme='modern'] .sound,
+html[data-theme='modern'] .cols > .list {
+  border: 1px solid var(--border);
+  border-image: none;
+  border-radius: var(--radius);
+  background: var(--card);
+}
+html[data-theme='modern'] .pane .strip { padding: 8px 10px; }
+html[data-theme='modern'] .rail { padding: 6px; }
+html[data-theme='modern'] .sound { padding: 4px 8px; }
+html[data-theme='modern'] .cols > .list { padding: 8px; }
+
+/* The pane the sections are drawn into: a well rather than a card, so the cards
+   inside it have something to be lighter than. */
+html[data-theme='modern'] .pane {
+  border: 1px solid var(--border);
+  border-image: none;
+  border-radius: var(--radius);
+  background: var(--ground-2);
+  padding: 10px;
+}
+
+/* The title bar. The art was a painted plate with the name knocked out of it;
+   what says "window" now is the rule underneath and the weight of the name. */
+html[data-theme='modern'] .title {
+  height: 34px;
+  background-image: none;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bone-11);
+  margin-bottom: 2px;
+}
+
+/* ── Navigation ──────────────────────────────────────────────────────────── */
+
+/* The sidebar, as shadcn writes a vertical nav: nothing drawn until you are
+   over it or in it. The gradient the tabs carried was there to lift them off
+   painted stone — against a flat ground it only made eight bevelled slabs. */
+html[data-theme='modern'] .nav { gap: 2px; }
+
+html[data-theme='modern'] .tab {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-image: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+html[data-theme='modern'] .tab:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+html[data-theme='modern'] .tab.on,
+html[data-theme='modern'] .tab.on:hover,
+html[data-theme='modern'] .tab.on:active {
+  background: var(--secondary);
+  border-color: var(--edge-4);
+  border-image: none;
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+/* ── Controls ────────────────────────────────────────────────────────────── */
+
+/* The secondary button, which is what every button in this app is: none of them
+   is the one thing a screen is for, and a page of filled white buttons would
+   say they all were. */
+html[data-theme='modern'] .btn,
+html[data-theme='modern'] .card-btn,
+html[data-theme='modern'] .pick {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--edge-4);
+  border-image: none;
+  border-radius: var(--radius);
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+html[data-theme='modern'] .btn:hover,
+html[data-theme='modern'] .card-btn:hover,
+html[data-theme='modern'] .pick:hover {
+  border-image: none;
+  background: var(--ground-11);
+  border-color: var(--edge-7);
+}
+html[data-theme='modern'] .btn:active,
+html[data-theme='modern'] .card-btn:active,
+html[data-theme='modern'] .pick:active {
+  border-image: none;
+  background: var(--ground-9);
+}
+html[data-theme='modern'] .btn.sm { height: 24px; padding: 0 9px; font-size: 11.5px; }
+
+/* Armed: the second half of a two-click Reset or Delete. It was told by colour
+   alone at a weight the eye slides past; destructive is a whole button here,
+   which is how the question gets asked. */
+html[data-theme='modern'] .btn.armed {
+  background: var(--destructive);
+  border-color: var(--destructive);
+  color: var(--destructive-foreground);
+}
+html[data-theme='modern'] .btn.armed:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+/* The two segmented controls — Cards/Table in Items, and the minimum tier in
+   Alerts. One row of buttons where exactly one is on, which the design system
+   draws as a group with square inner edges and the chosen one filled.
+
+   The tier buttons are reached through `.tiers` because `.tier` on its own is
+   also the name of a table cell in three other panels: the letter grade beside
+   a drop, which is a span and not a button at all.
+
+   The negative margin that laps them together is the component's, and stays. */
+html[data-theme='modern'] .tiers .tier {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--edge-4);
+  border-radius: 0;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+html[data-theme='modern'] .tiers .tier + .tier { margin-left: -1px; }
+html[data-theme='modern'] .tiers .tier:hover { background: var(--ground-11); }
+html[data-theme='modern'] .pick { border-radius: 0; }
+html[data-theme='modern'] .views .pick:first-child,
+html[data-theme='modern'] .tiers .tier:first-child {
+  border-top-left-radius: var(--radius);
+  border-bottom-left-radius: var(--radius);
+}
+html[data-theme='modern'] .views .pick:last-child,
+html[data-theme='modern'] .tiers .tier:last-child {
+  border-top-right-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+html[data-theme='modern'] .pick.on,
+html[data-theme='modern'] .tiers .tier.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  z-index: 1;
+}
+
+/* Select. The two gradient triangles the component draws for a chevron are kept
+   — they are the only arrow that survives `appearance: none` on both engines —
+   and given the room a 12px control needs rather than an 11px one. */
+html[data-theme='modern'] .picker {
+  height: 30px;
+  padding: 0 26px 0 10px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  background-color: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+  transition: border-color 0.12s ease;
+}
+html[data-theme='modern'] .picker:hover { border-color: var(--edge-7); }
+html[data-theme='modern'] .picker option {
+  background: var(--popover);
+  color: var(--popover-foreground);
+}
+
+/* Text inputs. These wore chip art, which made a field look like a figure. */
+html[data-theme='modern'] .field,
+html[data-theme='modern'] .find,
+html[data-theme='modern'] .rename {
+  border: 1px solid var(--input);
+  border-image: none;
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 12px;
+}
+html[data-theme='modern'] .field::placeholder,
+html[data-theme='modern'] .find::placeholder,
+html[data-theme='modern'] .rename::placeholder {
+  color: var(--muted-foreground);
+}
+
+/* Checkbox. The plate was 27px square because that is the size the game drew
+   it; a tick beside a line of 13px text is 18, and the rows close up by nine
+   pixels each — which on the Settings page is a screenful. */
+html[data-theme='modern'] .check { width: 18px; height: 18px; }
+html[data-theme='modern'] .check img { width: 18px; height: 18px; }
+html[data-theme='modern'] .check:hover { filter: brightness(1.1); }
+html[data-theme='modern'] .secopt img { width: 16px; height: 16px; }
+
+/* Slider, drawn the way the design system draws one: a full-height rail, a
+   round handle, and the handle ringed rather than filled so it reads on both
+   halves of the track. */
+html[data-theme='modern'] input[type='range'] { height: 18px; }
+html[data-theme='modern'] input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border: none;
+  border-radius: 999px;
+  background: var(--secondary);
+}
+html[data-theme='modern'] input[type='range']::-webkit-slider-thumb {
+  width: 15px;
+  height: 15px;
+  margin-top: -4.5px;
+  border: 2px solid var(--primary);
+  border-radius: 999px;
+  background: var(--background);
+  box-shadow: none;
+}
+html[data-theme='modern'] input[type='range']:hover:not(:disabled)::-webkit-slider-thumb {
+  background: var(--secondary);
+}
+
+/* Every control the keyboard can reach says so the same way. The app is mostly
+   driven by mouse, so this is `:focus-visible` — a ring around a button that
+   was merely clicked is noise. */
+html[data-theme='modern'] .btn:focus-visible,
+html[data-theme='modern'] .tab:focus-visible,
+html[data-theme='modern'] .pick:focus-visible,
+html[data-theme='modern'] .check:focus-visible,
+html[data-theme='modern'] .picker:focus-visible,
+html[data-theme='modern'] .field:focus-visible,
+html[data-theme='modern'] .find:focus-visible,
+html[data-theme='modern'] .rename:focus-visible,
+html[data-theme='modern'] input[type='range']:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* A text field is focused by clicking into it, so it is the one control whose
+   focus has to show without the keyboard having caused it. */
+html[data-theme='modern'] .field:focus,
+html[data-theme='modern'] .find:focus,
+html[data-theme='modern'] .rename:focus,
+html[data-theme='modern'] .picker:focus {
+  outline: none;
+  border-color: var(--ring);
+}
+
+/* ── Lists ───────────────────────────────────────────────────────────────── */
+
+/* A row in a long list. The art gave every one of them a frame, which at forty
+   rows is forty frames; a hover fill and a hairline between neighbours carries
+   the same information without the fence. */
+html[data-theme='modern'] .rows .row,
+html[data-theme='modern'] .drop,
+html[data-theme='modern'] .tallyrow {
+  border-radius: var(--radius-sm);
+}
+html[data-theme='modern'] .cols > .list .row {
+  border: 1px solid transparent;
+  border-image: none;
+  border-left-width: 2px;
+  border-radius: var(--radius-sm);
+  background: none;
+  padding: 5px 8px;
+}
+html[data-theme='modern'] .cols > .list .row:hover { background: var(--accent); }
+html[data-theme='modern'] .cols > .list .row.on {
+  background: var(--secondary);
+  border-left-color: var(--gold-2);
+}
+
+/* The shopping list is the other list of rows, and the opposite case: its rows
+   are not a choice between one another, they are the things themselves, one
+   line each with a cross at the end. Stripped to a hover like the runs above
+   they read as loose text on a dark field with nothing saying where one entry
+   stops — so they keep an edge. */
+html[data-theme='modern'] .panel > .list > .row {
+  border: 1px solid var(--border);
+  border-image: none;
+  border-radius: var(--radius);
+  background: var(--card);
+  min-height: 32px;
+  padding: 0 4px 0 8px;
+}
+html[data-theme='modern'] .panel > .list > .row:hover { border-color: var(--edge-7); }
+html[data-theme='modern'] .del { border-radius: var(--radius-sm); color: var(--muted-foreground); }
+html[data-theme='modern'] .del:hover { color: var(--destructive); }
+
+/* Where an item drops, as a row of little chips under its name in Items. */
+html[data-theme='modern'] .place {
+  border-color: var(--edge-4);
+  border-radius: var(--radius-sm);
+  background: var(--secondary);
+  padding: 1px 6px;
+  color: var(--bone-5);
+}
+
+/* Selection and hover, everywhere else they are spelled out.
+   `rgba(150, 37, 56, …)` is the game's crimson and appears in seven files as
+   "this row is chosen" or "the cursor is here". It is the one colour that had
+   to be looked for by hand rather than swapped with a token, and against zinc
+   it does not read as a highlight at all — it reads as an error. */
+html[data-theme='modern'] .lrow.sel {
+  background: var(--secondary);
+  border-radius: var(--radius-sm);
+}
+html[data-theme='modern'] .items .row {
+  background: var(--ground-6);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+html[data-theme='modern'] .items .row:hover { background: var(--accent); }
+html[data-theme='modern'] .hit:hover,
+html[data-theme='modern'] .picker button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* Clearing a whole list. Crimson at 70% was already saying "destructive"; the
+   token says it in the palette the rest of the skin agrees on. */
+html[data-theme='modern'] .bulk { border-radius: var(--radius-sm); }
+html[data-theme='modern'] .bulk:hover:not(:disabled) {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
+/* The header line above a column of figures, and the rule under it. */
+html[data-theme='modern'] .rows .row.colhead,
+html[data-theme='modern'] .head {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+/* ── Chrome ──────────────────────────────────────────────────────────────── */
+
+/* The coin is eleven frames of a sprite sheet spun by background-position.
+   There is no flat version of an animation, and the figure beside it already
+   says gold in gold. */
+html[data-theme='modern'] .coin { display: none; }
+
+/* The strip of controls down the overlay's right-hand edge. Its cells held
+   painted plates; they hold line icons now, and want the room to breathe that
+   a 20px sprite did not. */
+html[data-theme='modern'] .strip .cell {
+  border-radius: var(--radius-sm);
+  background-size: 17px 17px;
+  transition: background-color 0.12s ease;
+}
+html[data-theme='modern'] .strip .cell:hover { background-color: var(--accent); }
+
+/* The banners: something to wait out, and something to go and fix. Both were a
+   tinted block with a bar down the left, which is the shape shadcn gives an
+   alert too — so it gains the border and the radius the rest of the skin has. */
+html[data-theme='modern'] .trouble,
+html[data-theme='modern'] .broke {
+  border: 1px solid var(--edge-6);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+html[data-theme='modern'] .trouble.bad,
+html[data-theme='modern'] .broke {
+  border-color: color-mix(in srgb, var(--destructive) 55%, var(--border));
+  border-left-color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+html[data-theme='modern'] .trouble:not(.bad) {
+  border-color: color-mix(in srgb, var(--gold-2) 40%, var(--border));
+  border-left-color: var(--gold-2);
+  background: color-mix(in srgb, var(--gold-2) 8%, transparent);
+}
+html[data-theme='modern'] .trouble .tact,
+html[data-theme='modern'] .broke button {
+  border-radius: var(--radius);
+  border-color: var(--edge-7);
+  background: var(--secondary);
+  font-size: 12px;
+  padding: 5px 12px;
+}
+
+/* Monospace for the things read a character at a time and typed into another
+   program. It was the system's face already; it takes the skin's radius and a
+   ground of its own. */
+html[data-theme='modern'] .mono,
+html[data-theme='modern'] .trouble .tf,
+html[data-theme='modern'] .broke .td {
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  background: var(--ground-1);
+}
+
+/* The scrollbar. Every list in the app has one, and the ten-pixel bar with a
+   filled track was drawn to sit beside pixel art. */
+html[data-theme='modern'] * {
+  scrollbar-color: var(--edge-7) transparent;
+}
+html[data-theme='modern'] ::-webkit-scrollbar { width: 8px; height: 8px; }
+html[data-theme='modern'] ::-webkit-scrollbar-track { background: transparent; }
+html[data-theme='modern'] ::-webkit-scrollbar-thumb {
+  background: var(--edge-7);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+html[data-theme='modern'] ::-webkit-scrollbar-thumb:hover {
+  background: var(--edge-9);
+  background-clip: padding-box;
+}
+
+/* ── The flourish ────────────────────────────────────────────────────────── */
+
+/* The pillar the game throws up when something good drops. Two of its pieces
+   are the game's own sprites used as MASKS over a tinted box — and a mask that
+   resolves to `none` does not hide the box, it stops hiding it: without this
+   the flat skin answers a Satanic drop with a solid red rectangle 340px wide.
+   The glow is rebuilt as a gradient, which is what the sprite was a picture of
+   anyway; the three spark bursts have no gradient equivalent and go. */
+html[data-theme='modern'] .glow {
+  -webkit-mask-image: none;
+  mask-image: none;
+  background: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    color-mix(in srgb, var(--tint) 60%, transparent) 0%,
+    color-mix(in srgb, var(--tint) 22%, transparent) 45%,
+    transparent 72%
+  );
+}
+html[data-theme='modern'] .sparks { display: none; }
+
+/* The plate the zone's name is set on was a painted mailbox header. */
+html[data-theme='modern'] .zplate {
+  background-image: none;
+  border: 1px solid color-mix(in srgb, var(--zone-ink) 45%, transparent);
+  border-radius: var(--radius);
+  background-color: rgb(0 0 0 / 0.55);
+}
+
+/* One buff of the rotation, on the chip art the panels used. */
+html[data-theme='modern'] .zbuff {
+  border: 1px solid var(--border);
+  border-image: none;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+}
+html[data-theme='modern'] .zbuff .bname { color: var(--bone-13); }
+html[data-theme='modern'] .caption .name { color: var(--bone-15); }
+
+/* Parking the window: the dashed box the player drags, and the button that
+   ends it. Both were spelled out in the warm palette rather than in tokens,
+   because they are drawn over the game rather than over a panel. Reached
+   through `.stage` — the flourish's own root — because Items calls its little
+   "drops here" chips `.place` as well, and they are not a dashed box. */
+html[data-theme='modern'] .stage .place {
+  border-color: rgb(250 250 250 / 0.7);
+  border-radius: 0;
+  background: none;
+  padding: 0;
+}
+html[data-theme='modern'] .hint { color: var(--bone-13); }
+html[data-theme='modern'] .done {
+  border-radius: var(--radius);
+  border-color: var(--edge-8);
+  color: var(--bone-13);
+}
+html[data-theme='modern'] .done:hover { border-color: var(--bone-15); }
+
+/* The window buttons. The art was a painted plate with a cross on it, and with
+   the plate gone the hit area has to be drawn — a square that lights up under
+   the cursor is the only thing telling a 15px icon it is a button. */
+html[data-theme='modern'] .close,
+html[data-theme='modern'] .min {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.12s ease;
+}
+html[data-theme='modern'] .close:hover { background: color-mix(in srgb, var(--destructive) 22%, transparent); }
+html[data-theme='modern'] .min:hover { background: var(--accent); }
+html[data-theme='modern'] .close img,
+html[data-theme='modern'] .min img { width: 15px; height: 15px; }

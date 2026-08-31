@@ -3,7 +3,7 @@
   let { embedded = false } = $props();
 
   import { invoke } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { buffInfo, debuffInfo, zoneAct, zoneName } from './buffs.js';
   import {
@@ -380,7 +380,7 @@
       <button
         class="clock"
         class:held={snap?.paused}
-        style:border-image-source="url({art('chip_dark')})"
+        style:border-image-source={css('chip_dark')}
         onclick={() => invoke('set_paused', { paused: !snap?.paused }).catch(() => {})}
         title="Stop the clock. The counters keep counting — what a pause changes is what they are divided by. Ctrl+Shift+P"
       >
@@ -390,21 +390,21 @@
         </div>
         <div class="sub">{snap?.paused ? 'paused — click to carry on' : charSub}</div>
       </button>
-      <div class="card" style:border-image-source="url({art('chip_dark')})">
+      <div class="card" style:border-image-source={css('chip_dark')}>
         <div class="label">Gold</div>
         <div class="value c-gold">{fmt(snap?.gold?.earned)}</div>
         <div class="sub" title={snap?.carried_bank ? 'the balance the last run ended on — the game has not sent a new one yet' : 'bank balance as the game last reported it'}>
           {fmt(snap?.gold?.per_hour)}/h · bank {fmt(snap?.gold?.total)}{snap?.carried_bank ? ' *' : ''}
         </div>
       </div>
-      <div class="card" style:border-image-source="url({art('chip_dark')})">
+      <div class="card" style:border-image-source={css('chip_dark')}>
         <div class="label">XP</div>
         <div class="value c-xp">{fmt(snap?.xp?.earned)}</div>
         <div class="sub" title="the big number is what this session earned; 'in level' is the game's own bar — the experience banked towards the next hero level">
           {fmt(snap?.xp?.per_hour)}/h · in level {fmt(snap?.xp?.total)}
         </div>
       </div>
-      <div class="card" style:border-image-source="url({art('chip_dark')})">
+      <div class="card" style:border-image-source={css('chip_dark')}>
         <div class="label">Kills</div>
         <div class="value c-her">{fmt(snap?.kills?.earned)}</div>
         <div class="sub" title={snap?.carried_totals ? 'the total the last run ended on — the game has not saved the character yet' : 'lifetime total as the game last saved it'}>
@@ -420,7 +420,7 @@
     <div class="cols">
       <!-- left: what dropped -->
       <div class="col">
-        <div class="box" style:border-image-source="url({art('chip_dark')})">
+        <div class="box" style:border-image-source={css('chip_dark')}>
           <div class="box-head"><span class="accent">Loot</span><span class="right">this session</span></div>
           <div class="rows">
             <div class="row colhead">
@@ -457,7 +457,7 @@
         </div>
 
         {#if bosses.length || chests.length}
-          <div class="box" style:border-image-source="url({art('chip_dark')})">
+          <div class="box" style:border-image-source={css('chip_dark')}>
             <div class="box-head"><span class="accent">Killed &amp; opened</span><span class="right">this session</span></div>
             {#if bosses.length}
               <div class="subhead">Bosses</div>
@@ -478,7 +478,7 @@
           </div>
         {/if}
 
-    <div class="box grow" style:border-image-source="url({art('chip_dark')})">
+    <div class="box grow" style:border-image-source={css('chip_dark')}>
       <div class="box-head">
         <span class="accent">Item timeline</span>
         {#if added}<span class="added">{added}</span>{/if}
@@ -527,7 +527,7 @@
 
       <!-- right: where you are and how the run is trending -->
       <div class="col">
-    <div class="box" style:border-image-source="url({art('chip_dark')})">
+    <div class="box" style:border-image-source={css('chip_dark')}>
       <div class="box-head">
         <span class="accent">Satanic Zone</span>
         {#if zoneStale}
@@ -581,7 +581,7 @@
       {/if}
     </div>
 
-    <div class="box" style:border-image-source="url({art('chip_dark')})">
+    <div class="box" style:border-image-source={css('chip_dark')}>
       <div class="box-head">
         <span class="accent">Drops in the Satanic Zone</span>
         {#if zoneStale}
@@ -624,7 +624,7 @@
       {/if}
     </div>
 
-        <div class="box" style:border-image-source="url({art('chip_dark')})">
+        <div class="box" style:border-image-source={css('chip_dark')}>
           <div class="box-head"><span class="accent">Session rates</span></div>
           <canvas bind:this={canvas}></canvas>
         </div>

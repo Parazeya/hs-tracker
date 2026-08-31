@@ -82,6 +82,72 @@ SEASONS = {
 # a ceiling on saturation per family, so a theme reads as a skin and not a toy
 CEILING = {"bone": 0.34, "gold": 0.72, "dim": 0.30, "edge": 0.55, "ground": 0.45}
 
+# Modern: not a season, and not a hue shift.
+#
+# The two skins above are the game's own art recoloured; this one is the app
+# without the game's art at all — flat surfaces, hairline borders, a system
+# font — for players who keep the dashboard open on a second monitor and want
+# to read it rather than admire it. Its values are written by hand because
+# there is no warm palette left to shift: the neutrals are Tailwind's zinc
+# ramp, which is what shadcn/ui is built on, and the ramp is the point.
+#
+# Every token the components already name is given a value here, so a rule
+# nobody has rewritten for this skin still lands somewhere sensible. The
+# lightness ORDER is preserved throughout — ground-1 is still the darkest
+# ground, bone-15 still the brightest text — because the components rely on
+# that ordering even where they do not rely on the hue.
+MODERN = {
+    # surfaces, darkest first: zinc-950 up to zinc-800
+    "--ground-1": "#09090b", "--ground-2": "#0b0b0e", "--ground-3": "#0e0e11",
+    "--ground-4": "#111114", "--ground-5": "#141417", "--ground-6": "#18181b",
+    "--ground-7": "#1c1c20", "--ground-8": "#202024", "--ground-9": "#27272a",
+    "--ground-10": "#2a2a2f", "--ground-11": "#2e2e33",
+    # borders and rules: zinc-800 up to zinc-600
+    "--edge-1": "#202024", "--edge-2": "#27272a", "--edge-3": "#2c2c31",
+    "--edge-4": "#313137", "--edge-5": "#36363c", "--edge-6": "#3b3b42",
+    "--edge-7": "#3f3f46", "--edge-8": "#52525b", "--edge-9": "#5b5b65",
+    "--edge-1b": "#3f3f46", "--edge-2b": "#46464e",
+    # text, dimmest first: zinc-400 up to zinc-50
+    "--bone-3": "#8b8b95", "--bone-4": "#9a9aa4", "--bone-5": "#a1a1aa",
+    "--bone-6": "#c8c8d0", "--bone-7": "#b4b4bd", "--bone-8": "#cdcdd4",
+    "--bone-9": "#dcdce2", "--bone-10": "#e1e1e6", "--bone-11": "#e8e8ed",
+    "--bone-12": "#ebebf0", "--bone-13": "#f1f1f4", "--bone-14": "#f4f4f6",
+    "--bone-15": "#fafafa",
+    "--dim-1": "#3f3f46", "--dim-2": "#8b8b95",
+    # Amber, not white. shadcn's dark primary is near-white, but in this app
+    # gold is not decoration: it is the colour of money, of a section heading
+    # and of a warning, and three different meanings collapsing into the same
+    # white as the body text is exactly the readability this skin is for.
+    "--gold-1": "#f5b53c", "--gold-2": "#fbbf24",
+}
+
+# The shadcn/ui token names, for the rules written against this skin directly.
+# The ramp above is what they are drawn from — these are the same colours under
+# the names the design system uses, so a component can be written the way its
+# documentation is written and land in the right place.
+MODERN_UI = {
+    "--background": "#09090b",
+    "--foreground": "#fafafa",
+    "--card": "#111114",
+    "--card-foreground": "#fafafa",
+    "--popover": "#18181b",
+    "--popover-foreground": "#fafafa",
+    "--primary": "#fafafa",
+    "--primary-foreground": "#18181b",
+    "--secondary": "#27272a",
+    "--secondary-foreground": "#fafafa",
+    "--muted": "#18181b",
+    "--muted-foreground": "#a1a1aa",
+    "--accent": "#27272a",
+    "--accent-foreground": "#fafafa",
+    "--destructive": "#ef4444",
+    "--destructive-foreground": "#fafafa",
+    "--border": "#27272a",
+    "--input": "#2e2e33",
+    "--ring": "#d4d4d8",
+    "--radius": "6px",
+}
+
 
 def shift(hex_colour: str, hue: float, keep: float, floor: float, lift: float, ceiling: float) -> str:
     r, g, b = (int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5))
@@ -179,6 +245,22 @@ def main() -> None:
             lines.append(f"  {name}: {shift(colour, hue, keep, floor, lift, CEILING[fam])};")
         lines += [f"  {n}: {c};" for n, c in FIXED.items()]
         lines.append("}")
+
+    lines += [
+        "",
+        "/* Modern: the app without the game's art on it. Flat surfaces, hairline",
+        "   borders and a system font, on Tailwind's zinc ramp — the neutrals",
+        "   shadcn/ui is built from. The chrome these tokens are worn with is in",
+        "   modern.css; the sprites are replaced by src/assets/modern/*.svg. */",
+        ":root[data-theme='modern'] {",
+    ]
+    for name, _ in tokens():
+        lines.append(f"  {name}: {MODERN[name]};")
+    lines += [f"  {n}: {c};" for n, c in FIXED.items()]
+    lines.append("")
+    lines.append("  /* the same colours under the names the design system uses */")
+    lines += [f"  {n}: {c};" for n, c in MODERN_UI.items()]
+    lines.append("}")
 
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"{len(DEFAULT) + len(FIXED)} tokens -> {OUT}")

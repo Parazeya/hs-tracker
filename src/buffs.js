@@ -1,8 +1,17 @@
 const icons = import.meta.glob('./assets/icons/*.png', { eager: true, import: 'default' });
 const buffIcons = import.meta.glob('./assets/buffs/*.png', { eager: true, import: 'default' });
 import defaultBuffIcon from './assets/game/satanic_star.png';
+import { art } from './skin.svelte.js';
 
-const icon = (name) => icons[`./assets/icons/${name}.png`];
+/// One of the app's own icons — the clock on the session chip, the skull on the
+/// boss count — by name.
+///
+/// These six are hand-drawn pixel art rather than the game's, and they are the
+/// one thing on a flat panel that still says "sprite": five colours at 16px
+/// beside a proportional face reads as a stray graphic, not as an icon. A skin
+/// that has a line version of one gets it; every other skin, and any name no
+/// skin has drawn, falls through to the original.
+const icon = (name) => art(name) ?? icons[`./assets/icons/${name}.png`];
 
 // id → [name, description]; order matches the game's buff ids
 const BUFFS = {

@@ -225,6 +225,37 @@ for its own. Check the result with `objdump -p usr/bin/hs-tracker | grep NEEDED`
 | `gen_icon.py` | Draws the app icon on a 16×16 grid and writes every size the app, the tray and Windows want. `--preview` lays them out to look at, `--discord` writes the artwork the Discord application is given. |
 | `gen_installer_art.py` | The installer's header and sidebar, drawn from the icon. Run it after `gen_icon.py`. |
 | `yytex.py`, `datawin.py`, `export_ui.py` | Decode the game's own textures and re-export the UI sprites the app is skinned with, from an installed copy of Hero Siege. |
+| `gen_theme.py` | Rewrites `src/theme.css` — every skin's palette. `--preview` also writes a swatch sheet. |
+| `gen_skin.py` | Recolours the game's sprites into a season's own set under `src/assets/game/<season>/`. |
+
+## Skins
+
+A skin is three things, and only the first is required:
+
+| | |
+| --- | --- |
+| a palette | a `:root[data-theme='<name>']` block in `src/theme.css`, written by `tools/gen_theme.py`. A season is the default palette with its hues moved; **Modern** is a hand-written one, because there is no warm palette left to shift. |
+| sprites | `src/assets/game/<name>/*.png`, from `gen_skin.py`. `art()` in `src/skin.svelte.js` falls back to the original for anything a skin has not drawn, so a half-finished set still renders. |
+| chrome | only if the skin does not use the game's art at all. **Modern** is the one that does not: `src/modern.css` draws every panel, chip and button out of borders and radii instead, and `art()` answers `null` for a sprite it has no line-icon version of, which is what tells a component to let CSS draw. |
+
+Adding one means a palette block, an `<option>` in Settings, and nothing else —
+the backend stores the name as a plain string and never checks it.
+
+### Looking at one
+
+`tools/preview/` mounts every window in a plain browser against a mocked
+backend, which is the only way to see the loot pillar and the drop ticker
+without the game running:
+
+```
+npx vite
+http://localhost:5176/tools/preview/?theme=modern
+```
+
+`?panel=` takes `runs`, `filter`, `watchlist`, `codex`, `shop`, `settings`,
+`about`, `flourish`, `zone` or `ticker`; with none, it draws the dashboard and
+the overlay side by side. `?theme=` takes any skin name — point it at `default`
+and then at the new one, and the difference is the whole review.
 
 ## Known inaccuracies
 

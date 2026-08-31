@@ -1,6 +1,6 @@
 <script>
   import { invoke } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { css } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { itemName, rarityByName, tierLabel, typeLabel } from './items.js';
 
@@ -77,7 +77,7 @@
 
 <div class="stack">
   {#each entries as it (it.key)}
-    <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source="url({art('chip_dark')})">
+    <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source={css('chip_dark')}>
       <span class="rar {rarityCls[rarity(it)] ?? ''}">{rarity(it)}</span>
       <span class="name {rarityCls[rarity(it)] ?? ''}">{label(it)}</span>
       {#if it.tier > 0}<span class="dim">{tierLabel(it.tier)}</span>{/if}

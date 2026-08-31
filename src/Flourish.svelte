@@ -9,7 +9,7 @@
   import { appWindow, invoke, listen, native } from './bridge.js';
   import { itemName, tierLabel, typeLabel } from './items.js';
   import { buffInfo, zoneName } from './buffs.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
 
   const RARITY_TINT = {
     Satanic: '#ca1717',
@@ -153,10 +153,10 @@
   style:--out="{OUT_MS}ms"
   style:--hold="{Math.max(0, runMs - OUT_MS)}ms"
   style:--shade={shade}
-  style:--sparks="url({art('fx_sparks')})"
-  style:--glow="url({art('fx_glow')})"
-  style:--plate="url({art('header')})"
-  style:--chipart="url({art('chip_dark')})"
+  style:--sparks={css('fx_sparks')}
+  style:--glow={css('fx_glow')}
+  style:--plate={css('header')}
+  style:--chipart={css('chip_dark')}
 >
   {#key run}
     {#if isZone}

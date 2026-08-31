@@ -1,7 +1,7 @@
 <script>
   import { invoke } from './bridge.js';
   import { fmt, RARITIES, RARITY_CLASS, difficulty } from './format.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { tierLabel } from './items.js';
   import { cardBytes, drawRunCard } from './runcard.js';
@@ -71,9 +71,18 @@
       // the card is drawn with the app's own font; canvas will fall back to a
       // system one unless it is loaded before the first fillText
       await document.fonts?.load?.('16px "CookieRun Bold"');
-      const coin = new Image();
-      coin.src = art('coin_strip');
-      await coin.decode().catch(() => {});
+      // The card is drawn in literal colours rather than the skin's tokens (see
+      // runcard.js), and the coin is the one piece of it that comes from the
+      // skin at all. A flat skin has no coin sprite to give, and `drawRunCard`
+      // takes it as optional — but an Image whose src was set to nothing is
+      // still an object, so it has to be dropped here rather than there.
+      let coin = null;
+      const strip = art('coin_strip');
+      if (strip) {
+        coin = new Image();
+        coin.src = strip;
+        await coin.decode().catch(() => (coin = null));
+      }
       const canvas = drawRunCard($state.snapshot(run), { coin });
       await invoke('copy_image', cardBytes(canvas));
       carded = 'copied — paste it anywhere';
@@ -100,7 +109,7 @@
 <div class="panel">
   {#if runs.length}
     <div class="cols">
-      <div class="list" style:border-image-source="url({art('chip_dark')})">
+      <div class="list" style:border-image-source={css('chip_dark')}>
         <div class="head">
           <span class="accent">Runs</span>
           <span class="right">{runs.length}</span>
@@ -117,9 +126,9 @@
         <button
           class="btn"
           class:armed
-          style:--btn="url({art('button')})"
-          style:--btn-hover="url({art('button_hover')})"
-          style:--btn-down="url({art('button_down')})"
+          style:--btn={css('button')}
+          style:--btn-hover={css('button_hover')}
+          style:--btn-down={css('button_down')}
           onclick={clearAll}
         >
           {armed ? 'Sure? — this cannot be undone' : 'Clear history'}
@@ -128,7 +137,7 @@
 
       {#if run}
         <div class="detail">
-          <div class="box" style:border-image-source="url({art('chip_dark')})">
+          <div class="box" style:border-image-source={css('chip_dark')}>
             <div class="head">
               <span class="accent">{day(run.started_ms)}</span>
               <button
@@ -170,7 +179,7 @@
             </div>
           </div>
 
-          <div class="box" style:border-image-source="url({art('chip_dark')})">
+          <div class="box" style:border-image-source={css('chip_dark')}>
             <div class="head"><span class="accent">Loot</span></div>
             <div class="tally">
               {#each RARITIES as name}
@@ -183,7 +192,7 @@
           </div>
 
           {#if bosses(run).length || chests(run).length}
-            <div class="box" style:border-image-source="url({art('chip_dark')})">
+            <div class="box" style:border-image-source={css('chip_dark')}>
               <div class="head"><span class="accent">Killed &amp; opened</span></div>
               {#if bosses(run).length}
                 <div class="subhead">Bosses</div>
@@ -205,7 +214,7 @@
           {/if}
 
           {#if run.notable?.length}
-            <div class="box grow" style:border-image-source="url({art('chip_dark')})">
+            <div class="box grow" style:border-image-source={css('chip_dark')}>
               <div class="head">
                 <span class="accent">Finds</span>
                 <span class="right">{run.notable.length}</span>

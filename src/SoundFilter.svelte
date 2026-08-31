@@ -1,6 +1,6 @@
 <script>
   import { invoke } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { ITEMS } from './items.js';
   import { RARITIES, soundUrl, play } from './audio.js';
@@ -257,7 +257,7 @@
 <div class="panel two">
   <div class="col">
   {#if settings}
-    <div class="section" style:border-image-source="url({art('chip_dark')})">
+    <div class="section" style:border-image-source={css('chip_dark')}>
       <div class="sechead" data-tauri-drag-region>Rarity alerts — what makes a sound at all</div>
       {#each ALERT_RARITIES as rarity}
         {@const key = SOUND_KEY[rarity]}
@@ -282,13 +282,13 @@
             {custom[key] ?? 'built-in'}
           </span>
           <div class="rbtns">
-            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity(key)}>Test</button>
-            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound(key)}>Browse…</button>
+            <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => testRarity(key)}>Test</button>
+            <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => pickRaritySound(key)}>Browse…</button>
             <button
               class="btn sm"
-              style:--btn="url({art('button')})"
-              style:--btn-hover="url({art('button_hover')})"
-              style:--btn-down="url({art('button_down')})"
+              style:--btn={css('button')}
+              style:--btn-hover={css('button_hover')}
+              style:--btn-down={css('button_down')}
               disabled={!custom[key]}
               onclick={() => danger(`snd-${key}`, () => invoke('clear_sound', { rarity: key }).catch(() => {}))}
             >{armed === `snd-${key}` ? 'Sure?' : 'Default'}</button>
@@ -314,13 +314,13 @@
         <span class="pct">{mailVolume}%</span>
         <span class="src" title={custom.mail ? `sounds/${custom.mail}` : 'built-in sound'}>{custom.mail ?? 'built-in'}</span>
         <div class="rbtns">
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('mail')}>Test</button>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('mail')}>Browse…</button>
+          <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => testRarity('mail')}>Test</button>
+          <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => pickRaritySound('mail')}>Browse…</button>
           <button
             class="btn sm"
-            style:--btn="url({art('button')})"
-            style:--btn-hover="url({art('button_hover')})"
-            style:--btn-down="url({art('button_down')})"
+            style:--btn={css('button')}
+            style:--btn-hover={css('button_hover')}
+            style:--btn-down={css('button_down')}
             disabled={!custom.mail}
             onclick={() => danger('snd-mail', () => invoke('clear_sound', { rarity: 'mail' }).catch(() => {}))}
           >{armed === 'snd-mail' ? 'Sure?' : 'Default'}</button>
@@ -348,13 +348,13 @@
         <span class="pct">{zoneVolume}%</span>
         <span class="src" title={custom.zone ? `sounds/${custom.zone}` : 'built-in sound — the zone chime'}>{custom.zone ?? 'built-in'}</span>
         <div class="rbtns">
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('zone')}>Test</button>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('zone')}>Browse…</button>
+          <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => testRarity('zone')}>Test</button>
+          <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => pickRaritySound('zone')}>Browse…</button>
           <button
             class="btn sm"
-            style:--btn="url({art('button')})"
-            style:--btn-hover="url({art('button_hover')})"
-            style:--btn-down="url({art('button_down')})"
+            style:--btn={css('button')}
+            style:--btn-hover={css('button_hover')}
+            style:--btn-down={css('button_down')}
             disabled={!custom.zone}
             onclick={() => danger('snd-zone', () => invoke('clear_sound', { rarity: 'zone' }).catch(() => {}))}
           >{armed === 'snd-zone' ? 'Sure?' : 'Default'}</button>
@@ -375,7 +375,7 @@
     <!-- Outside the `canAnnounce` guard below on purpose: this narrows the
          chime as much as the pillar, and the chime is the half that still works
          on a session with no overlay at all. -->
-    <div class="section" style:border-image-source="url({art('chip_dark')})">
+    <div class="section" style:border-image-source={css('chip_dark')}>
       <div class="sechead" data-tauri-drag-region>Zone buffs — which rotations are worth the alert</div>
       <div class="line">
         <button class="check" onclick={togglePicking} aria-label="narrow the zone alert">
@@ -439,7 +439,7 @@
          who has just read that section carries the wrong rule into this one —
          it is the next thing along in either layout — which is why the note
          below never leaves it unsaid. -->
-    <div class="section" style:border-image-source="url({art('chip_dark')})">
+    <div class="section" style:border-image-source={css('chip_dark')}>
       <div class="sechead" data-tauri-drag-region>Relics — a chime for the ones you are hunting</div>
 
       <div class="rrow" class:off={!settings.relic?.enabled}>
@@ -459,13 +459,13 @@
         <span class="pct">{relicVolume}%</span>
         <span class="src" title={custom.relic ? `sounds/${custom.relic}` : 'the built-in relic chime'}>{custom.relic ?? 'built-in'}</span>
         <span class="btns">
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('relic')}>Test</button>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('relic')}>Browse…</button>
+          <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => testRarity('relic')}>Test</button>
+          <button class="btn sm" style:--btn={css('button')} style:--btn-hover={css('button_hover')} style:--btn-down={css('button_down')} onclick={() => pickRaritySound('relic')}>Browse…</button>
           <button
             class="btn sm"
-            style:--btn="url({art('button')})"
-            style:--btn-hover="url({art('button_hover')})"
-            style:--btn-down="url({art('button_down')})"
+            style:--btn={css('button')}
+            style:--btn-hover={css('button_hover')}
+            style:--btn-down={css('button_down')}
             disabled={!custom.relic}
             onclick={() => danger('snd-relic', () => invoke('clear_sound', { rarity: 'relic' }).catch(() => {}))}
           >{armed === 'snd-relic' ? 'Sure?' : 'Default'}</button>
@@ -503,7 +503,7 @@
       {#if settings.relic?.enabled}
       <input
         class="field"
-        style:border-image-source="url({art('chip_dark')})"
+        style:border-image-source={css('chip_dark')}
         placeholder="search relics by name…"
         bind:value={relicQuery}
       />
@@ -546,7 +546,7 @@
     </div>
 
     {#if canAnnounce}
-      <div class="section" style:border-image-source="url({art('chip_dark')})">
+      <div class="section" style:border-image-source={css('chip_dark')}>
         <div class="sechead" data-tauri-drag-region>Announcement — the loot pillar over the screen</div>
         <div class="line">
           <button class="check" onclick={() => { settings.flourish = !settings.flourish; save(); }} aria-label="flourish">
@@ -640,9 +640,9 @@
             <div class="line">
               <button
                 class="btn wide"
-                style:--btn="url({art('button')})"
-                style:--btn-hover="url({art('button_hover')})"
-                style:--btn-down="url({art('button_down')})"
+                style:--btn={css('button')}
+                style:--btn-hover={css('button_hover')}
+                style:--btn-down={css('button_down')}
                 onclick={() => invoke('place_flourish', { placing: true })}
               >
                 Change location

@@ -1,6 +1,6 @@
 <script>
   import { invoke } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { art, css } from './skin.svelte.js';
   import { listen, native } from './bridge.js';
   import { buffInfo, defaultBuffIcon, zoneAct, zoneName, icon } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
@@ -270,17 +270,17 @@
 
 <div
   bind:this={panelEl}
-  class="panel"
+  class="panel overlay"
   class:ghost
   class:held={snap?.paused}
-  style:--frost="url({art('frozen')})"
-  style:border-image-source="url({art('panel')})"
+  style:--frost={css('frozen')}
+  style:border-image-source={css('panel')}
   style:opacity={cfg?.opacity ?? 1}
   data-tauri-drag-region={drag}
 >
   {#if shown('session')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={status.tip}>
+      <div class="chip lg" style:border-image-source={css('chip_dark')} title={status.tip}>
         <span class="dot {status.cls}"></span>
         <img src={snap?.paused ? art('frozen_icon') : icon('time')} alt="" class="ic" />
         <span class="val" class:frozen={snap?.paused}>{snap ? dur(sessionSecs) : '0:00:00'}</span>
@@ -289,7 +289,7 @@
         class="chip md mail"
         class:has={snap?.has_mail}
         class:fresh={mailFresh && snap?.has_mail}
-        style:border-image-source="url({art('chip_dark')})"
+        style:border-image-source={css('chip_dark')}
         title={snap?.has_mail ? 'there is mail waiting' : 'no mail'}
       >
         <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
@@ -309,7 +309,7 @@
            number is what fits here and the bosses are the one worth watching. -->
       <div
         class="chip md"
-        style:border-image-source="url({art('chip_dark')})"
+        style:border-image-source={css('chip_dark')}
         title="bosses put down this session"
       >
         <img src={icon('boss')} alt="" class="ic" />
@@ -320,20 +320,20 @@
 
   {#if shown('items')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="Angelic | Unholy">
+      <div class="chip lg" style:border-image-source={css('chip_dark')} title="Angelic | Unholy">
         <img src={icon('chest')} alt="" class="ic" />
         <span class="val">
           <span class="c-ang">{fmt(item('Angelic').total)}</span>
           | <span class="c-unh">{fmt(item('Unholy').total)}</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Satanic | per hour">
+      <div class="chip md" style:border-image-source={css('chip_dark')} title="Satanic | per hour">
         <span class="val">
           <span class="c-sat">{fmt(item('Satanic').total)}</span>
           | <span class="c-sat">{fmt(item('Satanic').per_hour)}/h</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Heroic | Set">
+      <div class="chip md" style:border-image-source={css('chip_dark')} title="Heroic | Set">
         <span class="val">
           <span class="c-her">{fmt(item('Heroic').total)}</span>
           | <span class="c-set">{fmt(item('Set').total)}</span>
@@ -344,18 +344,18 @@
 
   {#if shown('gold')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="gold earned this session">
-        <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
+      <div class="chip lg" style:border-image-source={css('chip_dark')} title="gold earned this session">
+        <span class="coin" class:idle={!live} style:background-image={css('coin_strip')}></span>
         <span class="val">+{fmt(snap?.gold?.earned)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="gold per hour">
+      <div class="chip md" style:border-image-source={css('chip_dark')} title="gold per hour">
         <span class="val">{fmt(snap?.gold?.per_hour)}/h</span>
       </div>
       <!-- Kills is a statistic and has stopped standing in for the button. It
            used to render only when the Reset button was switched off or the
            overlay was ghosted, which made the panel's one combat figure a thing
            you saw by accident. -->
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
+      <div class="chip md" style:border-image-source={css('chip_dark')}>
         <span class="dot {status.cls}"></span>
         <span class="val">{fmt(snap?.kills?.earned)} kills</span>
       </div>
@@ -364,11 +364,11 @@
 
   {#if shown('xp')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="experience earned this session">
+      <div class="chip lg" style:border-image-source={css('chip_dark')} title="experience earned this session">
         <img src={icon('xp')} alt="" class="ic" />
         <span class="val">+{fmt(snap?.xp?.earned)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="experience per hour">
+      <div class="chip md" style:border-image-source={css('chip_dark')} title="experience per hour">
         <span class="val">{fmt(snap?.xp?.per_hour)}/h</span>
       </div>
       <!-- The cell the Reset button used to end the row with. The button was the
@@ -382,7 +382,7 @@
            nobody hovers a video. -->
       <div
         class="chip md"
-        style:border-image-source="url({art('chip_dark')})"
+        style:border-image-source={css('chip_dark')}
         title="SS drops this session — the top tier, counted whatever the rarity"
       >
         <span class="grade">SS</span>
@@ -393,7 +393,7 @@
 
   {#if shown('zone')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg buffs" style:border-image-source="url({art('chip_dark')})">
+      <div class="chip lg buffs" style:border-image-source={css('chip_dark')}>
         {#each buffs as b}
           <img
             class="buff"
@@ -406,7 +406,7 @@
       <div
         class="zone"
         class:moved={zoneMoved}
-        style:background-image="url({art('header')})"
+        style:background-image={css('header')}
         data-tauri-drag-region={drag}
       >
         <span class="zone-name" class:here={satanicHere}>
@@ -434,7 +434,7 @@
   <div class="strip" class:near={nearStrip} class:free={!locked}>
     <button
       class="cell lock"
-      style:--i="url({art(locked ? 'lock_gold' : 'lock_pale')})"
+      style:--i={css(locked ? 'lock_gold' : 'lock_pale')}
       onclick={toggleLock}
       title={locked
         ? 'Locked — click to unlock (Ctrl+Shift+L)'
@@ -446,8 +446,8 @@
       <button
         class="cell"
         class:armed={armed === e.key}
-        style:--i="url({art(e.icon)})"
-        style:--i-hover="url({art(`${e.icon}_hover`)})"
+        style:--i={css(e.icon)}
+        style:--i-hover={css(`${e.icon}_hover`)}
         onclick={() => (e.danger ? danger(e.key, e.run) : e.run())}
         title={armed === e.key ? `${e.title} — click again` : e.title}
         aria-label={e.title}
