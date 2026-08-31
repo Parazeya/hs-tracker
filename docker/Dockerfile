@@ -51,8 +51,12 @@ RUN npm install -g @tauri-apps/cli@^2
 # wants FUSE 2, which is why the bundler is also run with
 # APPIMAGE_EXTRACT_AND_RUN so it never has to mount anything. Only `--appimage`
 # reaches any of it, so a plain `npm run deb` is unaffected.
+#
+# squashfs-tools is for trim-appimage.sh, which unpacks the finished AppImage,
+# drops the libraries that have to come from the host, and packs it up again
+# with the runtime the bundler already downloaded.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      patchelf zsync desktop-file-utils fuse3 libfuse2 \
+      patchelf zsync desktop-file-utils fuse3 libfuse2 squashfs-tools \
       gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
  && rm -rf /var/lib/apt/lists/*
 ENV APPIMAGE_EXTRACT_AND_RUN=1
@@ -67,6 +71,7 @@ ENV PKG_FAMILY=deb
 # return on the shebang line makes the entrypoint "bash\r: No such file
 # or directory" - a 127 with no other clue. Strip them here so the checkout
 # settings of whoever builds the image stop mattering.
-COPY build.sh /usr/local/bin/build.sh
-RUN sed -i 's/\r$//' /usr/local/bin/build.sh && chmod +x /usr/local/bin/build.sh
+COPY build.sh trim-appimage.sh /usr/local/bin/
+RUN sed -i 's/\r$//' /usr/local/bin/build.sh /usr/local/bin/trim-appimage.sh \
+ && chmod +x /usr/local/bin/build.sh /usr/local/bin/trim-appimage.sh
 ENTRYPOINT ["/usr/local/bin/build.sh"]

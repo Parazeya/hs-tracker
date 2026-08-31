@@ -3,11 +3,14 @@
 # rights. Granting them to the binary keeps the app out of root — without this
 # the capture fails and the overlay reports that it cannot listen.
 #
-# This is for the packages only. An AppImage must NOT be given the same right:
-# a binary with file capabilities is loaded as AT_SECURE, and the loader then
-# ignores the $ORIGIN rpath the extracted AppImage depends on, so it stops
-# starting at all. Reproduced in a container; the README and the app itself say
-# so too. On an AppImage, run it with sudo instead.
+# This is for the packages only, and an AppImage cannot be given the same right
+# by any route. Granting it to the .AppImage file achieves nothing - the right
+# is recomputed away at the execve of the binary inside, so the app starts and
+# still cannot capture. Granting it to that inner binary instead loads it as
+# AT_SECURE, and the loader then refuses both ways the bundle is found - the
+# LD_LIBRARY_PATH its own AppRun sets, and the $ORIGIN/../lib runpath in the
+# binary - so the app stops starting at all. Both measured in a container; the
+# README and the app itself say so too. On an AppImage, run it with sudo.
 #
 # Only cap_net_raw is asked for. cap_net_admin buys promiscuous mode, which the
 # capture never turns on, and the `i` of `=eip` does nothing without ambient

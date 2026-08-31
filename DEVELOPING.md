@@ -180,9 +180,16 @@ for its own. Check the result with `objdump -p usr/bin/hs-tracker | grep NEEDED`
   AppImage are read-only. Autostart is a registry value on Windows and a
   `.desktop` file in `~/.config/autostart` elsewhere.
 - **Capture rights.** Linux needs `cap_net_raw`; the `.deb` and `.rpm` grant it
-  in `installer/grant-capture-rights.sh`. An AppImage cannot hold capabilities at
-  all — Linux recomputes them at every `execve`, and an AppImage execs its own
-  runtime first.
+  in `installer/grant-capture-rights.sh`. An AppImage cannot be given it, and
+  the two ways of trying fail differently. On the `.AppImage` file the right is
+  recomputed away at the `execve` of the binary inside, so the app starts and
+  captures nothing. On that inner binary the app is privileged and the loader
+  refuses both ways the bundle is found — the `LD_LIBRARY_PATH` its `AppRun`
+  sets and the `$ORIGIN/../lib` runpath in the binary — so it does not start at
+  all: `libwebkit2gtk-4.1.so.0: cannot open shared object file`. Unpacked,
+  the binary is on a mount that only exists while the app runs, so there is
+  usually no file to try it on. `sudo` is the only route, and it writes settings
+  and runs to root's home.
 - **The overlay needs X11.** It leans on click-through windows, programmatic
   positioning, the cursor position outside itself and global hotkeys, none of
   which Wayland gives an application. The app checks the session at startup

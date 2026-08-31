@@ -110,7 +110,7 @@
         bad: true,
         title: 'An AppImage cannot be given the capture right',
         detail:
-          'Granting it would stop the app starting at all: a binary carrying a capability makes the loader ignore the library path an AppImage needs to find the libraries bundled inside it. Install the .deb or the .rpm instead — either grants the right during installation. Running this AppImage with sudo also works, but then settings and runs are written to root’s home rather than yours.',
+          'There is nothing to grant it to. Linux drops capabilities at every exec, so a right given to the .AppImage file is gone before the app starts; given to the binary inside instead, the loader stops trusting the library path the bundle needs and the app will not start at all. Install the .deb or the .rpm — either grants the right during installation. Running this AppImage with sudo also works, but then settings and runs are written to root’s home rather than yours.',
       };
     if (status === 'no-capture')
       return {
