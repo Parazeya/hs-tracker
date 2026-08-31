@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.6 — 2026-08-31
+
+### Fixed
+
+- The rarity ticks turn their alerts on and off again.
+- A Chaos Tower floor no longer counts as a boss killed.
+
 ## 1.0.5 — 2026-08-31
 
 ### Fixed
