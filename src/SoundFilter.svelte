@@ -219,6 +219,19 @@
     saveTimer = setTimeout(() => invoke('save_settings', { settings: snapshot }).catch(() => {}), 150);
   }
 
+  /// One number of the settings, written and saved.
+  ///
+  /// It went missing when the custom filter moved to its own tab — the half
+  /// that used it stayed here and the definition left with the other half — and
+  /// nothing said so: an undefined call in a template throws where nobody is
+  /// looking, so Min tier, Size and Shading simply stopped answering the mouse
+  /// and the panel looked fine. Reported as "can't change Min Tier" (#9).
+  function setNumber(key, value) {
+    if (!settings || !Number.isFinite(value) || settings[key] === value) return;
+    settings[key] = value;
+    save();
+  }
+
   // Deleting a filter takes its lists and their sounds with it, and clearing a
   // list is just as final — so anything destructive asks once. The second click
   // does it; walking away forgets.
