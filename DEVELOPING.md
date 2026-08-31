@@ -64,9 +64,14 @@ sudo setcap cap_net_raw=ep src-tauri/target/debug/hs-tracker
 
 `npm start` checks and reminds you.
 
-Rust and Node are required. On Windows the MSVC toolchain must be installed;
-`tauri-dev.cmd` and `tauri-release.cmd` load the Visual Studio environment first,
-because linking fails without it. The Npcap SDK import libraries are vendored in
+Rust and Node are required. On Windows the MSVC toolchain must be installed:
+`tauri-dev.cmd`, `tauri-release.cmd` and `test.cmd` all load the Visual Studio
+environment first, because linking fails without it. Which one they load is
+`vcvars.cmd`'s job — it asks `vswhere` for the newest install carrying a C++
+toolset and reads both program folders if that is not available, so any edition
+and any version does, in any location, and a machine with none of them is told
+so plainly instead of failing at the link step. The Npcap SDK import libraries
+are vendored in
 `src-tauri/npcap-sdk`, and `wpcap.dll` is delay-loaded, so the app starts and
 reports the problem instead of crashing when Npcap is absent.
 

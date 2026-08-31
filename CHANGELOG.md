@@ -11,6 +11,13 @@
 - `tools/preview/` — every window in a browser, with a mocked backend, so a skin
   can be looked at without building the Rust side or running the game.
 
+### Fixed
+
+- The Windows build scripts find the Visual Studio C++ toolset wherever it is.
+  All three named one path — the 2019 Build Tools under Program Files (x86) —
+  so on a machine with any other edition, version or drive, `npm start` and
+  `npm test` failed at the link step for a reason neither of them mentioned.
+
 ## 1.0.5 — 2026-08-31
 
 ### Fixed

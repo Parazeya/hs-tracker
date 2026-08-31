@@ -1,0 +1,5 @@
+# cmd.exe reads a batch file byte by byte, and once one has blocks in it -
+# vcvars.cmd is nothing but nested for and if - an LF-only copy is read wrong.
+# Three of these four files already asked for CRLF in a comment and were not
+# getting it: the checkout normalises to LF unless something says otherwise.
+*.cmd text eol=crlf
