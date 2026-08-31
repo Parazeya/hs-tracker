@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.5 — 2026-08-31
+
+### Fixed
+
+- The Linux AppImage draws again on Fedora, RHEL's family and Arch.
+- Min tier, Size and Shading answer the mouse again ([#9]).
+
+[#9]: https://github.com/Parazeya/hs-tracker/issues/9
+
 ## 1.0.4 — 2026-08-30
 
 ### Added
