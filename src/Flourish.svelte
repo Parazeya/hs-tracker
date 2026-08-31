@@ -256,14 +256,31 @@
     overflow: hidden;
   }
 
+  /* The pool the announcement stands in, and the only part of it the player has
+     a slider for — so what that slider does has to be worth doing. The alpha is
+     its, the geometry is not, and the geometry is what the setting kept running
+     into: an ellipse 46% wide that reached nothing at 72% of its radius stopped
+     186px from the middle of a 560px window, while a long name runs to 200. The
+     outer third of every long drop was set on the bare game at any setting, and
+     turning the slider to the top darkened a blob between the words. Wider, and
+     flatter across the middle, so the name is backed end to end.
+     Not wider than the window, though: `.stage` clips, and a clipped gradient
+     is a straight edge of shadow with a corner on it. Nothing at 49% of the
+     width and 45% of the height leaves a margin either side at every size. */
   .shade {
     position: absolute;
     inset: 0;
+    /* And it must not take `.fx`'s scale. The window itself already grows with
+       that setting — FLOURISH_W * scale, in lib.rs — so scaling the gradient
+       inside it applies the same number twice: at 200% the pool was magnified
+       to twice the window and clipped at both sides while still two thirds
+       opaque, which is the rectangle this comment exists to prevent. */
+    transform: scale(calc(1 / var(--scale)));
     background: radial-gradient(
-      ellipse 46% 52% at 50% 50%,
+      ellipse 60% 55% at 50% 50%,
       rgba(0, 0, 0, var(--shade)) 0%,
-      rgba(0, 0, 0, calc(var(--shade) * 0.55)) 45%,
-      rgba(0, 0, 0, 0) 72%
+      rgba(0, 0, 0, calc(var(--shade) * 0.72)) 55%,
+      rgba(0, 0, 0, 0) 82%
     );
     opacity: 0;
   }
@@ -279,11 +296,6 @@
   :global(html[data-os='linux']) .fx.playing .shade {
     animation: none;
     opacity: 1;
-  }
-  :global(html[data-os='linux']) .fx.playing .glow {
-    animation: swell var(--in) ease-out forwards,
-               vanish var(--out) ease-in var(--hold) forwards,
-               glowframes 1s steps(15) infinite;
   }
   @keyframes vanish { from { opacity: 1 } to { opacity: 0 } }
 

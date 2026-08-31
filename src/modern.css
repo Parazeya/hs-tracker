@@ -658,17 +658,46 @@ html[data-theme='modern'] ::-webkit-scrollbar-thumb:hover {
    resolves to `none` does not hide the box, it stops hiding it: without this
    the flat skin answers a Satanic drop with a solid red rectangle 340px wide.
    The glow is rebuilt as a gradient, which is what the sprite was a picture of
-   anyway; the three spark bursts have no gradient equivalent and go. */
+   anyway; the three spark bursts have no gradient equivalent and go.
+
+   It is also the only thing here that carries the rarity, and the numbers it
+   inherited were a sprite's: 340px wide against a pool of shadow that spans the
+   window, and 60% of a colour under an entrance that stops at half opacity —
+   about 0.3 of a dark red at its brightest point. The shading read, the colour
+   did not. Wider, and at its full opacity, so it reaches the ends of the name.
+   Not stronger than this, though: the word the pill is set in is that same
+   colour, and past about 60% it stops being a pool of light behind the name and
+   becomes a red ground the rarity cannot be read off.
+   And nothing before the window's edge: transparent at 76% of a 260px radius
+   puts the light out 82px inside the 280 where `.stage` would cut it. */
 html[data-theme='modern'] .glow {
+  width: 520px;
+  height: 180px;
   -webkit-mask-image: none;
   mask-image: none;
   background: radial-gradient(
     ellipse 50% 50% at 50% 50%,
-    color-mix(in srgb, var(--tint) 60%, transparent) 0%,
-    color-mix(in srgb, var(--tint) 22%, transparent) 45%,
-    transparent 72%
+    color-mix(in srgb, var(--tint) 55%, transparent) 0%,
+    color-mix(in srgb, var(--tint) 26%, transparent) 45%,
+    transparent 76%
   );
 }
+/* All the way up, and no jump on the way out. The shared entrance stops at 0.5
+   because it is lighting a sprite that is already bright; this is the light
+   itself. That also takes out a flash the low alpha was hiding — `swell` holds
+   at 0.5 through the whole announcement and `vanish` begins at 1, so the colour
+   doubled for a frame at the moment it started to leave. Reached through
+   `.stage` for the specificity to beat the component's own `.fx.playing .glow`,
+   and the sprite's frame-stepping goes with it: there is no mask left to step. */
+html[data-theme='modern'] .stage .fx.playing .glow {
+  animation: m-swell var(--in) ease-out forwards,
+             m-vanish var(--out) ease-in var(--hold) forwards;
+}
+@keyframes m-swell {
+  from { opacity: 0; transform: scale(0.78) }
+  to { opacity: 1; transform: scale(1) }
+}
+@keyframes m-vanish { from { opacity: 1 } to { opacity: 0 } }
 html[data-theme='modern'] .sparks { display: none; }
 
 /* The plate the zone's name is set on was a painted mailbox header. */
@@ -687,7 +716,28 @@ html[data-theme='modern'] .zbuff {
   background: color-mix(in srgb, var(--card) 85%, transparent);
 }
 html[data-theme='modern'] .zbuff .bname { color: var(--bone-13); }
-html[data-theme='modern'] .caption .name { color: var(--bone-15); }
+/* The name of the thing that dropped, which is the whole reason the window is
+   up. It was the one bright figure in the skin set at the body weight: the other
+   two skins have it in a pixel face with a single weight and no choice about it,
+   this one has weight to spend and was spending none of it here. Bold, and
+   tracked in by the hair the rest of the skin's figures are — a long name is
+   also the thing most likely to run out of the 560px there are. */
+html[data-theme='modern'] .caption .name {
+  color: var(--bone-15);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+/* The tier, in its box beside the name. Bold, tracked out rather than in — it is
+   a pair of capitals in a box, not a word, and bold capitals at 12px close up on
+   each other. Worth knowing before reaching for the weight again: at this size
+   it is about a pixel of stroke, +28% of ink measured, and against a dark tint
+   inside a frame of the same tint that pixel reads as nothing. What the letters
+   would need is contrast rather than weight, and the colour is deliberately the
+   rarity's own — so the weight is where this stops. */
+html[data-theme='modern'] .caption .grade {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
 
 /* Parking the window: the dashed box the player drags, and the button that
    ends it. Both were spelled out in the warm palette rather than in tokens,
