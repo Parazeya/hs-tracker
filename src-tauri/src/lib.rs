@@ -3051,21 +3051,27 @@ fn honour_backend_choice() {}
 /// position turns the renderer off, and the cost here is a little smoothness on
 /// a panel that is mostly still pictures.
 ///
-/// NVIDIA is not the only way it fails, though, and the second way cannot be
-/// tested for from here.
+/// NVIDIA is not the only way it fails, and the other way this was blamed for
+/// turned out not to be a renderer problem at all.
 ///
-/// A player on KDE with an AMD card and no NVIDIA module at all got
+/// A player on KDE with an AMD card and no NVIDIA module got
 /// `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...` four
-/// times over and then the same invisible window — through XWayland, with the
-/// overlay working and the renderer still unable to find a display to draw on. Whatever the renderer
-/// wants there, it does not have, and nothing this process can read says so in
-/// advance: the failure happens inside a web process that has not started yet.
+/// times over and then an invisible window. That was the AppImage shadowing the
+/// host's own wayland libraries with the copies it bundled, so the host's Mesa
+/// could not load; `docker/trim-appimage.sh` stops bundling them and has the
+/// measurements. Nothing here could have helped it — the abort happens in the
+/// loader, before a renderer is chosen — and this function firing on it made it
+/// worse, restarting once into the same wall and then writing `soft-render` on
+/// a machine whose renderer was never at fault. Worth knowing before reading
+/// another EGL abort as a reason to turn something off.
 ///
-/// So it is learned instead. Every start leaves `no-paint` behind and `ui_ready`
-/// removes it once something has actually been drawn; a start that finds the
-/// file knows the run before it drew nothing, and writes `soft-render` to say
-/// that this machine does not get the DMA-BUF renderer again. Delete that file
-/// to try it once more — after a driver update, say.
+/// Where the module is absent and the renderer really is the trouble, there is
+/// nothing to read in advance, so it is learned instead. Every start leaves
+/// `no-paint` behind and `ui_ready` removes it once something has actually been
+/// drawn; a start that finds the file knows the run before it drew nothing, and
+/// writes `soft-render` to say that this machine does not get the DMA-BUF
+/// renderer again. Delete that file to try it once more — after a driver
+/// update, say.
 ///
 /// Only machines that need it pay for it, and never one where the user has
 /// already made the choice themselves. It has to be set before GTK starts,

@@ -49,6 +49,26 @@ rm -rf "${CARGO_TARGET_DIR}/release/bundle"
 echo "==> bundling: ${BUNDLES}"
 tauri build --bundles "${BUNDLES}"
 
+# The AppImage carries libraries that have to come from the machine it runs on,
+# and shadowing the host's wayland/xcb stack with ubuntu:22.04 copies is what
+# made it abort with EGL_BAD_PARAMETER on Fedora and Arch. trim-appimage.sh
+# takes them back out. The .deb and .rpm bundle no libraries at all and never
+# had the problem, so this touches only the AppImage.
+if [[ ",${BUNDLES}," == *",appimage,"* ]]; then
+  # Only the Ubuntu image carries the script and squashfs-tools. Asking the
+  # Fedora one for an AppImage would otherwise die on a missing file.
+  [ -x /usr/local/bin/trim-appimage.sh ] || {
+    echo "this image cannot finish an AppImage: trim-appimage.sh is not in it." >&2
+    echo "  AppImages are built by docker/Dockerfile - npm run deb -- --appimage." >&2
+    exit 2
+  }
+  echo "==> trimming the AppImage"
+  while IFS= read -r -d '' img; do
+    echo "    $(basename "$img")"
+    /usr/local/bin/trim-appimage.sh "$img"
+  done < <(find "${CARGO_TARGET_DIR}/release/bundle" -type f -name '*.AppImage' -print0)
+fi
+
 echo "==> collecting"
 mkdir -p /out
 found=0

@@ -128,24 +128,41 @@ Fedora rather than for RHEL and its rebuilds — those do not carry the WebKitGT
 Either package grants the app the right to capture during installation. Settings
 live in `~/.config/hs-tracker`.
 
+The AppImage does not carry the wayland and xcb libraries it used to. They have
+to match the compositor and the graphics driver of the machine it is running on,
+and the copies it shipped stopped the host's own driver loading on Fedora and
+Arch — four `EGL_BAD_PARAMETER` lines and no window. Every desktop that has GTK
+has them already, so this costs nothing in practice; a machine built with no
+wayland libraries at all is the one place the AppImage now needs something from
+its host.
+
 **Install a package if you want the numbers.** The AppImage runs anywhere, and
 it is the one form that cannot be given the capture right — not by `setcap`, and
 not by anything else.
 
-The two rule each other out. A binary carrying a capability is a privileged one,
-so the loader stops trusting the library path the process was handed — and that
-path is the whole of how an AppImage finds the libraries bundled inside it. Give
-the binary `cap_net_raw` and it stops starting at all:
+There are two files you could try to grant it to, and neither one works.
+
+Grant it to the `.AppImage` and nothing happens. Linux recomputes capabilities
+at every `execve`, and the AppImage runtime execs the real binary out of the
+mount it just made, so the right is gone before the app starts. The app runs
+perfectly well and still counts nothing.
+
+Grant it to the extracted binary instead and the app stops starting at all. A
+binary carrying a capability is a privileged one, and the loader stops trusting
+both of the ways an AppImage finds the libraries bundled inside it: the
+`LD_LIBRARY_PATH` its own `AppRun` sets is dropped from the environment, and the
+`$ORIGIN/../lib` runpath built into the binary is refused as well. It gets as
+far as the first library the machine does not already have of its own:
 
 ```
-hs-tracker: error while loading shared libraries: libpcap.so.0.8:
+hs-tracker: error while loading shared libraries: libwebkit2gtk-4.1.so.0:
 cannot open shared object file: No such file or directory
 ```
 
-An `$ORIGIN` rpath does not get round it either; the loader refuses that for a
-privileged binary too. A package has no such problem: its binary uses the
-distribution's own libpcap from a directory the loader trusts however the
-program was started.
+And in ordinary use there is no file to try it on at all: the binary lives on a
+mount that exists only while the app is running. A package has none of this —
+its binary uses the distribution's own libpcap from a directory the loader
+trusts however the program was started.
 
 `sudo` does work, because nothing is granted at exec time and the library path
 survives — but settings, runs and sounds are then written to root's home instead
