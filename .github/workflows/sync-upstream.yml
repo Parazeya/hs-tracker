@@ -1,0 +1,128 @@
+name: upstream
+
+# Watch the project this one was forked from, and say when it moves.
+#
+# It does not merge. A sync always touches CHANGELOG.md — upstream's entries and
+# this fork's both belong in it, under their own headings — and choosing which
+# is which is not something a runner should do at six in the morning and leave
+# in a branch. `npm run sync` does the mechanical nine tenths locally and stops
+# at exactly that file; this only makes sure nobody has to remember to look.
+#
+# So it opens one issue and keeps reusing it, editing the body as upstream moves
+# further ahead. Closing it says "I have dealt with this"; the next commit
+# upstream opens a fresh one.
+
+on:
+  schedule:
+    # 06:10 UTC daily. Not on the hour: GitHub queues everything scheduled for
+    # :00 together and runs it late.
+    - cron: '10 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  look:
+    # A fork of a fork inherits this file and would open issues on a repository
+    # whose owner never asked for them.
+    if: github.repository == 'th3conc3pt3ur/hs-tracker'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the merge base is what "behind by N" is counted from, and a shallow
+          # clone does not have one
+          fetch-depth: 0
+
+      - name: Ask upstream what it has done
+        id: look
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/Parazeya/hs-tracker.git
+          # No --tags. Both projects have reached the same version once already,
+          # and a colliding tag makes fetch report a failure it has not had.
+          git fetch --quiet upstream main
+
+          behind=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          if [ "$behind" = "0" ]; then
+            echo "up to date with upstream"
+            exit 0
+          fi
+
+          {
+            echo 'commits<<EOF'
+            git log --format='- [`%h`](https://github.com/Parazeya/hs-tracker/commit/%H) %s' HEAD..upstream/main
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+          # Which files a merge would stop on. Tried here rather than guessed,
+          # because that list is the whole reason to read the issue: it says
+          # whether this is ten minutes or an evening.
+          git config user.email actions@github.com
+          git config user.name 'github actions'
+          conflicts=$(git merge --no-commit --no-ff upstream/main >/dev/null 2>&1 \
+            && echo '' || git diff --name-only --diff-filter=U)
+          git merge --abort 2>/dev/null || true
+
+          {
+            echo 'conflicts<<EOF'
+            if [ -z "$conflicts" ]; then
+              echo '_none — `npm run sync` should carry it through on its own._'
+            else
+              echo "$conflicts" | sed 's/^/- `/; s/$/`/'
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+          echo "theirs=$(git show upstream/main:package.json | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).version')" >> "$GITHUB_OUTPUT"
+
+      - name: Say so, once
+        if: steps.look.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'Upstream has moved ahead by ${{ steps.look.outputs.behind }} commit(s)'
+        shell: bash
+        run: |
+          body=$(cat <<'MARKDOWN'
+          Upstream is at **${{ steps.look.outputs.theirs }}**, and this fork is behind by
+          ${{ steps.look.outputs.behind }} commit(s).
+
+          ### What they changed
+
+          ${{ steps.look.outputs.commits }}
+
+          ### What a merge stops on
+
+          ${{ steps.look.outputs.conflicts }}
+
+          ### Taking it
+
+          ```bash
+          npm run sync            # fetch, merge, resolve the version files, renumber
+          # resolve CHANGELOG.md by hand — upstream's entries under a plain
+          # heading, this fork's under the -tc one above it
+          git add -A && git commit
+          npm test
+          ```
+
+          Then release as usual: `npm run ship`, `npm run all -- --windows`,
+          `npm run publish`.
+
+          Closing this issue means it has been dealt with. The next commit
+          upstream opens a new one.
+          MARKDOWN
+          )
+
+          # One issue, edited, rather than one a day. `--search` is scoped to
+          # open issues with the label, so a closed one is never resurrected.
+          existing=$(gh issue list --state open --label upstream --limit 1 --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$TITLE" --body "$body"
+            echo "updated #$existing"
+          else
+            gh label create upstream --description 'the project this was forked from has moved' --color BFD4F2 2>/dev/null || true
+            gh issue create --title "$TITLE" --body "$body" --label upstream
+          fi

@@ -58,6 +58,8 @@
   const tallies = (r, group) => (r.tallies ?? []).filter((t) => t.group === group && t.total > 0);
   const bosses = (r) => tallies(r, 'boss');
   const chests = (r) => tallies(r, 'chest');
+  // Cleared rather than killed — see the note beside TALLIES in stats.rs.
+  const cleared = (r) => tallies(r, 'clear');
 
   let armed = $state(false);
 
@@ -191,7 +193,7 @@
             </div>
           </div>
 
-          {#if bosses(run).length || chests(run).length}
+          {#if bosses(run).length || chests(run).length || cleared(run).length}
             <div class="box" style:border-image-source={css('chip_dark')}>
               <div class="head"><span class="accent">Killed &amp; opened</span></div>
               {#if bosses(run).length}
@@ -206,6 +208,14 @@
                 <div class="subhead">Chests</div>
                 <div class="tally">
                   {#each chests(run) as t}
+                    <div class="tallyrow"><span class="dim">{t.label}</span><b class="c-gold">{fmt(t.total)}</b></div>
+                  {/each}
+                </div>
+              {/if}
+              {#if cleared(run).length}
+                <div class="subhead">Cleared</div>
+                <div class="tally">
+                  {#each cleared(run) as t}
                     <div class="tallyrow"><span class="dim">{t.label}</span><b class="c-gold">{fmt(t.total)}</b></div>
                   {/each}
                 </div>

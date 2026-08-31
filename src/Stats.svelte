@@ -83,6 +83,10 @@
   // the character save counts these; they only appear once something has moved
   let bosses = $derived((snap?.tallies ?? []).filter((t) => t.group === 'boss'));
   let chests = $derived((snap?.tallies ?? []).filter((t) => t.group === 'chest'));
+  // Neither killed nor opened: a Chaos Tower floor and a wormhole are counted
+  // when they are CLEARED. They used to sit under Bosses, which made walking
+  // up a staircase read as a kill.
+  let cleared = $derived((snap?.tallies ?? []).filter((t) => t.group === 'clear'));
 
   let charSub = $derived.by(() => {
     const c = extra?.character;
@@ -456,7 +460,7 @@
           </div>
         </div>
 
-        {#if bosses.length || chests.length}
+        {#if bosses.length || chests.length || cleared.length}
           <div class="box" style:border-image-source={css('chip_dark')}>
             <div class="box-head"><span class="accent">Killed &amp; opened</span><span class="right">this session</span></div>
             {#if bosses.length}
@@ -471,6 +475,14 @@
               <div class="subhead">Chests</div>
               <div class="tally">
                 {#each chests as c}
+                  <div class="tallyrow"><span class="dim">{c.label}</span><b class="c-gold">{fmt(c.total)}</b></div>
+                {/each}
+              </div>
+            {/if}
+            {#if cleared.length}
+              <div class="subhead">Cleared</div>
+              <div class="tally">
+                {#each cleared as c}
                   <div class="tallyrow"><span class="dim">{c.label}</span><b class="c-gold">{fmt(c.total)}</b></div>
                 {/each}
               </div>

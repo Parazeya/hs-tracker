@@ -1,6 +1,15 @@
 # Changelog
 
-## 1.0.6 — 2026-08-31
+Two numbering schemes live here, because this is a fork.
+
+A plain `1.0.6` is a release of the upstream project, and its entries are
+Parazeya's; `1.0.6-tc.1` is this fork's first release built on top of that one,
+and its entries are ours. The suffix counts up on its own — `1.0.6-tc.2` is the
+next set of changes here against the same upstream — and resets when upstream
+moves. It is what keeps the two projects' tags and installers from colliding,
+which they did on the day both reached 1.0.6.
+
+## 1.0.6-tc.1 — 2026-08-31
 
 ### Added
 
@@ -27,6 +36,19 @@
   All three named one path — the 2019 Build Tools under Program Files (x86) —
   so on a machine with any other edition, version or drive, `npm start` and
   `npm test` failed at the link step for a reason neither of them mentioned.
+- `npm start` no longer dies on an EBUSY from vite's watcher, which walked
+  src-tauri/target and reached the executable while the linker held it.
+- `npm run publish` names the repository it is publishing to. With a fork's two
+  remotes `gh` chose for itself, and it chose upstream: a release that existed
+  there and not here was read as this one, and the assets were on their way to
+  it. See the note in scripts/publish.mjs.
+
+## 1.0.6 — 2026-08-31
+
+### Fixed
+
+- The rarity ticks turn their alerts on and off again.
+- A Chaos Tower floor no longer counts as a boss killed.
 
 ## 1.0.5 — 2026-08-31
 

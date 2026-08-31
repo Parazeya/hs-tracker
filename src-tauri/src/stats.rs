@@ -108,8 +108,13 @@ pub const TALLIES: &[(&str, &str, &str)] = &[
     ("statisticuberbloodmaidenkills", "Uber Blood Maiden", "boss"),
     ("statisticuberphantomleviathankills", "Uber Phantom Leviathan", "boss"),
     ("statisticuberchaostowerkills", "Uber Chaos Tower", "boss"),
-    ("statisticchaostowerfloorclears", "Chaos Tower floors", "boss"),
-    ("statisticwormholeclears", "Wormholes", "boss"),
+    // Not bosses, and filing them as bosses made the overlay's boss figure go
+    // up on a staircase: a Chaos Tower floor counts when it is CLEARED, so
+    // stepping to the next one took the count from 45 to 46 with nothing
+    // killed. A wormhole is the same shape. They are worth counting and they
+    // are worth counting apart.
+    ("statisticchaostowerfloorclears", "Chaos Tower floors", "clear"),
+    ("statisticwormholeclears", "Wormholes", "clear"),
     ("statisticcommonchestsopened", "Common", "chest"),
     ("statisticrarechestopened", "Rare", "chest"),
     ("statisticcrystalchestopened", "Crystal", "chest"),
@@ -120,7 +125,7 @@ pub const TALLIES: &[(&str, &str, &str)] = &[
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TallyCount {
     pub label: String,
-    /// "boss" or "chest" — which list it belongs under
+    /// "boss", "chest" or "clear" — which list it belongs under
     pub group: String,
     pub total: i64,
 }
@@ -2097,6 +2102,31 @@ pub struct Extra {
 
 #[cfg(test)]
 mod tests {
+    /// Every tally is filed under what the game counted, and the game says so
+    /// in the name of the field.
+    ///
+    /// Two were not, and it showed on the overlay: a Chaos Tower floor counts
+    /// when it is CLEARED, and filed as a boss it made the boss figure rise
+    /// from 45 to 46 on a staircase, with nothing killed. A wormhole is the
+    /// same. The field names are the check — `...kills` is a kill, `...opened`
+    /// is a chest, `...clears` is neither — so a new counter cannot join the
+    /// wrong list quietly.
+    #[test]
+    fn a_tally_is_filed_under_what_the_game_counted() {
+        for (key, label, group) in super::TALLIES {
+            let want = match *group {
+                "boss" => "kills",
+                "chest" => "opened",
+                "clear" => "clears",
+                other => panic!("{label}: no such group as {other:?}"),
+            };
+            assert!(
+                key.ends_with(want),
+                "{label} is filed under {group}, but the game calls its counter {key}"
+            );
+        }
+    }
+
     use super::*;
     use crate::parser::{self, Currency, GameEvent};
     use serde_json::json;

@@ -8,8 +8,19 @@
 </p>
 
 <p align="center">
-  <a href="../../releases"><b>➡️ Download for Windows &amp; Linux ⬅️</b></a>
+  <a href="../../releases"><b>➡️ Download for Windows ⬅️</b></a>
 </p>
+
+> [!NOTE]
+> **This is a fork** of [Parazeya/hs-tracker](https://github.com/Parazeya/hs-tracker),
+> which is where the app comes from and where to report anything that is not
+> about the additions below. It adds a third skin — *Modern*, flat and neutral
+> instead of the game's pixel art — and in-app updates, and it releases for
+> Windows only; the Linux packages are upstream's.
+>
+> Versions here carry a suffix: `1.0.6-tc.1` is this fork's first build on top of
+> upstream's `1.0.6`. Both projects reached 1.0.6, which is what the suffix is
+> for.
 
 > [!NOTE]
 > **How soon does it work when a new season starts?**

@@ -219,6 +219,21 @@
     saveTimer = setTimeout(() => invoke('save_settings', { settings: snapshot }).catch(() => {}), 150);
   }
 
+  /// Whether a rarity makes a sound at all — the first control on this panel.
+  ///
+  /// It went the same way `setNumber` did, and for the same reason: the custom
+  /// filter moved to its own tab and took the definitions with it while the
+  /// callers stayed. An undefined call in a template throws where nobody
+  /// looks, so every tick on the rarity rows stopped answering the mouse and
+  /// the panel looked untouched. Found by auditing for the shape rather than
+  /// by anyone reporting it, which is the only way this kind is found.
+  function toggleAlert(rarity) {
+    const on = new Set(settings.alerts ?? []);
+    on.has(rarity) ? on.delete(rarity) : on.add(rarity);
+    settings.alerts = [...on];
+    save();
+  }
+
   /// One number of the settings, written and saved.
   ///
   /// It went missing when the custom filter moved to its own tab — the half

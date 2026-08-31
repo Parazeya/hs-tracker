@@ -264,6 +264,48 @@ and then at the new one, and the difference is the whole review. `?update=1`
 and `?trouble=1` put the two banners up, and `?diag=<selector>` prints what the
 browser decided about whatever matches.
 
+## Tracking upstream
+
+This is a fork of [Parazeya/hs-tracker](https://github.com/Parazeya/hs-tracker)
+with features of its own, so upstream is **merged** rather than tracked: `main`
+here is their history with ours on top.
+
+```bash
+npm run sync              # fetch, merge, resolve the version files, renumber
+npm run sync -- --dry     # say what would happen and stop
+npm run sync -- --check   # only whether upstream has moved (exit 2 if it has)
+```
+
+It stops at `CHANGELOG.md`, every time and on purpose: upstream's entries and
+this fork's both belong in the file and deciding which is which is not a
+script's call. Everything else it carries through.
+
+`.github/workflows/sync-upstream.yml` looks once a day and keeps one issue up to
+date with what upstream has done and which files a merge would stop on. It does
+not merge anything.
+
+### The version number
+
+A plain `1.0.6` is an upstream release. `1.0.6-tc.1` is this fork's first build
+on top of that one; the suffix counts up while upstream stands still and resets
+when it moves, which `npm run sync` works out for itself:
+
+| upstream | here | next |
+| --- | --- | --- |
+| 1.0.6 | 1.0.6-tc.1 | 1.0.6-tc.2 |
+| 1.0.7 | 1.0.6-tc.2 | 1.0.7-tc.1 |
+
+The suffix is not decoration. Both projects reached 1.0.6 on the same day, and
+that afternoon: `git fetch --tags` refused upstream's `v1.0.6` because this
+fork's was in the way, and `gh`, asked about a release called `v1.0.6`, answered
+from *their* repository — which is how `npm run publish` came within one refused
+write of uploading this fork's installer onto somebody else's release.
+
+Semver reads `1.0.6-tc.1` as *earlier* than `1.0.6`, which would matter if the
+app ever compared itself against an upstream release. It does not: the update
+endpoint and the version check both name this fork, and within this fork's own
+sequence the ordering is exactly right.
+
 ## Updates
 
 The app checks once, a few seconds after the dashboard has drawn, and offers
