@@ -101,8 +101,15 @@ if (remoteSha !== tagged) {
 
 const dir = join(root, 'release');
 if (!existsSync(dir)) die('nothing in release/. Run: npm run all');
-const files = readdirSync(dir).filter((n) => n.includes(version));
-if (!files.length) die(`release/ holds nothing for ${version}. Run: npm run all`);
+const all = readdirSync(dir).filter((n) => n.includes(version));
+if (!all.length) die(`release/ holds nothing for ${version}. Run: npm run all`);
+
+// The signature is not an asset. It is one line of base64 that belongs inside
+// latest.json, where the app reads it; on the release page it would be a file
+// nobody has a use for next to the installer it describes.
+const sig = all.find((n) => n.endsWith('.sig'));
+const files = all.filter((n) => !n.endsWith('.sig'));
+const installer = files.find((n) => n.endsWith('-setup.exe')) ?? files.find((n) => n.endsWith('.exe'));
 
 // The four a full release carries. A missing one is worth saying out loud
 // rather than discovering on the release page: the AppImage in particular is
@@ -126,7 +133,22 @@ console.log(`\n  ${tag}\n`);
 for (const name of files.sort()) console.log(`    ${name}`);
 if (missing.length) console.log(`\n    missing: ${missing.join(', ')}`);
 console.log(`\n    notes    ${changelog[first].trim()}`);
-console.log(`    release  ${has('--draft') ? 'draft' : 'published'}\n`);
+console.log(`    release  ${has('--draft') ? 'draft' : 'published'}`);
+console.log(
+  `    updates  ${
+    sig && installer
+      ? `latest.json, signing ${installer}`
+      : 'NO latest.json — nobody running the app will be offered this'
+  }\n`,
+);
+if (!sig && installer) {
+  console.log(
+    '  There is an installer but no .sig beside it, so this release cannot be\n' +
+      '  offered as an update: the app installs only what its own key signed.\n' +
+      '  The key is missing or unset — see DEVELOPING.md, "Updates" — and\n' +
+      '  `npm run all` says which when it runs.\n',
+  );
+}
 
 if (dry) {
   console.log('  --dry, so nothing was done.\n');
@@ -172,6 +194,51 @@ if (exists) {
     ],
     { stdio: 'inherit' },
   );
+}
+
+// ── the update manifest ──────────────────────────────────────────────────────
+//
+// Written after the upload rather than before it, because it has to name the
+// installer by the URL GitHub actually gave it — and GitHub renames an asset
+// on the way in, turning every space in "HS Tracker_1.0.6_x64-setup.exe" into
+// a dot. Guessing that rule is how a manifest ends up pointing at a 404 that
+// only shows up as "update failed" on somebody else's machine a week later.
+// So it is read back from the release.
+if (sig && installer) {
+  const assets = JSON.parse(
+    run('gh', ['release', 'view', tag, '--json', 'assets']),
+  ).assets;
+  // found by suffix rather than by the local filename, which is the one thing
+  // GitHub is known to have changed
+  const asset = assets.find((a) => a.name.endsWith('-setup.exe')) ?? assets.find((a) => a.name.endsWith('.exe'));
+  if (!asset) {
+    die(`${installer} was uploaded but the release does not list it. Nothing was written to latest.json.`);
+  }
+  // Built from the name GitHub settled on rather than read off the asset
+  // record: `gh` reports two URLs per asset and only one of them hands back
+  // the file itself to an unauthenticated GET, which is all the updater does.
+  const repo = run('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
+  const url = `https://github.com/${repo}/releases/download/${tag}/${asset.name}`;
+  const manifest = {
+    version,
+    notes,
+    // The plugin parses this; an invalid one is a check that fails silently
+    // on every machine at once.
+    pub_date: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+    platforms: {
+      'windows-x86_64': {
+        signature: readFileSync(join(dir, sig), 'utf8').trim(),
+        url,
+      },
+    },
+  };
+  const manifestPath = join(dir, 'latest.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  // Always --clobber: the manifest is derived from what is already on the
+  // release, so a second run rewrites it rather than adding a second one, and
+  // "asset already exists" would stop the release half-published.
+  run('gh', ['release', 'upload', tag, manifestPath, '--clobber'], { stdio: 'inherit' });
+  console.log(`\n  latest.json → ${asset.name}`);
 }
 
 console.log(`\n  ${run('gh', ['release', 'view', tag, '--json', 'url', '-q', '.url']).trim()}\n`);

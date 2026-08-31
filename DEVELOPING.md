@@ -260,7 +260,45 @@ http://localhost:5176/tools/preview/?theme=modern
 `?panel=` takes `runs`, `filter`, `watchlist`, `codex`, `shop`, `settings`,
 `about`, `flourish`, `zone` or `ticker`; with none, it draws the dashboard and
 the overlay side by side. `?theme=` takes any skin name — point it at `default`
-and then at the new one, and the difference is the whole review.
+and then at the new one, and the difference is the whole review. `?update=1`
+and `?trouble=1` put the two banners up, and `?diag=<selector>` prints what the
+browser decided about whatever matches.
+
+## Updates
+
+The app checks once, a few seconds after the dashboard has drawn, and offers
+what it finds. It installs nothing on its own: the banner has a button, and the
+overlay sits on top of a game where a surprise restart is not the app's call.
+
+It only installs a package signed by the key whose public half is compiled into
+the binary — `plugins.updater.pubkey` in `tauri.conf.json`. Generate the pair
+once:
+
+```bash
+npx tauri signer generate -w "$USERPROFILE/.tauri/hs-tracker.key"
+```
+
+The public half goes in `tauri.conf.json`; the private one stays out of the
+repository. `npm run all` finds it at that path by default, or wherever
+`TAURI_SIGNING_PRIVATE_KEY_PATH` says — see `.env.example`.
+
+**Back the private key up somewhere that is not this machine.** Lose it and no
+copy of the app already installed anywhere can ever be updated again: a new key
+means a new public half, and a binary only trusts the one it was built with.
+Everyone reinstalls by hand.
+
+`npm run publish` writes `latest.json` beside the installer on the release —
+version, notes, the signature, and the installer's URL read back from GitHub
+rather than guessed, because GitHub renames an asset on the way in and turns
+every space into a dot. `plugins.updater.endpoints` points at
+`releases/latest/download/latest.json`, so cutting a release is what publishes
+the update. A build with no signing key still produces a working installer;
+`npm run all` and `npm run publish` both say so, and that release simply is not
+offered to anybody.
+
+The version check on the About page is a different thing and stays: it reads the
+GitHub API and links to the release page, which is the way round it if an
+install ever fails.
 
 ## Known inaccuracies
 

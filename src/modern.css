@@ -607,6 +607,20 @@ html[data-theme='modern'] .broke button {
   font-size: 12px;
   padding: 5px 12px;
 }
+html[data-theme='modern'] .trouble .tact:hover:not(:disabled) { background: var(--ground-11); }
+html[data-theme='modern'] .trouble .tact:disabled { background: var(--muted); }
+
+/* The update banner's two buttons: the offer is the filled one, because the
+   whole banner exists to make it. */
+html[data-theme='modern'] .newer .nbtns .tact:first-child:not(:disabled) {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 500;
+}
+html[data-theme='modern'] .newer .nbtns .tact:first-child:hover:not(:disabled) {
+  background: var(--bone-12);
+}
 
 /* Monospace for the things read a character at a time and typed into another
    program. It was the system's face already; it takes the skin's radius and a

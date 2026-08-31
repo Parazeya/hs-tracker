@@ -23,7 +23,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { VCVARS } from './paths.mjs';
+import { SIGNING_KEY_PASSWORD, SIGNING_KEY_PATH, VCVARS } from './paths.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // only this build's artifacts are collected; older ones stay where they are
@@ -81,16 +81,44 @@ function show(dir, exts) {
   }
 }
 
+// The signing key, for the update manifest.
+//
+// `createUpdaterArtifacts` is on, so every bundle writes a .sig beside the
+// installer — and cannot, without this. Passed through the environment rather
+// than the command line: an argument would be in the console history and in
+// the process list, and this one opens every install of the app to whoever
+// reads it.
+//
+// A build with no key is allowed and says so. It produces an installer people
+// can run, and no update anybody already running the app will accept, which is
+// worth one line of warning rather than a refusal — there are reasons to want
+// an unsigned local build.
+function signing() {
+  if (!SIGNING_KEY_PATH || !existsSync(SIGNING_KEY_PATH)) {
+    console.log('  signing:   none — this build carries no update signature');
+    console.log('             see DEVELOPING.md, "Updates"');
+    return {};
+  }
+  console.log(`  signing:   ${SIGNING_KEY_PATH}`);
+  return {
+    TAURI_SIGNING_PRIVATE_KEY: readFileSync(SIGNING_KEY_PATH, 'utf8').trim(),
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: SIGNING_KEY_PASSWORD ?? '',
+  };
+}
+
 if (wantWindows) {
   console.log('== Windows ==');
+  const env = { ...process.env, ...signing() };
   if (!VCVARS) {
-    run('npx', ['tauri', 'build']);
+    console.log('\n  $ npx tauri build\n');
+    execFileSync('npx', ['tauri', 'build'], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32', env });
   } else {
     console.log(`  toolchain: ${VCVARS}`);
     execSync(`call "${VCVARS.replace(/\//g, "\\")}" >nul && npx tauri build`, {
       cwd: root,
       stdio: 'inherit',
       shell: 'cmd.exe',
+      env,
     });
   }
 }
@@ -113,7 +141,10 @@ if (wantLinux) {
   }
 }
 
-if (wantWindows) collect(join(root, 'src-tauri', 'target', 'release', 'bundle'), ['.exe', '.msi']);
+// `.sig` too: it is the installer's signature, written beside it because
+// createUpdaterArtifacts is on, and `npm run publish` needs it in release/ to
+// write latest.json. Without it a release installs by hand and updates nothing.
+if (wantWindows) collect(join(root, 'src-tauri', 'target', 'release', 'bundle'), ['.exe', '.msi', '.sig']);
 
 console.log(`\n  release/  —  everything for ${version}, in one place:`);
 show(RELEASE, ['.exe', '.msi', '.deb', '.rpm', '.AppImage']);

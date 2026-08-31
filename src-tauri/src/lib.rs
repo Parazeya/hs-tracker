@@ -1983,7 +1983,14 @@ pub struct About {
     appimage: bool,
 }
 
-const REPO: &str = "https://github.com/Parazeya/hs-tracker";
+/// Where this build comes from, and where it looks for a newer one.
+///
+/// This is a fork. Left pointing at the original, About's version check asked
+/// GitHub for the upstream release and would have called every build here out
+/// of date the moment that repository shipped anything — while never once
+/// seeing a release of this one. The updater's endpoint in tauri.conf.json
+/// names the same repository, and the two have to agree.
+const REPO: &str = "https://github.com/th3conc3pt3ur/hs-tracker";
 
 /// The front end's own errors. A panel that throws while rendering goes blank
 /// and says nothing; this is how it says something.
@@ -3128,6 +3135,11 @@ pub fn run() {
             reveal(app, face, true);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // Updates. The check is the front end's — it happens once, a moment
+        // after the dashboard has drawn, and says nothing at all when there is
+        // nothing to say. Nothing is downloaded until the reader asks for it.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {

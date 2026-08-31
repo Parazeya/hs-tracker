@@ -121,6 +121,18 @@
         "sidebarImage": "installer/sidebar.bmp",
         "installerHooks": "installer/hooks.nsh"
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/th3conc3pt3ur/hs-tracker/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVGQTE2RTVBRjgwRjNGNkQKUldSdFB3LzRXbTZoWDBJY2NQcFBMbWZiNm9qOVcrdWNSenpuYWFXZ3Brc1hVemd6Smx3QzhQWU8K",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

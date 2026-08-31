@@ -50,3 +50,10 @@ dist-linux/
 
 # artifacts gathered by `npm run all`
 release/
+
+# The update signing key, wherever it is put. It normally lives outside the
+# checkout entirely (~/.tauri), and this is the belt to that pair of braces:
+# a key committed once is a key that has to be rotated, and rotating it means
+# every install already out there stops accepting updates.
+*.key
+*.key.pub

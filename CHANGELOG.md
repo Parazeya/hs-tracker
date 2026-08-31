@@ -10,6 +10,16 @@
   Every window follows it, the overlay and the loot pillar included.
 - `tools/preview/` — every window in a browser, with a mocked backend, so a skin
   can be looked at without building the Rust side or running the game.
+- Updates. The dashboard checks once a few seconds after it draws, says nothing
+  unless there is something to say, and offers a button — it installs nothing on
+  its own. Only a package signed by this fork's own key is accepted; releases
+  carry the manifest the app reads. See DEVELOPING.md, "Updates".
+
+### Changed
+
+- The version check and the update endpoint point at this fork rather than at
+  the repository it was forked from, which would have called every build here
+  out of date and never once shown a release of its own.
 
 ### Fixed
 

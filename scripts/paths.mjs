@@ -70,6 +70,23 @@ export const VCVARS =
     'C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build/vcvars64.bat',
   );
 
+/// The private half of the update signing key, and its password if it has one.
+///
+/// Never in the repository, and never printed. The app only installs a package
+/// signed by this key — `plugins.updater.pubkey` in tauri.conf.json is its
+/// public half — so losing it means no machine already running this app can
+/// ever be updated again, only reinstalled by hand. Back it up somewhere that
+/// is not this laptop.
+///
+/// `tauri build` reads these as TAURI_SIGNING_PRIVATE_KEY(_PASSWORD); the
+/// build script puts them in the child's environment so they never reach a
+/// command line, where Windows would record them in the console history.
+export const SIGNING_KEY_PATH =
+  read('TAURI_SIGNING_PRIVATE_KEY_PATH') ||
+  firstThatExists(join(process.env.USERPROFILE || process.env.HOME || '', '.tauri', 'hs-tracker.key'));
+
+export const SIGNING_KEY_PASSWORD = read('TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
+
 /// Say which one is missing and what to set, rather than failing on a path the
 /// reader has never heard of.
 export function require(name, value, what) {

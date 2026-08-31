@@ -28,6 +28,12 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-dialog = "2"
 # Refuses to be started twice; see the plugin registration in `run`.
 tauri-plugin-single-instance = "2"
+# Updates. The releases carry a signed installer and a latest.json beside it,
+# and the app only accepts a package signed by the key whose public half is in
+# tauri.conf.json — see DEVELOPING.md, "Updates". `process` is here for the one
+# thing it does: relaunch the app once the installer has run.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 # wayland-data-control lets the clipboard work in a Wayland session that has no
 # XWayland; on Windows the feature is inert
 arboard = { version = "3", features = ["wayland-data-control"] }

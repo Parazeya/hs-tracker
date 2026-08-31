@@ -2,6 +2,7 @@
   import { appWindow, invoke, recall, remember } from './bridge.js';
   import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
+  import { dismissUpdate, installUpdate, lookForUpdate, updater } from './update.svelte.js';
   import Stats from './Stats.svelte';
   import Runs from './Runs.svelte';
   import Shop from './Shop.svelte';
@@ -53,6 +54,16 @@
   $effect(() => {
     remember('section', section);
     invoke('viewing', { section }).catch(() => {});
+  });
+
+  // Once, and a moment late. Asked during mount it competes with the first
+  // paint for the same thread, and this is the window the player is waiting to
+  // see; asked here it costs a network round trip nobody is watching. The
+  // dashboard is the only window that asks — the overlay, the ticker and the
+  // pillar are the same process and would each ask again for nothing.
+  $effect(() => {
+    const at = setTimeout(lookForUpdate, 2500);
+    return () => clearTimeout(at);
   });
 
   // a Wayland session cannot host the overlay, so the way into it is not shown
@@ -240,6 +251,31 @@
     </nav>
 
     <div class="pane" style:border-image-source={css('chip_dark')}>
+      <!-- A newer version, and the two answers to it. It wears `.trouble`
+           without `.bad` because it is the same shape of news as "waiting for
+           the game" — something to know about, not something broken — and that
+           way a season and the flat skin both already know how to draw it. -->
+      {#if updater.found}
+        <div class="trouble newer">
+          <div class="tt">Version {updater.found.version} is out</div>
+          {#if updater.found.notes}<div class="td notes">{updater.found.notes}</div>{/if}
+          <div class="nbtns">
+            <button class="tact" onclick={installUpdate} disabled={updater.stage === 'downloading'}>
+              {updater.stage === 'downloading'
+                ? `Downloading… ${Math.round(updater.progress * 100)}%`
+                : 'Install and restart'}
+            </button>
+            <button class="tact" onclick={dismissUpdate} disabled={updater.stage === 'downloading'}>
+              Not now
+            </button>
+          </div>
+          {#if updater.failure}
+            <div class="td nfail">
+              {updater.failure} — the release page in About has the installer.
+            </div>
+          {/if}
+        </div>
+      {/if}
       {#if trouble}
         <div class="trouble" class:bad={trouble.bad}>
           <div class="tt">{trouble.title}</div>
@@ -566,6 +602,26 @@
     border: 1px solid rgba(255, 255, 255, 0.18);
   }
   .trouble .tact:hover { background: rgba(255, 255, 255, 0.12); }
+  /* A download in flight: both buttons are out until it lands, because the
+     second click on "Install" would start a second one and "Not now" no
+     longer answers anything. */
+  .trouble .tact:disabled {
+    opacity: 0.55;
+    cursor: default;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  /* The release notes, which are a changelog section and can run to a screen
+     of bullets. Given a ceiling and its own scroll: the banner sits above the
+     page the reader came for, and it is an offer, not the news. */
+  .trouble .notes {
+    max-height: 84px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    padding-right: 6px;
+  }
+  .nbtns { display: flex; gap: 6px; }
+  .trouble .nfail { color: #ff7a7a; }
 
   .trouble .tf {
     display: block;

@@ -13,6 +13,9 @@
 //   http://localhost:5176/tools/preview/?theme=modern
 //   ...&panel=runs | filter | watchlist | codex | shop | settings | about
 //   ...&panel=flourish | zone | ticker
+//   ...&update=1        the "a newer version is out" banner
+//   ...&trouble=1       the app's own "waiting for the game" banner
+//   ...&diag=<css>      computed styles for what matches, over the page
 //
 // with no `panel`, the dashboard and the overlay side by side. `theme` takes
 // any skin name — `default` and `modern` are what it is usually pointed at,
@@ -20,6 +23,13 @@
 //
 // The data below is invented and only has to be shaped right; where a figure
 // looks wrong in here, it is this file that is wrong and not the panel.
+//
+// One warning about screenshotting this headlessly. Anything that appears
+// after the first paint — the update banner is 2.5s late by design — can be
+// laid out correctly and still come out of `--screenshot` with its text
+// missing: boxes and borders in the captured frame, no glyphs. That is the
+// capture, not the page. `?diag=` reports what the browser actually decided,
+// and a run that touches the DOM again before the shot brings the text back.
 
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 
@@ -87,7 +97,12 @@ const items = Object.fromEntries(
 );
 
 const SNAPSHOT = {
-  status: 'capturing|Ethernet|3|0|182004|0',
+  // `?trouble=1` puts the app's own "waiting for the game" banner up, which is
+  // the one the update banner borrows its shape from — handy for comparing the
+  // two, and for telling a fault in one from a fault in both.
+  status: new URLSearchParams(location.search).has('trouble')
+    ? 'waiting-for-game'
+    : 'capturing|Ethernet|3|0|182004|0',
   session_secs: 4085,
   paused: false,
   gold: 3987,
@@ -156,10 +171,29 @@ mockWindows('dashboard', 'main', 'ticker', 'flourish');
 // is the only way to see the loot pillar or the drop ticker: both are empty
 // until something drops.
 const listeners = new Map();
+
+// `?update=1` puts the "a newer version is out" banner up. The real code path
+// runs — the updater plugin asks over the same IPC as everything else, so
+// answering its `check` is enough — which is the only way to look at that
+// banner without cutting a release and waiting to be behind it.
+const offerUpdate = new URLSearchParams(location.search).has('update');
+
 mockIPC((cmd, args) => {
   if (cmd === 'plugin:event|listen') {
     listeners.set(args.event, args.handler);
     return 1;
+  }
+  if (cmd === 'plugin:updater|check') {
+    if (!offerUpdate) return null;
+    return {
+      rid: 1,
+      available: true,
+      currentVersion: '1.0.5',
+      version: '1.0.6',
+      date: '2026-09-02 10:00:00.000 +00:00:00',
+      body: '### Added\n\n- A third skin, Modern.\n\n### Fixed\n\n- The Windows build scripts find the C++ toolset wherever it is.',
+      rawJson: {},
+    };
   }
   return ANSWERS[cmd] ?? null;
 });
@@ -198,6 +232,33 @@ const box = (w, h) => {
 };
 
 const which = new URLSearchParams(location.search).get('panel');
+
+// `?diag=<selector>` — what the browser actually decided about those elements,
+// printed over the page. A screenshot says a thing did not draw; this says why.
+if (new URLSearchParams(location.search).has('diag')) {
+  const sel = new URLSearchParams(location.search).get('diag') || '.trouble *';
+  setTimeout(() => {
+    const out = document.createElement('pre');
+    out.style.cssText =
+      'position:fixed;inset:0;z-index:9999;margin:0;padding:12px;overflow:auto;' +
+      'background:#000;color:#0f0;font:11px monospace;white-space:pre-wrap';
+    const rows = [...document.querySelectorAll(sel)].map((el) => {
+      const s = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return [
+        `${el.tagName.toLowerCase()}.${[...el.classList].join('.')}`,
+        `  text      ${JSON.stringify((el.textContent || '').slice(0, 44))}`,
+        `  box       ${Math.round(r.width)}x${Math.round(r.height)} at ${Math.round(r.x)},${Math.round(r.y)}`,
+        `  color     ${s.color}   fill ${s.webkitTextFillColor}`,
+        `  font      ${s.fontSize} / ${s.fontFamily}`,
+        `  vis       display=${s.display} visibility=${s.visibility} opacity=${s.opacity}`,
+        `  overflow  ${s.overflow} clip=${s.clipPath}`,
+      ].join('\n');
+    });
+    out.textContent = rows.join('\n\n') || `nothing matches ${sel}`;
+    document.body.append(out);
+  }, 4200);
+}
 
 if (which === 'flourish' || which === 'zone') {
   const { default: Flourish } = await import('../../src/Flourish.svelte');
