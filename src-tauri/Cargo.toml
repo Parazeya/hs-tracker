@@ -1,6 +1,6 @@
 [package]
 name = "hs-tracker"
-version = "1.0.5"
+version = "1.0.6"
 description = "HS Tracker — Hero Siege session tracker overlay"
 # What the packages print. Without it the RPM header says "License: Unspecified"
 # for a repository that has carried a LICENSE file all along, and a distribution
