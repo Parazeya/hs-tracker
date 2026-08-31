@@ -44,6 +44,29 @@ try {
   die('gh is not signed in. Run: gh auth login');
 }
 
+// Which repository every `gh` call means. Named outright, from `origin`.
+//
+// `gh` works it out from the git remotes on its own, and a fork has two of
+// them. That is not a nicety: it published nothing, but it came close. This
+// script's "does the release exist already" check ran `gh release view v1.0.6`
+// with no repository named, and `gh` answered it from UPSTREAM — which had a
+// 1.0.6 of its own, released the same day. So the script concluded the release
+// was already there and went on to upload a fork's installer onto somebody
+// else's release. The only thing that stopped it was gh refusing a write with
+// no default repository set, and printing a message about configuration.
+//
+// Every check above already reads `origin`. Everything below now does too.
+const slug = (() => {
+  const url = run('git', ['remote', 'get-url', 'origin']).trim();
+  const at = url.match(/github\.com[:/]+([^/]+\/[^/]+?)(?:\.git)?\/?$/i);
+  if (!at) die(`origin does not look like a GitHub repository:\n\n    ${url}`);
+  return at[1];
+})();
+
+/// `gh`, always about `origin`. `auth status` is the one call with no
+/// repository to speak of and is left alone.
+const gh = (argv, opts) => run('gh', [...argv, '--repo', slug], opts);
+
 const tags = run('git', ['tag', '-l', tag]).trim();
 if (!tags) die(`no tag ${tag}. Run: npm run ship ${version}`);
 
@@ -165,7 +188,7 @@ writeFileSync(notesPath, notes + '\n');
 // somebody has already downloaded is not.
 const exists = (() => {
   try {
-    run('gh', ['release', 'view', tag], { stdio: 'ignore' });
+    gh(['release', 'view', tag], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -177,10 +200,9 @@ if (exists) {
   console.log(`  the release is already there; ${has('--replace') ? 'replacing' : 'adding what is missing'}\n`);
   const upload = ['release', 'upload', tag, ...paths];
   if (has('--replace')) upload.push('--clobber');
-  run('gh', upload, { stdio: 'inherit' });
+  gh(upload, { stdio: 'inherit' });
 } else {
-  run(
-    'gh',
+  gh(
     [
       'release',
       'create',
@@ -206,7 +228,7 @@ if (exists) {
 // So it is read back from the release.
 if (sig && installer) {
   const assets = JSON.parse(
-    run('gh', ['release', 'view', tag, '--json', 'assets']),
+    gh(['release', 'view', tag, '--json', 'assets']),
   ).assets;
   // found by suffix rather than by the local filename, which is the one thing
   // GitHub is known to have changed
@@ -217,8 +239,7 @@ if (sig && installer) {
   // Built from the name GitHub settled on rather than read off the asset
   // record: `gh` reports two URLs per asset and only one of them hands back
   // the file itself to an unauthenticated GET, which is all the updater does.
-  const repo = run('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
-  const url = `https://github.com/${repo}/releases/download/${tag}/${asset.name}`;
+  const url = `https://github.com/${slug}/releases/download/${tag}/${asset.name}`;
   const manifest = {
     version,
     notes,
@@ -237,8 +258,8 @@ if (sig && installer) {
   // Always --clobber: the manifest is derived from what is already on the
   // release, so a second run rewrites it rather than adding a second one, and
   // "asset already exists" would stop the release half-published.
-  run('gh', ['release', 'upload', tag, manifestPath, '--clobber'], { stdio: 'inherit' });
+  gh(['release', 'upload', tag, manifestPath, '--clobber'], { stdio: 'inherit' });
   console.log(`\n  latest.json → ${asset.name}`);
 }
 
-console.log(`\n  ${run('gh', ['release', 'view', tag, '--json', 'url', '-q', '.url']).trim()}\n`);
+console.log(`\n  ${gh(['release', 'view', tag, '--json', 'url', '-q', '.url']).trim()}\n`);
