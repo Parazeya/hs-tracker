@@ -15,7 +15,7 @@ import zoneMp3 from './assets/sounds/zone.mp3';
 /// because everything that loads, tests or replaces a sound walks it.
 export const RARITIES = ['satanic', 'set', 'heroic', 'angelic', 'unholy', 'mail', 'zone', 'relic'];
 
-export const DEFAULTS = {
+const DEFAULTS = {
   satanic: satanicWav,
   set: setWav,
   heroic: heroicWav,
@@ -23,7 +23,7 @@ export const DEFAULTS = {
   unholy: unholyWav,
   mail: mailWav,
   // The rotation gets a sound of its own rather than borrowing the satanic
-  // chime it used to: the two mean different things and were told apart only by
+  // relic chime: the two mean different things and are told apart only by
   // where on the screen something happened. Browse… puts any other file over
   // it, as for every key here.
   zone: zoneMp3,

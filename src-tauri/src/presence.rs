@@ -68,25 +68,27 @@ struct Card {
 
 /// What to call the room the heartbeat named.
 ///
-/// The game names every one of its rooms itself, keyed by exactly the string
-/// the heartbeat sends, so that is what is shown: `Act_02_05` is The Glacial
-/// Trail and `Town_01_rm` is the Town of Inoya. Composing a label out of the
-/// numbers instead gave "Act 2 · Zone 5" — true, and not what the game or the
-/// tracker's own panel calls it — and for a room that is not an act at all it
-/// gave the raw name with its suffix still attached: `Shadow_Realm_rm` reached
-/// Discord as "Shadow Realm rm".
+/// The game names its rooms itself, keyed by exactly the string the heartbeat
+/// sends: `Act_02_05` is The Glacial Trail, `Town_01_rm` the Town of Inoya. So
+/// the table answers first. Composing a label out of the numbers gives "Act 2 ·
+/// Zone 5", which is true and is not what the game or this app's own panels
+/// call it, and for a room that is not an act at all it leaves the raw suffix
+/// on — `Shadow_Realm_rm`.
 ///
 /// The arithmetic stays underneath as the fallback, for a room a patch adds
-/// before this table is rebuilt.
+/// before the table is rebuilt.
 fn zone_label(room: &str) -> String {
+    if let Some(name) = crate::say::room(room) {
+        return name;
+    }
     if let Some(name) = crate::items::room_name(room) {
         return name.into();
     }
     if room.get(..4).is_some_and(|head| head.eq_ignore_ascii_case("town")) {
-        return "Town".into();
+        return crate::say::say("Town");
     }
     match zone_pair(room) {
-        Some((act, zone)) => format!("Act {act} · Zone {zone}"),
+        Some((act, zone)) => format!("{} {act} · {} {zone}", crate::say::say("Act"), crate::say::say("Zone")),
         None => room.trim_end_matches("_rm").replace('_', " "),
     }
 }
@@ -132,10 +134,10 @@ const DIFFICULTIES: [&str; 4] = ["Normal", "Nightmare", "Hell", "Inferno"];
 
 /// The badge, and the zone it names.
 ///
-/// The game says outright when the character is standing in the satanic zone,
-/// but that flag rides the same rare heartbeat the room did, so it is held
-/// against the act, which every save write states: walk out of the act and the
-/// badge goes even though no heartbeat has said so yet.
+/// The game states outright when the character is in the satanic zone, but that
+/// flag rides the same rare heartbeat the room does. It is held against the act,
+/// which every save states, so walking out of the act clears the badge without
+/// waiting for a heartbeat.
 fn satanic_badge(here: bool, zone: Option<&str>, act: i64) -> Option<String> {
     let zone = zone.filter(|_| here)?;
     zone_pair(zone)
@@ -156,26 +158,27 @@ fn build(app: &AppHandle) -> Card {
 
     // Where the character is, as coarsely as the game will state it.
     //
-    // The room is the better line and this used to be it — but the game names
-    // the room only in its own state packet, and since the August 2026 patch
-    // that arrives about twenty times less often than it used to, mostly while
-    // the map is open. What stood here was usually a zone the player had left,
-    // and a confidently wrong place is worse than an honest act. The act comes
-    // with every save write. Discord rejects an empty line and would take the
-    // connection down with it, so an act the game has not stated yet is a line
-    // of our own.
+    // The room would be the better line, but it arrives only in the game's own
+    // state packet, which since the August 2026 patch comes about twenty times
+    // less often — so it usually names a zone the player has
+    // left, and a confidently wrong place is worse than an honest act. The act
+    // comes with every save.
+    //
+    // Discord rejects an empty line and drops the connection over it, so an act
+    // the game has not stated yet still needs a line of our own.
     let mut where_at = match snap.act {
-        act if act > 0 => format!("Act {act}"),
-        _ => "Somewhere in Hero Siege".into(),
+        act if act > 0 => format!("{} {act}", crate::say::say("Act")),
+        _ => crate::say::say("Somewhere in Hero Siege"),
     };
     if let Some(c) = &snap.character {
         let mode = DIFFICULTIES.get(c.difficulty as usize).copied();
         if let Some(mode) = mode {
             where_at.push_str(" · ");
-            where_at.push_str(mode);
+            where_at.push_str(&crate::say::say(mode));
         }
         if c.hardcore {
-            where_at.push_str(" HC");
+            where_at.push(' ');
+            where_at.push_str(&crate::say::say("HC"));
         }
     }
 
@@ -189,18 +192,24 @@ fn build(app: &AppHandle) -> Card {
     for rarity in NAMED {
         let count = snap.items.get(rarity).map_or(0, |item| item.total);
         if count > 0 {
-            haul.push(format!("{count} {rarity}"));
+            haul.push(format!("{count} {}", crate::say::say(rarity)));
         }
     }
     if snap.gold.earned > 0 {
-        haul.push(format!("{} gold", compact(snap.gold.earned)));
+        haul.push(format!("{} {}", compact(snap.gold.earned), crate::say::say("gold")));
     }
-    let state = if haul.is_empty() { "just started".to_string() } else { haul.join(" · ") };
+    let state = if haul.is_empty() { crate::say::say("just started") } else { haul.join(" · ") };
 
     // the character's own progress, kept for the tooltip: the two visible lines
     // belong to the run
     let hover = match &snap.character {
-        Some(c) => format!("HS Tracker · level {} · hero level {}", c.level, c.herolevel),
+        Some(c) => format!(
+            "HS Tracker · {} {} · {} {}",
+            crate::say::say("level"),
+            c.level,
+            crate::say::say("hero level"),
+            c.herolevel,
+        ),
         None => "HS Tracker".to_string(),
     };
 
@@ -216,7 +225,9 @@ fn build(app: &AppHandle) -> Card {
 fn send(client: &mut DiscordIpcClient, card: &Card) -> Result<(), Error> {
     let mut assets = Assets::new().large_image("logo").large_text(card.hover.as_str());
     if let Some(zone) = &card.satanic {
-        assets = assets.small_image("satanic").small_text(format!("Satanic Zone · {zone}"));
+        assets = assets
+            .small_image("satanic")
+            .small_text(format!("{} · {zone}", crate::say::say("Satanic Zone")));
     }
     client.set_activity(
         Activity::new()
@@ -234,16 +245,14 @@ fn send(client: &mut DiscordIpcClient, card: &Card) -> Result<(), Error> {
 
 /// A connected client, on a thread of its own.
 ///
-/// Discord's end of this is a named pipe, and on Windows the crate reads it
-/// with `read_exact` on a `File` — which has no timeout. `send` hands over an
-/// activity and then waits for the answer, so if Discord accepts the write and
-/// never replies, that wait does not end. In the loop below that was the whole
-/// status thread: it stopped for the rest of the session, no error was raised,
-/// and nothing on screen said so — the profile simply froze on whatever it last
+/// Discord's end is a named pipe, and on Windows the crate reads it with
+/// `read_exact` on a `File`, which has no timeout: `send` hands over an activity
+/// and waits for an answer that may never come. On the status thread itself that
+/// wait is permanent and silent — the profile freezes on whatever it last
 /// showed.
 ///
-/// Out here a wedged client costs one stopped thread and nothing else. The loop
-/// stops hearing answers, writes the client off, and connects again.
+/// Out here a wedged client costs one stopped thread. The loop stops hearing
+/// answers, writes the client off and connects again.
 struct Link {
     cards: std::sync::mpsc::Sender<Card>,
     answers: std::sync::mpsc::Receiver<bool>,

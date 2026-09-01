@@ -1,10 +1,11 @@
 <script>
+  import { nameOf, say, t, locale } from './say.svelte.js';
   import { invoke } from './bridge.js';
   import { fmt, RARITIES, RARITY_CLASS, difficulty } from './format.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { tierLabel } from './items.js';
-  import { cardBytes, drawRunCard } from './runcard.js';
+  import { cardPng, drawRunCard } from './runcard.js';
 
   let runs = $state([]);
   let picked = $state(0);
@@ -40,14 +41,14 @@
   }
 
   const day = (ms) =>
-    new Date(ms).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    new Date(ms).toLocaleString(locale(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
   const perHour = (value, secs) => (secs > 0 ? Math.round((value * 3600) / secs) : 0);
 
   let run = $derived(runs[picked] ?? null);
 
   // what a run is worth in one line, for the list
-  const headline = (r) => `${fmt(r.gold)} gold · ${fmt(r.kills)} kills`;
+  const headline = (r) => `${fmt(r.gold)} ${t('gold')} · ${fmt(r.kills)} ${t('kills')}`;
 
   const drops = (r) => RARITIES.reduce((sum, name) => sum + (r.items?.[name] ?? 0), 0);
 
@@ -65,9 +66,11 @@
 
   // The card is a picture on purpose: a run pasted into a chat as text loses
   // its shape, and a screenshot of the panel drags the whole window along.
-  let carded = $state('');
+  // Which button was pressed, so the answer lands on that one rather than on
+  // whichever happens to be first.
+  let carded = $state({ which: '', text: '' });
   let cardTimer = null;
-  async function copyCard() {
+  async function copyCard(mode) {
     clearTimeout(cardTimer);
     try {
       // the card is drawn with the app's own font; canvas will fall back to a
@@ -76,14 +79,25 @@
       const coin = new Image();
       coin.src = art('coin_strip');
       await coin.decode().catch(() => {});
-      const canvas = drawRunCard($state.snapshot(run), { coin });
-      await invoke('copy_image', cardBytes(canvas));
-      carded = 'copied — paste it anywhere';
+      const canvas = drawRunCard($state.snapshot(run), { coin }, { mode });
+      await invoke('copy_image', await cardPng(canvas));
+      carded = { which: mode, text: 'copied' };
     } catch (e) {
-      carded = String(e);
+      carded = { which: mode, text: String(e) };
     }
-    cardTimer = setTimeout(() => (carded = ''), 2500);
+    cardTimer = setTimeout(() => (carded = { which: '', text: '' }), 2500);
   }
+  const cardLabel = (mode, idle) =>
+    carded.which !== mode
+      ? idle
+      : carded.text === 'copied'
+        ? t('copied — paste it anywhere')
+        : carded.text;
+
+  // Below four there is nothing a ledger would add: the summary card's own
+  // line already prints every name, so the full card would be a bigger picture
+  // of the same thing.
+  let worthFull = $derived((run?.notable?.length ?? 0) > 3);
   let armTimer;
   function clearAll() {
     if (!armed) {
@@ -104,7 +118,7 @@
     <div class="cols">
       <div class="list" style:border-image-source="url({art('chip_dark')})">
         <div class="head">
-          <span class="accent">Runs</span>
+          <span class="accent">{t("Runs")}</span>
           <span class="right">{runs.length}</span>
         </div>
         <div class="scroll">
@@ -124,7 +138,7 @@
           style:--btn-down="url({art('button_down')})"
           onclick={clearAll}
         >
-          {armed ? 'Sure? — this cannot be undone' : 'Clear history'}
+          {armed ? t('Sure? — this cannot be undone') : t('Clear history')}
         </button>
       </div>
 
@@ -135,49 +149,58 @@
               <span class="accent">{day(run.started_ms)}</span>
               <button
                 class="card-btn"
-                onclick={copyCard}
-                title="Draw this run as a picture and put it on the clipboard"
+                onclick={() => copyCard('summary')}
+                title={t("Draw this run as a picture and put it on the clipboard")}
               >
-                {carded || 'Copy card'}
+                {cardLabel('summary', t('Copy card'))}
               </button>
+              {#if worthFull}
+                <button
+                  class="card-btn wide"
+                  onclick={() => copyCard('full')}
+                  title={t("Every find in this run, best grade first")}
+                >
+                  {cardLabel('full', say('Full · {n}', { n: run.notable.length }))}
+                </button>
+              {/if}
               <span class="right">{dur(run.secs)}</span>
             </div>
             <div class="sub">
-              {run.character ?? 'unknown character'}
-              {#if run.level}· Lv {run.level}{/if}
-              {#if run.herolevel}· HLv {run.herolevel}{/if}
+              {run.character ?? t('unknown character')}
+              {#if run.level}· {t('Lv')} {run.level}{/if}
+              {#if run.herolevel}· {t('HLv')} {run.herolevel}{/if}
               {#if run.difficulty != null}· {difficulty(run.difficulty, run.hell_sub)}{/if}
             </div>
             <div class="rates">
               <div class="rate">
-                <div class="label">Gold</div>
+                <div class="label">{t("Gold")}</div>
                 <div class="value c-gold">{fmt(run.gold)}</div>
-                <div class="sub">{fmt(perHour(run.gold, run.secs))}/h</div>
+                <div class="sub">{fmt(perHour(run.gold, run.secs))}{t('/h')}</div>
               </div>
               <div class="rate">
-                <div class="label">XP</div>
+                <div class="label">{t("XP")}</div>
                 <div class="value c-xp">{fmt(run.xp)}</div>
-                <div class="sub">{fmt(perHour(run.xp, run.secs))}/h</div>
+                <div class="sub">{fmt(perHour(run.xp, run.secs))}{t('/h')}</div>
               </div>
               <div class="rate">
-                <div class="label">Kills</div>
+                <div class="label">{t("Kills")}</div>
                 <div class="value c-her">{fmt(run.kills)}</div>
-                <div class="sub">{fmt(perHour(run.kills, run.secs))}/h</div>
+                <div class="sub">{fmt(perHour(run.kills, run.secs))}{t('/h')}</div>
               </div>
               <div class="rate">
-                <div class="label">Drops</div>
+                <div class="label">{t("Drops")}</div>
                 <div class="value">{fmt(drops(run))}</div>
-                <div class="sub">{fmt(perHour(drops(run), run.secs))}/h</div>
+                <div class="sub">{fmt(perHour(drops(run), run.secs))}{t('/h')}</div>
               </div>
             </div>
           </div>
 
           <div class="box" style:border-image-source="url({art('chip_dark')})">
-            <div class="head"><span class="accent">Loot</span></div>
+            <div class="head"><span class="accent">{t("Loot")}</span></div>
             <div class="tally">
               {#each RARITIES as name}
                 <div class="tallyrow">
-                  <span class={RARITY_CLASS[name]}>{name}</span>
+                  <span class={RARITY_CLASS[name]}>{t(name)}</span>
                   <b>{fmt(run.items?.[name] ?? 0)}</b>
                 </div>
               {/each}
@@ -186,28 +209,28 @@
 
           {#if bosses(run).length || chests(run).length || cleared(run).length}
             <div class="box" style:border-image-source="url({art('chip_dark')})">
-              <div class="head"><span class="accent">Killed &amp; opened</span></div>
+              <div class="head"><span class="accent">{t("Killed & opened")}</span></div>
               {#if bosses(run).length}
-                <div class="subhead">Bosses</div>
+                <div class="subhead">{t("Bosses")}</div>
                 <div class="tally">
-                  {#each bosses(run) as t}
-                    <div class="tallyrow"><span class="dim">{t.label}</span><b class="c-sat">{fmt(t.total)}</b></div>
+                  {#each bosses(run) as row}
+                    <div class="tallyrow"><span class="dim">{t(nameOf(row.label))}</span><b class="c-sat">{fmt(row.total)}</b></div>
                   {/each}
                 </div>
               {/if}
               {#if chests(run).length}
-                <div class="subhead">Chests</div>
+                <div class="subhead">{t("Chests")}</div>
                 <div class="tally">
-                  {#each chests(run) as t}
-                    <div class="tallyrow"><span class="dim">{t.label}</span><b class="c-gold">{fmt(t.total)}</b></div>
+                  {#each chests(run) as row}
+                    <div class="tallyrow"><span class="dim">{t(nameOf(row.label))}</span><b class="c-gold">{fmt(row.total)}</b></div>
                   {/each}
                 </div>
               {/if}
               {#if cleared(run).length}
-                <div class="subhead">Cleared</div>
+                <div class="subhead">{t("Cleared")}</div>
                 <div class="tally">
-                  {#each cleared(run) as t}
-                    <div class="tallyrow"><span class="dim">{t.label}</span><b class="c-gold">{fmt(t.total)}</b></div>
+                  {#each cleared(run) as row}
+                    <div class="tallyrow"><span class="dim">{t(nameOf(row.label))}</span><b class="c-gold">{fmt(row.total)}</b></div>
                   {/each}
                 </div>
               {/if}
@@ -217,13 +240,13 @@
           {#if run.notable?.length}
             <div class="box grow" style:border-image-source="url({art('chip_dark')})">
               <div class="head">
-                <span class="accent">Finds</span>
+                <span class="accent">{t("Finds")}</span>
                 <span class="right">{run.notable.length}</span>
               </div>
               <div class="scroll">
                 {#each run.notable as item}
                   <div class="find">
-                    <span class="name {RARITY_CLASS[item.rarity] ?? ''}">{item.name}</span>
+                    <span class="name {RARITY_CLASS[item.rarity] ?? ''}">{nameOf(item.name)}</span>
                     <span class="dim tier">{tierLabel(item.tier)}</span>
                   </div>
                 {/each}
@@ -234,11 +257,7 @@
       {/if}
     </div>
   {:else}
-    <div class="empty">
-      No runs yet. One is filed when a session ends — the Reset button, the tray,
-      Ctrl+Shift+R, or the game closing. A run under a minute, or one where
-      nothing was earned, is not worth keeping and is dropped.
-    </div>
+    <div class="empty"> {t("No runs yet. One is filed when a session ends — the Reset button, the tray, Ctrl+Shift+R, or the game closing. A run under a minute, or one where nothing was earned, is not worth keeping and is dropped.")} </div>
   {/if}
 </div>
 
@@ -267,7 +286,7 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
   }
@@ -360,7 +379,7 @@
     cursor: pointer;
   }
   .row:hover { background: rgba(0, 0, 0, 0.35); }
-  .row.on { border-left-color: var(--edge-2b); background: rgba(150, 37, 56, 0.25); }
+  .row.on { border-left-color: var(--edge-2b); background: rgba(var(--pick-rgb), 0.25); }
   .when { grid-area: when; }
   .len { grid-area: len; color: var(--dim-2); }
   .sum { grid-area: sum; font-size: 10px; color: var(--edge-8); }
@@ -441,6 +460,7 @@
   .btn:active { border-image-source: var(--btn-down); }
   .btn.armed { color: #f0c0c0; }
 
+  .card-btn.wide { margin-left: 4px; }
   .card-btn {
     font: inherit;
     font-size: 11px;

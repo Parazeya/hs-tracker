@@ -2,6 +2,7 @@ mod items;
 mod log;
 mod parser;
 mod presence;
+mod say;
 mod sniffer;
 mod stats;
 
@@ -37,7 +38,7 @@ const SOUND_EXTS: [(&str, &str); 4] = [
 ];
 
 // The overlay's width never changes; its height is whatever its rows add up to,
-// and the web side measures that itself (see `fit_overlay`). The figures here
+// and the page measures that itself (see `fit_overlay`). The figures here
 // are only the opening bid, so the window is about right before the first frame
 // rather than resizing in front of the player.
 /// The panel's own width, which is the art's — what it is drawn at before
@@ -97,33 +98,23 @@ fn remember_width(w: f64) {
 
 /// The icon strip's rect, in overlay CSS px, and what it takes to summon it.
 ///
-/// The strip stands beside the panel rather than on it — see .strip in
-/// App.svelte — so this is simply everything past the panel's right edge. It
-/// used to be two constants reading `x 444..472`; the panel can be wider than
-/// 444 now, so the edge is asked for rather than remembered.
+/// The strip stands beside the panel rather than on it — see `.strip` in
+/// App.svelte — so this is everything past the panel's right edge. The edge is
+/// asked for rather than remembered, because the panel can be wider than the
+/// 444px it once was.
 ///
-/// It stood for the lock alone, and twice it stood in the wrong place. It once
-/// reached x 412 and y 34, wider and taller than the button, and the corner it
-/// left over lay on top of the Reset Stats button below — a locked overlay is
-/// click-through everywhere but here, so that corner of the button quietly
-/// belonged to the lock. Trimming it to a 24x24 corner then missed the button
-/// the other way, because `.lock` was laid out against the panel's PADDING box
-/// and sat at x 415..436, not 420..444. A strip fixed to the window has one
-/// origin and one set of numbers, which is most of why it is one.
+/// `held` is whether the strip is already open, and it decides how much of the
+/// column is watched. Click-through is a whole-window switch —
+/// `set_ignore_cursor_events` takes one boolean, and this stack has no partial
+/// input region — so every pixel watched is a pixel where the overlay stops
+/// passing clicks to the game beneath it. Watching the whole column at rest
+/// would cost the player a click every time they brushed the panel's edge in a
+/// fight.
 ///
-/// `held` is whether the strip is already open. Click-through is a whole-window
-/// switch — `set_ignore_cursor_events` is one boolean and there is no partial
-/// input region in this stack — so every pixel the poller watches is a pixel
-/// where the overlay stops passing clicks to the game beneath it. Watching the
-/// whole column all the time would mean brushing the right-hand edge of the
-/// panel costs the player a click in a fight.
-///
-/// So the column is entered through the corner the lock has always occupied,
-/// and only then does the rest of it start being watched. Reaching for the
-/// buttons is deliberate; crossing the edge on the way somewhere else is not.
-/// One cell and the gap under it — 31, not the 62 this was first given, which
-/// reached over the Dashboard button as well and made a one-click action live
-/// before the strip that carries it had appeared.
+/// So the column is entered through the corner the lock occupies, and only then
+/// is the rest of it watched. The closed rect is one cell and the gap under it:
+/// reaching further makes the button below live before the strip carrying it
+/// has appeared.
 fn strip_rect(held: bool) -> (f64, f64, f64, f64) {
     let end = if held { STRIP_H } else { STRIP_W + 3.0 };
     (panel_w(), 0.0, base_w(), end)
@@ -312,6 +303,15 @@ pub struct Settings {
     pub min_tier: i64,
     /// named drops that get their own counter: label -> item names
     pub notable: Vec<NotableGroup>,
+    /// Which round of counter defaults this file has already been given.
+    ///
+    /// Without it the list itself is the only evidence, and that is not enough
+    /// to tell "never updated" from "updated, then had a counter deleted": both
+    /// are the previous default on disk, so the deletion would be undone at
+    /// every launch. Absent in a file written before this existed, which reads
+    /// as zero — the right answer for one that has never been migrated.
+    #[serde(default)]
+    pub notable_rev: u32,
     /// sound filters, one of which may be switched on
     pub filters: Vec<SoundFilter>,
     pub filter: String,
@@ -342,6 +342,15 @@ pub struct Settings {
     /// does not quietly halve every per-hour figure
     /// which skin the windows wear: "default", or a season's own colours
     pub theme: String,
+    /// Which language the game's own words are shown in: an item's name, its
+    /// type, the stats it rolls, the room the character stands in. The game
+    /// ships eleven and the tables are generated from its own files, so this
+    /// is a choice between what the game itself would print.
+    ///
+    /// It moves nothing else. A watchlist is a list of names the user built and
+    /// the parser matches the name the game announced, and both stay English:
+    /// see the head of `src/say.svelte.js`.
+    pub language: String,
     /// A window that plays the game's own loot pillar when something worth it
     /// drops. Off by default: it is a window over the game, and that is the
     /// player's screen to give away, not ours to take.
@@ -414,6 +423,7 @@ impl Default for Settings {
                 .into_iter()
                 .map(|(label, names)| NotableGroup { label, names })
                 .collect(),
+            notable_rev: NOTABLE_REV,
             filters: Vec::new(),
             filter: String::new(),
             use_filter: true,
@@ -428,6 +438,10 @@ impl Default for Settings {
             wide_capture: false,
             sound_on_ground: true,
             theme: "default".into(),
+            // English, until asked otherwise. Not the system's locale: the game
+            // has its own language setting and this is about matching that, not
+            // the desktop.
+            language: "en".into(),
             // On out of the box. Off, with the narrowest band it has, it
             // announced nothing at all — which reads as a broken feature
             // rather than an unset one, and cost a bug report saying so.
@@ -555,7 +569,7 @@ fn restart_backend(app: AppHandle, x11: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         if x11 && !x11_reachable() {
-            return Err("no X server to switch to — this session has no XWayland".into());
+            return Err(say::say("no X server to switch to — this session has no XWayland"));
         }
         // Hand the single-instance name over before spawning. The parent still
         // holds it until it exits, and the child's own guard — registered
@@ -758,9 +772,9 @@ fn data_dir() -> PathBuf {
     // resolved and created once; every settings read would otherwise stat it
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        // The last resort used to be ".", and a process started by the
-        // session has "/" for a working directory: every write then failed
-        // into a discarded `let _ =` while About cheerfully reported a path
+        // Never ".": a process started by the session has "/" for a working
+        // directory, so every write fails into a discarded `let _ =` while
+        // About reports a path
         // that had never been created. The temp directory is a poor home, but
         // it is a real one, and it says so.
         let home = std::env::var_os("XDG_CONFIG_HOME")
@@ -822,9 +836,8 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
             Ok(()) => return Ok(()),
             Err(e) => {
                 last = Some(e);
-                // Not after the last one: there is nothing left to wait for, and
-                // the 60 ms it used to sleep there was spent on the way to
-                // reporting the failure anyway.
+                // Not after the last one: there is nothing left to wait for,
+                // and the delay would only postpone reporting the failure.
                 if attempt < 2 {
                     std::thread::sleep(Duration::from_millis(20 * (attempt + 1)));
                 }
@@ -837,9 +850,9 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// The same, for anything that serialises — and it says so when it cannot.
 ///
-/// Four of these writers used to discard their error entirely, so a read-only
-/// folder or a full disk looked exactly like a successful save until the next
-/// start, when the setting was simply gone.
+/// A writer that discards its error makes a read-only folder or a full disk
+/// look exactly like a successful save, until the next start finds the setting
+/// gone.
 /// `pretty` is for the files a person opens and edits — settings above all.
 /// runs.json holds two hundred runs and is machine-only; pretty-printing it
 /// tripled a megabyte for nobody's benefit. The doc said as much while the code
@@ -857,17 +870,15 @@ fn write_json<T: Serialize>(path: &std::path::Path, value: &T, pretty: bool) {
 
 /// Read a file of ours, and keep the wreck when it will not parse.
 ///
-/// A file that is not there is a first run and answers with defaults. A file
-/// that IS there and does not parse used to answer with defaults too, with no
-/// log line and nothing kept — and the callers that read-modify-write commit
-/// that answer straight back: the lock hotkey and the tray item rewrite the
-/// whole of settings.json, and `end_run` writes a one-run history over two
-/// hundred. One unparseable file therefore cost every filter, every list and
-/// every notable group, on the next keypress, silently. Moving it aside first
-/// leaves the user something to recover and the log something to say.
+/// A missing file is a first run and answers with defaults. A file that is
+/// there and does not parse must NOT quietly answer with defaults: the callers
+/// read-modify-write, so the lock hotkey and the tray item would commit that
+/// answer over the whole of settings.json, and `end_run` would write a one-run
+/// history over two hundred. Moving the file aside first leaves the user
+/// something to recover and the log something to say.
 ///
-/// Only the parse failure moves the file. An io error is the folder being
-/// locked or unreadable, and renaming is the last thing that helps there.
+/// Only a parse failure moves the file. An io error means the folder is locked
+/// or unreadable, and renaming is the last thing that helps there.
 fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &std::path::Path) -> T {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -1137,9 +1148,9 @@ fn spawn_ticker_glue(app: AppHandle) {
 }
 
 
-/// Counters are pushed, not polled: the webviews used to ask for a snapshot
-/// twice a second each — the statistics view even asked for the whole graph
-/// series and drop journal while hidden. Now one thread coalesces changes and
+/// Counters are pushed, not polled. Polling costs a snapshot per window twice a
+/// second — the statistics view wants the whole graph series and drop journal
+/// with it, hidden or not. One thread coalesces changes and
 /// emits only to what is actually on screen. The heartbeats keep the per-hour
 /// rates fresh while nothing is dropping.
 const SNAP_MIN_GAP: Duration = Duration::from_millis(400);
@@ -1244,9 +1255,10 @@ fn spawn_stats_pusher(app: AppHandle) {
             if reading_stats && extra_at.elapsed() >= EXTRA_MIN_GAP {
                 // The clock is reset whether or not anything had changed.
                 //
-                // It used to move only when something did, so a dashboard with
-                // the statistics section open and nothing happening took the
-                // heaviest lock in the app on every pass of this loop —
+                // Moved on every pass rather than only when something happens:
+                // otherwise a dashboard with the statistics section open and
+                // nothing happening takes the heaviest lock in the app on every
+                // pass of this loop —
                 // contending with the thread that is trying to parse packets,
                 // for an answer that was always "no change".
                 extra_at = Instant::now();
@@ -1270,7 +1282,8 @@ pub(crate) fn read_settings() -> Settings {
     settings
 }
 
-/// Lists used to live loose in the settings; they are a filter's contents now.
+/// Lists live inside a filter. A settings file from before that carries them
+/// loose, and this folds them in.
 fn migrate_lists(settings: &mut Settings) {
     if settings.lists.is_empty() {
         return;
@@ -1282,10 +1295,30 @@ fn migrate_lists(settings: &mut Settings) {
     }
 }
 
-/// The rune groups were guesses until the item tables gained the game's own
-/// grades. A settings file still holding the guess is refreshed; anything the
-/// user has edited themselves is left alone.
-fn migrate_notable(settings: &mut Settings) {
+/// Bring a saved counter list up to the current defaults, without touching one
+/// the user has edited.
+///
+/// Two steps, in this order. First the rune groups, whose names were guesses
+/// before the item tables carried the game's own grades: a group still holding
+/// a known guess is refreshed. Then the list as a whole — a file that still
+/// holds, group for group, a list this app shipped has never been edited, so it
+/// is replaced with today's. That is the only way a counter added to
+/// `default_notable` reaches an existing settings.json, since the field is
+/// defaulted only when the key is absent.
+///
+/// `notable_rev` makes the replacement happen once. The previous default and a
+/// list somebody deleted the new counter from are the same bytes on disk, so
+/// without a mark in the file the deletion would be undone at every launch.
+///
+/// Appending the group instead would be wrong for that reason and one more:
+/// where the user had already added the item to a group of their own it would
+/// mint a second row that can only read zero, since the first matching group
+/// takes the count.
+///
+/// Returns whether anything changed, so the caller can decide whether to write
+/// the file back. This never writes — it runs on the sniffer's thread as well
+/// as the window's.
+fn migrate_notable(settings: &mut Settings) -> bool {
     const GUESSED: [&str; 3] = [
         "gul rune,vex rune,qi rune,xo rune,sur rune",
         "ber rune,jah rune,drax rune,zed rune",
@@ -1300,6 +1333,79 @@ fn migrate_notable(settings: &mut Settings) {
             }
         }
     }
+    // After the loop above and not before it: a file still spelling the SS
+    // runes the old way is refreshed there, and only then does it look like the
+    // list that shipped with it.
+    if settings.notable_rev >= NOTABLE_REV || !shipped_notable(&settings.notable) {
+        return false;
+    }
+    settings.notable = stats::default_notable()
+        .into_iter()
+        .map(|(label, names)| NotableGroup { label, names })
+        .collect();
+    settings.notable_rev = NOTABLE_REV;
+    true
+}
+
+/// Bumped whenever `default_notable` changes, together with a const below
+/// spelling out the list being replaced.
+const NOTABLE_REV: u32 = 1;
+
+/// Whether this is a list this app shipped rather than one somebody wrote.
+///
+/// Every default that has ever gone out, oldest first, and today's last. When
+/// `default_notable` changes, the shape it replaces belongs here — a list that
+/// falls off the end is one nothing can ever bring up to date again.
+fn shipped_notable(saved: &[NotableGroup]) -> bool {
+    // What an 0.9.x file looks like AFTER the loop above has refreshed its
+    // runes: 0.9.0 shipped Satanic Key and only four SS runes, so this exact
+    // list was never a default of its own. That is why the order of the two
+    // steps is load-bearing, and why the test pins it.
+    const WITH_DEAD_KEY: &[(&str, &[&str])] = &[
+        ("Angelic Key", &["angelic key"]),
+        ("Satanic Key", &["satanic key"]),
+        ("Satanic Dice", &["satanic dice"]),
+        ("S runes", &["qi", "xo", "sur", "ber", "jah", "drax", "zed"]),
+        ("SS runes", &["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]),
+    ];
+    // 0.9.94 through 1.0.6.
+    const WITHOUT_PROPHET: &[(&str, &[&str])] = &[
+        ("Angelic Key", &["angelic key"]),
+        ("Satanic Dice", &["satanic dice"]),
+        ("S runes", &["qi", "xo", "sur", "ber", "jah", "drax", "zed"]),
+        ("SS runes", &["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]),
+    ];
+    // 1.0.7. Spelled out rather than read from `default_notable`, which would
+    // silently re-point at whatever the next release ships and leave this shape
+    // in no const at all — the stranding the doc above warns about.
+    const WITH_PROPHET: &[(&str, &[&str])] = &[
+        ("Angelic Key", &["angelic key"]),
+        ("Satanic Dice", &["satanic dice"]),
+        ("Prophet's Wisdom", &["prophet's wisdom"]),
+        ("S runes", &["qi", "xo", "sur", "ber", "jah", "drax", "zed"]),
+        ("SS runes", &["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]),
+    ];
+    let owned = |shape: &[(&str, &[&str])]| -> Vec<(String, Vec<String>)> {
+        shape
+            .iter()
+            .map(|(label, names)| {
+                (label.to_string(), names.iter().map(|n| n.to_string()).collect())
+            })
+            .collect()
+    };
+    let same = |shape: &[(String, Vec<String>)]| {
+        saved.len() == shape.len()
+            && saved.iter().zip(shape).all(|(group, (label, names))| {
+                group.label == *label
+                    && group.names.len() == names.len()
+                    && group
+                        .names
+                        .iter()
+                        .zip(names)
+                        .all(|(theirs, ours)| theirs.trim().to_lowercase() == *ours)
+            })
+    };
+    same(&owned(WITH_DEAD_KEY)) || same(&owned(WITHOUT_PROPHET)) || same(&owned(WITH_PROPHET))
 }
 
 /// One category rule as the engine wants it, or nothing if it is not a category.
@@ -1333,7 +1439,10 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
     let mut notable: Vec<(String, Vec<String>)> = settings
         .notable
         .iter()
-        .map(|g| (g.label.clone(), g.names.iter().map(|n| n.to_lowercase()).collect()))
+        // trimmed like the sound lists below: this list is edited by hand in
+        // settings.json and nowhere else, and a trailing space silently killed
+        // the name — `count_notable` compares the whole string.
+        .map(|g| (g.label.clone(), g.names.iter().map(|n| n.trim().to_lowercase()).collect()))
         .collect();
     if notable.is_empty() {
         notable = stats::default_notable();
@@ -1373,15 +1482,26 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
                         names: l.items.iter().map(|n| n.trim().to_lowercase()).collect(),
                         rules: l.rules.iter().filter_map(engine_rule).collect(),
                     })
-                    // An empty list is not a silent one — it is nothing at all,
-                    // and it used to be dropped by `items.is_empty()` alone. A
-                    // list can now be empty of names and still say something.
+                    // A list can be empty of names and still say something,
+                    // because it may hold rules. `items.is_empty()` alone would
+                    // drop it.
                     .filter(|l| !l.names.is_empty() || !l.rules.is_empty())
                     .collect()
             })
             .unwrap_or_default(),
     };
     app.state::<Shared>().stats().set_prefs(prefs);
+}
+
+/// How big the overlay window should be, in logical pixels.
+///
+/// The ONE place that answers it. With two, they disagree: a size taken from
+/// `BASE_W` — the width the panel was first drawn for — undoes one taken from
+/// `base_w()`, the width the page has actually measured. A machine whose chips
+/// draw wider than the constant then grows the window to fit and has it
+/// squashed back by the next settings change, including the one at startup.
+fn overlay_size(height: f64, scale: f64) -> LogicalSize<f64> {
+    LogicalSize::new(base_w() * scale, height.max(STRIP_H) * scale)
 }
 
 /// Everything a settings change touches outside the webviews.
@@ -1398,22 +1518,21 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     FLOURISH_ZONE.store(settings.flourish_zone, Ordering::Relaxed);
     ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
     if let Some(w) = app.get_webview_window("main") {
-        // Click-through is NOT set here, though it used to be, and the comment
-        // that stood in its place claimed the poller owned it.
+        // Click-through is deliberately NOT set here: the poller is its only
+        // writer.
         //
-        // Both wrote it and only one remembered. Locking from the strip is the
-        // case: the poller has settled on `ignoring = Some(false)` because the
-        // cursor is on the strip, this line then makes the window click-through
-        // behind its back, and on the next tick `want_ignore` is still false —
-        // the cursor is still inside the rect — so the guard sees no change and
-        // never puts it back. The strip is left fully lit with every click going
-        // through it into the game, which is a click-to-move ARPG, and it stays
-        // that way until the cursor leaves the rect and returns.
+        // With two writers, locking from the strip strands the window. The
+        // poller has settled on `ignoring = Some(false)` because the cursor is
+        // on the strip; setting click-through here goes behind its back, and on
+        // the next tick `want_ignore` is still false, so its guard sees no
+        // change and never puts it back. The strip stays lit while every click
+        // passes through into a click-to-move game, until the cursor leaves the
+        // rect and returns.
         //
-        // The poller reads LOCKED, which is stored above, and converges within
-        // one 50ms tick. One writer.
+        // The poller reads LOCKED, stored above, and converges within one 50ms
+        // tick.
         let _ = w.set_zoom(scale);
-        let _ = w.set_size(LogicalSize::new(BASE_W * scale, overlay_height(settings) * scale));
+        let _ = w.set_size(overlay_size(overlay_height(settings), scale));
     }
     apply_autostart(settings.autostart);
 }
@@ -1749,27 +1868,19 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
     }
     // Never built on the thread that asks for it, once the app is up.
     //
-    // A window is built by the event loop, and the builder waits for it to be.
-    // A synchronous #[tauri::command] IS the event loop on Windows — Tauri runs
-    // one inline on the main thread — so a build started from inside one waits
-    // for a loop that is waiting for the command to return. Neither ever does.
-    // Every window stops answering, including the close button, and the only
-    // way out is the task manager. That is the report this app has had from a
-    // Windows user on 0.9.93, and it is what this file already records having
-    // done to itself once: see the comment above about tearing the window down
-    // and building another.
+    // The event loop builds windows and the builder waits for it. On Windows a
+    // synchronous `#[tauri::command]` IS the event loop — Tauri runs it inline
+    // on the main thread — so a build started from inside one waits for a loop
+    // that is waiting for the command to return. Every window stops answering,
+    // the close button included.
     //
-    // The path is not exotic. `save_settings` is a synchronous command; so are
-    // `compact_mode` and `full_mode`, which call it through `set_face`; so is
-    // the hotkey that toggles the lock. Any of them reaches here, and all it
-    // takes is for the window not to exist yet — the player had the
-    // announcement off when the app started, or the build failed at startup and
-    // left nothing behind.
+    // The path is ordinary: `save_settings` is synchronous, so are
+    // `compact_mode` and `full_mode` through `set_face`, and so is the lock
+    // hotkey. All it takes is for the window not to exist yet.
     //
-    // Doing it on a thread of its own costs one thread for a few milliseconds
-    // and takes the whole class away, whoever calls it and however they got
-    // here. Before the loop is running there is nothing to deadlock against and
-    // nothing to gain, so startup builds the window where it stands.
+    // A thread of its own costs a few milliseconds and removes the whole class.
+    // Before the loop is running there is nothing to deadlock against, so
+    // startup builds the window where it stands.
     if RUNNING.load(Ordering::Relaxed) {
         if BUILDING_FLOURISH.swap(true, Ordering::SeqCst) {
             return;
@@ -1863,8 +1974,8 @@ fn show_flourish(app: &AppHandle, w: &tauri::WebviewWindow) {
     if w.is_visible().unwrap_or(false) {
         return;
     }
-    // A first announcement used to appear wherever the window manager felt
-    // like putting it, which on one machine was over the dashboard.
+    // Placed before it is first shown, or the window manager puts it wherever
+    // it likes — over the dashboard, on some.
     if parked("flourish").is_none() {
         park_below_centre(app, w);
     }
@@ -2071,7 +2182,7 @@ fn about() -> About {
 #[tauri::command(async)]
 fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with(REPO) {
-        return Err("that is not one of this project's pages".into());
+        return Err(say::say("that is not one of this project's pages"));
     }
     #[cfg(windows)]
     let spawned = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
@@ -2091,7 +2202,7 @@ fn fit_overlay(app: AppHandle, height: f64, width: Option<f64>) {
     }
     let Some(w) = app.get_webview_window("main") else { return };
     let scale = SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
-    let wanted = LogicalSize::new(base_w() * scale, height.max(STRIP_H) * scale);
+    let wanted = overlay_size(height, scale);
     // a resize that changes nothing still goes through the window manager, and
     // on X11 that can shift the window out from under the player
     if let (Ok(now), Ok(factor)) = (w.inner_size(), w.scale_factor()) {
@@ -2396,7 +2507,7 @@ fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, 
     let picked = app
         .dialog()
         .file()
-        .add_filter("HS Tracker filter", &["json"])
+        .add_filter(say::say("HS Tracker filter"), &["json"])
         .set_file_name(&suggested)
         .blocking_save_file();
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
@@ -2466,7 +2577,7 @@ fn export_settings(app: AppHandle) -> Result<Option<String>, String> {
     let picked = app
         .dialog()
         .file()
-        .add_filter("HS Tracker settings", &["json"])
+        .add_filter(say::say("HS Tracker settings"), &["json"])
         .set_file_name("hs-tracker-settings.hstracker.json")
         .blocking_save_file();
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
@@ -2491,16 +2602,16 @@ fn import_settings(app: AppHandle) -> Result<Option<String>, String> {
     let picked = app
         .dialog()
         .file()
-        .add_filter("HS Tracker settings", &["json"])
+        .add_filter(say::say("HS Tracker settings"), &["json"])
         .blocking_pick_file();
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
         return Ok(None);
     };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let exported: ExportedSettings =
-        serde_json::from_str(&text).map_err(|_| "not an HS Tracker settings file".to_string())?;
+        serde_json::from_str(&text).map_err(|_| say::say("not an HS Tracker settings file"))?;
     if exported.app != "hs-tracker" || exported.kind != "settings" {
-        return Err("not an HS Tracker settings file".into());
+        return Err(say::say("not an HS Tracker settings file"));
     }
     // the sounds first: settings that name a file which is not there yet would
     // be saved, applied, and play nothing
@@ -2508,7 +2619,14 @@ fn import_settings(app: AppHandle) -> Result<Option<String>, String> {
         let _ = write_sound(&sounds_dir(), key, snd);
     }
     let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    save_settings(app, exported.settings)?;
+    // The one path that puts content into settings.json without passing
+    // `read_settings`, so it is the one path where the migrations have to be
+    // asked for by name. Without this an old exported profile plants the dead
+    // Satanic Key row straight back on disk.
+    let mut imported = exported.settings;
+    migrate_notable(&mut imported);
+    migrate_lists(&mut imported);
+    save_settings(app, imported)?;
     Ok(Some(name))
 }
 
@@ -2519,15 +2637,15 @@ fn import_filter(app: AppHandle) -> Result<Option<SoundFilter>, String> {
     let picked = app
         .dialog()
         .file()
-        .add_filter("HS Tracker filter", &["json"])
+        .add_filter(say::say("HS Tracker filter"), &["json"])
         .blocking_pick_file();
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
         return Ok(None);
     };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let exported: ExportedFilter = serde_json::from_str(&text).map_err(|_| "not an HS Tracker filter".to_string())?;
+    let exported: ExportedFilter = serde_json::from_str(&text).map_err(|_| say::say("not an HS Tracker filter"))?;
     if exported.app != "hs-tracker" {
-        return Err("not an HS Tracker filter".into());
+        return Err(say::say("not an HS Tracker filter"));
     }
     std::fs::create_dir_all(sounds_dir()).map_err(|e| e.to_string())?;
     let mut lists = Vec::new();
@@ -2741,10 +2859,9 @@ fn spawn_render_watchdog(app: AppHandle) {
             app.exit(0);
             return;
         }
-        // The advice differs by platform and used to be printed on both: a
-        // Windows user was told to try two WebKitGTK environment variables that
-        // do not exist on their machine, which reads as the app not knowing
-        // what it is running on.
+        // The advice differs by platform, and printing both tells a Windows
+        // user to try WebKitGTK environment variables that do not exist there —
+        // which reads as the app not knowing what it is running on.
         #[cfg(windows)]
         log::error(
             "no window has drawn anything after 20s - the web process is probably dead. \
@@ -2794,7 +2911,7 @@ fn with_clipboard<T>(
     job: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
 ) -> Result<T, String> {
     static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
-    let mut guard = CLIPBOARD.lock().map_err(|_| "the clipboard is busy".to_string())?;
+    let mut guard = CLIPBOARD.lock().map_err(|_| say::say("the clipboard is busy"))?;
     if guard.is_none() {
         *guard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }
@@ -2804,19 +2921,25 @@ fn with_clipboard<T>(
 /// Put a picture on the clipboard, ready to be pasted into a chat.
 ///
 /// The card is drawn in the window — that is where the fonts and the game's
-/// sprites are — and arrives here as raw pixels, base64'd because the bridge
-/// carries JSON and a megabyte of numbers spelled out is not that.
+/// sprites are — and arrives as a PNG, base64'd because the bridge carries
+/// JSON. A PNG rather than raw pixels because the full card is some twenty
+/// times the pixels of the small one, and raw it would be tens of megabytes of
+/// base64 across the bridge.
 #[tauri::command]
-fn copy_image(width: u32, height: u32, rgba: String) -> Result<(), String> {
+fn copy_image(png: String) -> Result<(), String> {
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(rgba)
-        .map_err(|_| "the picture did not survive the trip".to_string())?;
-    let (w, h) = (width as usize, height as usize);
-    if w == 0 || h == 0 || bytes.len() != w * h * 4 {
-        return Err("the picture is not the size it says it is".into());
+        .decode(png)
+        .map_err(|_| say::say("the picture did not survive the trip"))?;
+    // A card is a few hundred kilobytes; anything past this is not one, and
+    // decoding it would allocate four bytes a pixel before saying so.
+    if bytes.is_empty() || bytes.len() > 32 << 20 {
+        return Err(say::say("the picture is not the size it says it is"));
     }
+    let image = tauri::image::Image::from_bytes(&bytes)
+        .map_err(|_| say::say("the picture did not survive the trip"))?;
+    let (w, h) = (image.width() as usize, image.height() as usize);
     with_clipboard(|c| {
-        c.set_image(arboard::ImageData { width: w, height: h, bytes: bytes.into() })
+        c.set_image(arboard::ImageData { width: w, height: h, bytes: image.rgba().to_vec().into() })
     })
 }
 
@@ -2878,7 +3001,7 @@ fn pick_sound(app: AppHandle, rarity: String) -> Result<Option<String>, String> 
     let picked = app
         .dialog()
         .file()
-        .add_filter("Audio", &["mp3", "wav", "ogg", "flac"])
+        .add_filter(say::say("Audio"), &["mp3", "wav", "ogg", "flac"])
         .blocking_pick_file();
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
         return Ok(None);
@@ -2951,16 +3074,35 @@ fn toggle_lock(app: &AppHandle) {
     let _ = save_settings(app.clone(), settings);
 }
 
-fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+/// The menu itself, apart from the icon: the words in it are the page's, and
+/// the page has not loaded when the tray is first built, so this is asked for
+/// a second time once the language arrives.
+fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     // the two overlay entries are greyed out where the session cannot host one
     let overlay = overlay_supported();
-    let dashboard = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
-    let compact = MenuItem::with_id(app, "compact", "Compact overlay", overlay, None::<&str>)?;
-    let lock = MenuItem::with_id(app, "lock", "Lock / Unlock overlay", overlay, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "pause", "Pause / Resume session", true, None::<&str>)?;
-    let reset = MenuItem::with_id(app, "reset", "Reset stats", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&dashboard, &compact, &lock, &pause, &reset, &quit])?;
+    let dashboard = MenuItem::with_id(app, "dashboard", say::say("Dashboard"), true, None::<&str>)?;
+    let compact = MenuItem::with_id(app, "compact", say::say("Compact overlay"), overlay, None::<&str>)?;
+    let lock = MenuItem::with_id(app, "lock", say::say("Lock / Unlock overlay"), overlay, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause", say::say("Pause / Resume session"), true, None::<&str>)?;
+    let reset = MenuItem::with_id(app, "reset", say::say("Reset stats"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", say::say("Quit"), true, None::<&str>)?;
+    Menu::with_items(app, &[&dashboard, &compact, &lock, &pause, &reset, &quit])
+}
+
+/// The words the page says, handed over whenever the language settles. The
+/// tray is the one thing already on the screen, so it is redrawn on the spot.
+#[tauri::command]
+fn set_words(app: AppHandle, words: std::collections::HashMap<String, String>) {
+    say::learn(words);
+    if let Some(tray) = app.tray_by_id("main") {
+        if let Ok(menu) = tray_menu(&app) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = tray_menu(app)?;
     TrayIconBuilder::with_id("main")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .tooltip("HS Tracker")
@@ -3043,40 +3185,30 @@ fn honour_backend_choice() {}
 
 /// Keep WebKitGTK away from the renderer NVIDIA's driver cannot survive.
 ///
-/// Since 2.40 WebKitGTK composites through a DMA-BUF renderer. On the
+/// Since 2.40 WebKitGTK composites through a DMA-BUF renderer, and on the
 /// proprietary NVIDIA driver its web process segfaults inside
-/// `libnvidia-eglcore` while tearing a GL context down — which from the outside
-/// looks like the tray icon arriving and the window never following, with a
-/// crash reporter naming `WebKitWebProcess`. Every GTK application in the same
-/// position turns the renderer off, and the cost here is a little smoothness on
-/// a panel that is mostly still pictures.
+/// `libnvidia-eglcore` while tearing a GL context down. From outside that looks
+/// like the tray icon arriving and the window never following. Turning the
+/// renderer off costs a little smoothness on a panel that is mostly still
+/// pictures.
 ///
-/// NVIDIA is not the only way it fails, and the other way this was blamed for
-/// turned out not to be a renderer problem at all.
+/// There is nothing to read in advance, so it is learned: every start leaves a
+/// `no-paint` marker and `ui_ready` removes it once something has been drawn.
+/// A start that finds the file knows the previous run drew nothing, and writes
+/// `soft-render` so this machine does not get the DMA-BUF renderer again.
+/// Delete that file to try once more, after a driver update say.
 ///
-/// A player on KDE with an AMD card and no NVIDIA module got
-/// `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...` four
-/// times over and then an invisible window. That was the AppImage shadowing the
-/// host's own wayland libraries with the copies it bundled, so the host's Mesa
-/// could not load; `docker/trim-appimage.sh` stops bundling them and has the
-/// measurements. Nothing here could have helped it — the abort happens in the
-/// loader, before a renderer is chosen — and this function firing on it made it
-/// worse, restarting once into the same wall and then writing `soft-render` on
-/// a machine whose renderer was never at fault. Worth knowing before reading
-/// another EGL abort as a reason to turn something off.
+/// NOT every failure to paint is the renderer. An EGL abort of the form
+/// `Could not create default EGL display: EGL_BAD_PARAMETER` on a machine with
+/// no NVIDIA module is the AppImage shadowing the host's wayland libraries with
+/// its own bundled copies, so the host's Mesa cannot load — see
+/// `docker/trim-appimage.sh`. That aborts in the loader, before a renderer is
+/// chosen, and falling back here only writes `soft-render` on a machine whose
+/// renderer was never at fault.
 ///
-/// Where the module is absent and the renderer really is the trouble, there is
-/// nothing to read in advance, so it is learned instead. Every start leaves
-/// `no-paint` behind and `ui_ready` removes it once something has actually been
-/// drawn; a start that finds the file knows the run before it drew nothing, and
-/// writes `soft-render` to say that this machine does not get the DMA-BUF
-/// renderer again. Delete that file to try it once more — after a driver
-/// update, say.
-///
-/// Only machines that need it pay for it, and never one where the user has
-/// already made the choice themselves. It has to be set before GTK starts,
-/// which is why it lives at the top of `run` — and the process is still
-/// single-threaded here, so setting it is safe.
+/// Set before GTK starts, which is why it lives at the top of `run`, and while
+/// the process is still single-threaded, which is what makes setting it safe.
+/// A user who has already chosen a renderer is left alone.
 #[cfg(not(windows))]
 fn ease_webkit() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
@@ -3144,6 +3276,7 @@ pub fn run() {
         )
         .manage(Shared::default())
         .invoke_handler(tauri::generate_handler![
+            set_words,
             snapshot,
             get_extra,
             reset_stats,
@@ -3209,7 +3342,16 @@ pub fn run() {
             } else {
                 log::say("info", "wayland session: running as the dashboard, without the overlay");
             }
-            let settings = read_settings();
+            let mut settings = read_settings();
+            // The migrations run in memory wherever settings are read, the
+            // sniffer's thread included, so none of them writes. Here — once,
+            // on the window's own thread — the answer is worth keeping: until
+            // it is on disk the file still looks like one that has never been
+            // migrated, and a counter deleted before the next save would come
+            // back.
+            if migrate_notable(&mut settings) {
+                write_json(&settings_path(), &settings, true);
+            }
             app.state::<Shared>().stats().restore(&read_carried());
             apply_stats_settings(app.handle(), &settings);
             apply_settings_effects(app.handle(), &settings);
@@ -3253,11 +3395,11 @@ pub fn run() {
             spawn_stats_pusher(app.handle().clone());
             presence::spawn(app.handle().clone());
             sniffer::spawn(app.state::<Shared>().inner(), app.handle().clone());
-            // The breadcrumb that says "we already tried XWayland" used to be
-            // dropped here, but `setup` runs before `app.run` and so before a
-            // single page has painted: a backend that builds windows and then
-            // fails to render them looked like success. It is cleared once the
-            // front end says it is up — see the `ui_ready` command.
+            // The breadcrumb that says XWayland has already been tried is NOT
+            // dropped here: `setup` runs before `app.run`, and so before a
+            // single page has painted, so a backend that builds windows and
+            // then fails to render them would look like success. It is cleared
+            // once the front end says it is up — see the `ui_ready` command.
             
             Ok(())
         })
@@ -3334,7 +3476,7 @@ mod tests {
         let before = PANEL_WIDTH.load(Ordering::Relaxed);
         PANEL_WIDTH.store(0, Ordering::Relaxed);
 
-        // unmeasured, it is exactly what the two constants used to read
+        // unmeasured, it is exactly what the constants say
         assert_eq!(panel_w(), PANEL_W);
         assert_eq!(base_w(), BASE_W);
         assert_eq!(strip_rect(false), (444.0, 0.0, 472.0, STRIP_W + 3.0));
@@ -3358,6 +3500,22 @@ mod tests {
         }
         remember_width(9000.0);
         assert_eq!(panel_w(), 1600.0, "and nothing legitimate is wider than this");
+
+        // And the window follows the measurement wherever the size is decided.
+        // Decided in two places it disagrees with itself: one asking `base_w()`
+        // and the other the constant means every settings change — the one at
+        // startup included — squashes a panel that has grown past 444 back onto
+        // it. See `overlay_size` and issue #3.
+        PANEL_WIDTH.store(0, Ordering::Relaxed);
+        assert_eq!(overlay_size(200.0, 1.0).width, BASE_W, "unmeasured, the constant");
+        remember_width(520.0);
+        assert_eq!(
+            overlay_size(200.0, 1.0).width,
+            520.0 + STRIP_GAP + STRIP_W,
+            "measured wider, the window has to follow or it clips the panel"
+        );
+        assert_eq!(overlay_size(200.0, 1.25).width, (520.0 + STRIP_GAP + STRIP_W) * 1.25);
+        assert_eq!(overlay_size(10.0, 1.0).height, STRIP_H, "never shorter than the strip");
 
         PANEL_WIDTH.store(before, Ordering::Relaxed);
     }
@@ -3389,8 +3547,8 @@ mod tests {
     }
 
     /// The imported sound has to be the one that plays. Every reader takes the
-    /// first extension in SOUND_EXTS that exists, and the import used to write
-    /// its file beside whatever was already there.
+    /// first extension in SOUND_EXTS that exists, so an import that writes its
+    /// file beside the existing one leaves the old one sounding.
     #[test]
     fn an_imported_sound_replaces_the_one_the_key_already_had() {
         let dir = std::env::temp_dir().join(format!("hs-tracker-sound-{}", std::process::id()));
@@ -3409,19 +3567,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// settings.json is a plain file on disk and the code says so twice. When
-    /// one comes back unparseable — hand-edited, or half-written by a power cut
-    /// — answering with defaults means the next lock toggle writes those
-    /// defaults over the only copy of every filter and list the user has.
     /// A settings file written before relics existed opens without complaint.
     ///
-    /// The 22 keys below are exactly the ones in the owner's own 0.9.x file,
-    /// which is still on disk at `src-tauri/target/release/settings.json` — no
-    /// `zone`, no `zone_buffs`, no `theme`, no `flourish_*`, and now no `relic`
-    /// or `relics` either. `#[serde(default)]` on the struct is what carries
-    /// it, and the thing worth asserting is not that it parses but WHAT the
-    /// missing relic fields come back as: an empty hunt list is silence, so an
-    /// upgrade must not start chiming at a player who never picked a relic.
+    /// The keys below are a real 0.9.x file: no `zone`, no `zone_buffs`, no
+    /// `theme`, no `flourish_*`, no `relic` or `relics`. `#[serde(default)]` on
+    /// the struct is what carries it, and the thing worth asserting is not that
+    /// it parses but WHAT the missing relic fields come back as — an empty hunt
+    /// list is silence, so an upgrade must not start chiming at a player who
+    /// never picked a relic.
     #[test]
     fn a_settings_file_from_before_relics_opens_and_hunts_nothing() {
         let old = r#"{
@@ -3450,6 +3603,127 @@ mod tests {
             crate::stats::Prefs::default().relics.is_empty(),
             "and the default the engine starts from hunts nothing either"
         );
+    }
+
+    /// The counter list is defaulted only when the key is absent, and it never
+    /// is once the app has saved once — so a counter added to `default_notable`
+    /// reaches an existing player through this migration or not at all.
+    #[test]
+    fn a_notable_list_nobody_edited_is_brought_up_to_date() {
+        // exactly what 0.9.1 through 1.0.6 wrote, dead Satanic Key and all
+        let shipped = r#"{
+            "notable": [
+                {"label": "Angelic Key", "names": ["angelic key"]},
+                {"label": "Satanic Key", "names": ["satanic key"]},
+                {"label": "Satanic Dice", "names": ["satanic dice"]},
+                {"label": "S runes", "names": ["qi", "xo", "sur", "ber", "jah", "drax", "zed"]},
+                {"label": "SS runes", "names": ["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]}
+            ]
+        }"#;
+        let mut settings: Settings = serde_json::from_str(shipped).expect("it parses");
+        migrate_notable(&mut settings);
+        let labels: Vec<&str> = settings.notable.iter().map(|g| g.label.as_str()).collect();
+        assert!(
+            !labels.contains(&"Satanic Key"),
+            "no item in the game carries that name, so the row could only ever read zero"
+        );
+        assert!(labels.contains(&"Prophet's Wisdom"), "and the new counter arrives");
+
+        // The older spelling of the SS runes has to be refreshed BEFORE the
+        // list is recognised, or a file that never saw the rune patch is
+        // stranded on the old defaults for good.
+        let older = shipped.replace(
+            r#"["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]"#,
+            r#"["fawn", "flo", "nju", "jol"]"#,
+        );
+        let mut settings: Settings = serde_json::from_str(&older).expect("it parses");
+        migrate_notable(&mut settings);
+        assert!(
+            settings.notable.iter().any(|g| g.label == "Prophet's Wisdom"),
+            "a file from before the rune patch is caught by the same step"
+        );
+    }
+
+    /// And the half no compiler checks: what the migration declines to do.
+    #[test]
+    fn a_notable_list_somebody_edited_is_left_alone() {
+        let mine = r#"{
+            "notable": [
+                {"label": "Angelic Key", "names": ["angelic key"]},
+                {"label": "Satanic Key", "names": ["satanic key"]},
+                {"label": "Satanic Dice", "names": ["satanic dice", "blessed dice"]},
+                {"label": "S runes", "names": ["qi", "xo", "sur", "ber", "jah", "drax", "zed"]},
+                {"label": "SS runes", "names": ["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]}
+            ]
+        }"#;
+        let mut settings: Settings = serde_json::from_str(mine).expect("it parses");
+        migrate_notable(&mut settings);
+        let dice = settings
+            .notable
+            .iter()
+            .find(|g| g.label == "Satanic Dice")
+            .expect("the group they edited is still there");
+        assert_eq!(dice.names, vec!["satanic dice", "blessed dice"], "and still theirs");
+        assert!(
+            settings.notable.iter().any(|g| g.label == "Satanic Key"),
+            "even the dead row stays: this list is not ours to rewrite"
+        );
+        assert!(
+            !settings.notable.iter().any(|g| g.label == "Prophet's Wisdom"),
+            "and nothing is appended — a group they deleted would come back every launch"
+        );
+
+        // A group of their own, on an otherwise untouched list, counts as an
+        // edit too.
+        let extra = r#"{
+            "notable": [
+                {"label": "Angelic Key", "names": ["angelic key"]},
+                {"label": "Satanic Dice", "names": ["satanic dice"]},
+                {"label": "S runes", "names": ["qi", "xo", "sur", "ber", "jah", "drax", "zed"]},
+                {"label": "SS runes", "names": ["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]},
+                {"label": "Destiny Shards", "names": ["destiny shard"]}
+            ]
+        }"#;
+        let mut settings: Settings = serde_json::from_str(extra).expect("it parses");
+        migrate_notable(&mut settings);
+        assert!(
+            settings.notable.iter().any(|g| g.label == "Destiny Shards"),
+            "a group of their own survives"
+        );
+        assert!(
+            !settings.notable.iter().any(|g| g.label == "Prophet's Wisdom"),
+            "and the list is not replaced around it"
+        );
+    }
+
+    /// The trap the whole-list fingerprint sets for itself: the list somebody
+    /// gets by deleting the new counter is, byte for byte, the list the
+    /// previous release shipped. Only the mark in the file tells them apart.
+    #[test]
+    fn a_counter_deleted_by_hand_stays_deleted() {
+        let after_deleting = r#"{
+            "notable_rev": 1,
+            "notable": [
+                {"label": "Angelic Key", "names": ["angelic key"]},
+                {"label": "Satanic Dice", "names": ["satanic dice"]},
+                {"label": "S runes", "names": ["qi", "xo", "sur", "ber", "jah", "drax", "zed"]},
+                {"label": "SS runes", "names": ["fawn", "flo", "nju", "jol", "sus", "kek", "jord"]}
+            ]
+        }"#;
+        let mut settings: Settings = serde_json::from_str(after_deleting).expect("it parses");
+        assert!(!migrate_notable(&mut settings), "nothing to do twice");
+        assert!(
+            !settings.notable.iter().any(|g| g.label == "Prophet's Wisdom"),
+            "a counter deleted on purpose does not come back every launch"
+        );
+
+        // And the same bytes without the mark are a file that has never been
+        // migrated, which is the case the mark exists to tell apart.
+        let never_migrated = after_deleting.replace("\"notable_rev\": 1,", "");
+        let mut settings: Settings = serde_json::from_str(&never_migrated).expect("it parses");
+        assert!(migrate_notable(&mut settings), "an untouched 1.0.6 file is brought up");
+        assert!(settings.notable.iter().any(|g| g.label == "Prophet's Wisdom"));
+        assert_eq!(settings.notable_rev, NOTABLE_REV, "and says so, so it is not done twice");
     }
 
     /// A filter saved before categories existed opens meaning what it meant.
@@ -3519,6 +3793,10 @@ mod tests {
         assert!(stray.weapon.is_none(), "the weapon type is dropped with no item type to hold it");
     }
 
+    /// settings.json is a plain file on disk, and one can come back
+    /// unparseable — hand-edited, or half-written by a power cut. Answering
+    /// with defaults means the next lock toggle writes those defaults over the
+    /// only copy of every filter and list the user has.
     #[test]
     fn a_file_that_will_not_parse_is_kept_rather_than_answered_with_defaults() {
         let dir = std::env::temp_dir().join(format!("hs-tracker-read-{}", std::process::id()));

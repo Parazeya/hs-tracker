@@ -23,12 +23,10 @@ pub enum Status {
     NoCapture,
     /// The driver is installed and will not let this process use it.
     ///
-    /// These were one state, and the Windows half of it said "Npcap is not
-    /// installed" — so a player whose Npcap was installed with "Restrict
-    /// Npcap driver's access to Administrators only", which is a box in its own
-    /// installer, was told to go and install what they already had. One of them
-    /// said so: "It's telling me npcap not installed after i choose to install
-    /// it in the setup.exe".
+    /// Distinct from `NpcapMissing`: Npcap installed with "Restrict Npcap
+    /// driver's access to Administrators only" — a box in its own installer —
+    /// looks like an absent driver, and telling that player to install what
+    /// they already have is a dead end.
     NoAccess,
     NoInterface,
     WaitingForGame,
@@ -49,11 +47,8 @@ pub enum Deaf {
     ///
     /// A client at the login screen talks to the account service over TLS and
     /// to nothing else, so it is silent in exactly the way a broken capture is.
-    /// Told apart, because the two want opposite things said: this one is not a
-    /// fault at all and there is no setting that would help it. The log has
-    /// distinguished them since the counters were split; the panel was still
-    /// showing a red banner and offering a switch to a player who was merely
-    /// standing at the character screen.
+    /// Kept apart from a fault: this state is not one, and no setting would
+    /// change it, so the panel must not offer a fix for it.
     Encrypted,
     /// silent, and only the game's own connections are being read
     Narrow,
@@ -126,12 +121,10 @@ struct Capture {
     packets: Arc<AtomicU32>,
     /// How many of those were on port 443 and skipped unread.
     ///
-    /// A client sitting at the login screen talks to the account service over
-    /// TLS and to nothing else, so every frame is skipped and the app looks
-    /// exactly as it does when it is broken. Told apart, the two read very
-    /// differently: "240 frames, all of them encrypted" is a game that has not
-    /// joined a server yet, and "240 frames, none encrypted, none decoded" is a
-    /// protocol this app no longer understands.
+    /// This is what separates two states that look identical from outside:
+    /// "240 frames, all encrypted" is a game that has not joined a server yet,
+    /// and "240 frames, none encrypted, none decoded" is a protocol this app no
+    /// longer understands.
     tls: Arc<AtomicU32>,
     /// set once the device is open and filtered — "the thread has not ended"
     /// is also true of one that is about to fail, and that read the status
@@ -148,19 +141,15 @@ pub struct Shared {
 impl Shared {
     /// The statistics, whatever happened to the last thread that held them.
     ///
-    /// Every one of these was `.lock().unwrap()`. A `Mutex` in Rust remembers
-    /// that a thread panicked while holding it and hands every later caller an
-    /// error instead of the data — so a single panic anywhere, in a packet
-    /// parse on the sniffer thread as easily as in a command, turned every
-    /// subsequent click into a panic of its own. The window stayed on screen
-    /// and stopped answering: no compact, no close, Task Manager.
+    /// A poisoned `Mutex` hands every later caller an error instead of the
+    /// data, so one panic anywhere — a packet parse as easily as a command —
+    /// would turn every subsequent click into a panic of its own and leave the
+    /// window on screen but unresponsive.
     ///
-    /// The data behind this lock is a session's statistics. It is not a bank
-    /// balance and it is not a file: the worst a half-written one can do is
-    /// count a drop twice, and the run is recoverable by resetting it. Refusing
-    /// to hand it over because a thread died once is a far worse outcome than
-    /// handing over what it left, so the poison is stepped over and the panic
-    /// that caused it is already in the log, where the panic hook put it.
+    /// What this guards is a session's counters, not a file: the worst a
+    /// half-written one can do is count a drop twice, and a reset clears it. So
+    /// the poison is stepped over. The panic that caused it is already in the
+    /// log, where the panic hook put it.
     pub fn stats(&self) -> std::sync::MutexGuard<'_, GameStats> {
         self.stats.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -195,14 +184,14 @@ pub fn capture_available() -> bool {
 }
 
 /// Elsewhere libpcap is a package dependency and listing devices needs no
-/// privileges — but *opening* one does, and that is exactly what is missing on
-/// a fresh install without `cap_net_raw`, or after any rebuild, since the
-/// capability lives on the inode and every relink drops it.
+/// privileges — but *opening* one does, and that is what is missing without
+/// `cap_net_raw`, or after any rebuild, since the capability lives on the inode
+/// and every relink drops it.
 ///
-/// This used to be left to the capture threads, which only ever run while the
-/// game does — so a machine with no capture rights at all sat on a friendly
-/// blue "waiting for Hero Siege" and never said the one thing that was wrong.
-/// One device is opened here and closed again to find out.
+/// Checked here rather than in the capture threads, which run only while the
+/// game does: a machine with no capture rights at all would otherwise sit on
+/// "waiting for Hero Siege" and never say what was wrong. One device is opened
+/// and closed again to find out.
 #[cfg(not(windows))]
 pub fn capture_available() -> bool {
     let Some(dev) = capture_devices().into_iter().next() else {
@@ -281,11 +270,10 @@ fn game_pids(sys: &mut System) -> Vec<u32> {
 /// `::ffff:10.8.1.8` and `10.8.1.8` are the same address, and only one of them
 /// can be written into a packet filter that will ever match.
 ///
-/// A Linux build of the game opens IPv6 sockets and talks IPv4 over them, so
-/// every endpoint arrives v4-mapped. Left that way, `scope_for` produced
-/// `host ::ffff:10.8.1.8`, libpcap compiled it as an IPv6 test, and no packet
-/// on the wire — all of them plain IPv4 — could satisfy it. The capture stayed
-/// up, the counters stayed at zero, and nothing anywhere said why.
+/// The Linux build opens IPv6 sockets and talks IPv4 over them, so endpoints
+/// arrive v4-mapped. Left mapped, `scope_for` emits `host ::ffff:10.8.1.8`,
+/// libpcap compiles it as an IPv6 test, and no plain-IPv4 packet can satisfy
+/// it — a capture that stays up with the counters at zero.
 fn unmap(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
@@ -330,17 +318,12 @@ fn capture_devices() -> Vec<pcap::Device> {
     let all = pcap::Device::list().unwrap_or_default();
     // Skip loopback, and nothing else.
     //
-    // This used to read `any(|a| !a.addr.is_loopback())`, which says something
-    // different: keep a device that has at least one address which is not
-    // loopback. A device with no addresses at all has none that qualify, so it
-    // was dropped — and the one Npcap offers for dialup and VPN capture is
-    // exactly that, a device with no addresses of its own.
-    //
-    // On a machine whose traffic all goes through a Windows VPN connection,
-    // that adapter is the only place the game can be seen: on the physical card
-    // the same traffic is inside the tunnel. So the app excluded the one device
-    // that would have worked, before ever asking Npcap, and reported nine
-    // packets in ninety seconds with the filter already wide open.
+    // Not `any(|a| !a.addr.is_loopback())`, which keeps a device that has at
+    // least one non-loopback address: a device with NO addresses has none that
+    // qualify and would be dropped. The adapter Npcap offers for dialup and VPN
+    // capture is exactly that, and on a machine whose traffic goes through a
+    // Windows VPN it is the only place the game can be seen — on the physical
+    // card the same traffic is inside the tunnel.
     let kept: Vec<pcap::Device> = all
         .iter()
         .filter(|d| worth_capturing(&d.addresses) && is_a_network(&d.name))
@@ -384,17 +367,15 @@ fn worth_capturing(addresses: &[pcap::Address]) -> bool {
 
 /// Devices libpcap offers that are not networks.
 ///
-/// Keeping the address-less ones brought these along, because they have no
-/// addresses either: on one Linux machine the list came back with `bluetooth0`,
-/// `bluetooth-monitor`, `nflog`, `nfqueue`, `dbus-system` and `dbus-session`.
-/// Each got a capture thread, each failed with "link-layer type filtering not
-/// implemented" or its like, and those failures then took the status line away
-/// from the adapter that was working.
+/// Keeping address-less devices (see above) brings these along, since they have
+/// no addresses either — `bluetooth0`, `nflog`, `nfqueue`, `dbus-system`,
+/// `dbus-session` and their like. Each would get a capture thread, each fails
+/// with "link-layer type filtering not implemented" or similar, and those
+/// failures then take the status line away from the adapter that works.
 ///
-/// Opening `dbus-session` is worse than useless: libpcap runs `dbus-launch` to
-/// find the bus, and inside an AppImage that resolves against the bundled
-/// libdbus rather than the system one and dies with a version error the player
-/// then has to read past.
+/// `dbus-session` is worse: libpcap runs `dbus-launch` to find the bus, which
+/// inside an AppImage resolves against the bundled libdbus and dies with a
+/// version error the player has to read past.
 ///
 /// None of them can carry a TCP conversation with a game server, so none is
 /// opened. The names are libpcap's own and fixed; anything new that slips
@@ -445,15 +426,13 @@ fn ip_offset(data: &[u8], framing: i32) -> Option<usize> {
 /// With Large Send Offload the stack hands the adapter one buffer — up to 64 KB
 /// — and the adapter segments it on the way out. A capture sits above that, so
 /// it sees the whole buffer while the length field still describes a single
-/// segment, or nothing at all. Measured against etherparse 0.16 with the two
-/// shapes that occur: a total length of 0 fails the parse outright and the frame
-/// is dropped on the floor, and a total length of one MSS returns that many
-/// bytes and silently discards the rest.
+/// segment, or nothing at all. Both shapes occur, and etherparse handles
+/// neither: a total length of 0 fails the parse and the frame is lost, and a
+/// length of one MSS returns that many bytes and discards the rest.
 ///
-/// Either way no message longer than one segment survives. The character save
-/// is about 5 KB and is the only carrier of experience and kills, which is why
-/// those were the two counters stuck at zero — but every message over one MSS
-/// is affected, and a fair share of a session's inventory syncs are.
+/// Either way no message longer than one segment survives — including the
+/// character save, which is around 5 KB and the only carrier of experience and
+/// kills.
 ///
 /// `None` when nothing needs doing, which is almost always.
 fn unoffload(data: &[u8], ip_start: usize) -> Option<Vec<u8>> {
@@ -489,23 +468,17 @@ fn unoffload(data: &[u8], ip_start: usize) -> Option<Vec<u8>> {
     Some(patched)
 }
 
-/// The filter every capture shares: traffic between this machine and the
-/// servers the game is talking to.
-///
 /// Take everything on the wire, rather than only what the game is talking to.
 ///
-/// The filter is built from the game's own sockets, read out of the operating
-/// system every five seconds, so in principle it cannot miss a server the game
-/// is using. In principle is not the same as in fact — a split-tunnel engine
-/// re-injects packets and the local address they carry on the way through is
-/// not always the one the socket table names — and when something the game used
-/// to say stops arriving, "the filter is innocent" has to be a measurement
-/// rather than an argument.
+/// The ordinary filter is built from the game's own sockets, re-read every five
+/// seconds, so in principle it cannot miss a server the game uses. In practice
+/// a split-tunnel engine re-injects packets whose local address is not the one
+/// the socket table names, so when something stops arriving, "the filter is
+/// innocent" has to be measured rather than argued: set `HS_WIDE_CAPTURE=1` and
+/// compare.
 ///
-/// So: `HS_WIDE_CAPTURE=1` and compare. It is deliberately an environment
-/// variable and not a setting: it is for answering one question on one run, and
-/// a wide filter on a busy machine hands this thread every plaintext byte the
-/// machine sends.
+/// An environment variable and not a setting, because a wide filter on a busy
+/// machine hands this thread every plaintext byte the machine sends.
 fn wide_capture() -> bool {
     WIDE.load(Ordering::Relaxed)
         || matches!(std::env::var("HS_WIDE_CAPTURE").as_deref(), Ok("1") | Ok("true"))
@@ -514,47 +487,33 @@ fn wide_capture() -> bool {
 /// The far end, and only the far end.
 ///
 /// A packet filter cannot ask which process a packet belongs to, so the game's
-/// own servers are as close as it gets. It used to name this machine's own
-/// addresses too — `host X` matches a packet with X at either end, so on its
-/// own that came to "every TCP connection this machine holds", and one capture
-/// taken here to debug the drop counters was half a week of an unrelated
-/// project's traffic. The far side fixed that; the near side was left in beside
-/// it and did nothing but exclude, sometimes everything. See below.
+/// own servers are as close as it gets. Naming this machine's addresses as well
+/// buys nothing and can exclude everything — see below.
 ///
-/// While the game has not connected there is nothing to name, and the answer is
-/// everything — the endpoints are re-read every five seconds and the capture
+/// While the game has not connected there is nothing to name and the answer is
+/// everything. The endpoints are re-read every five seconds and the capture
 /// restarted when they change, so that state does not last.
 fn scope_for(remote: &BTreeSet<IpAddr>) -> String {
-    // The far side is named by its neighbourhood rather than by the one address
-    // that happens to be answering. The game moves between servers inside a
-    // session — in one capture a second one joined halfway through and stayed —
-    // and the endpoints are only re-read every five seconds, so naming a single
-    // address means the first seconds of a new one are missed. A /24 costs
-    // nothing in precision that matters: the addresses seen are 172.104.128.x
-    // and 139.162.166.x, and nothing else on a home network lives there.
+    // The far side is named by its /24 rather than by the one address that
+    // happens to be answering: the game moves between servers inside a session,
+    // and the endpoints are re-read only every five seconds, so a single
+    // address misses the first seconds of a new one. The precision costs
+    // nothing — the game's hosts sit in 172.104.128.x and 139.162.166.x.
     //
-    // v6 is left as a plain host: its addresses are not handed out in anything
-    // as tidy as a /24, and the game has not been seen using one.
+    // v6 is left as a plain host: those addresses are not handed out in
+    // anything as tidy as a /24.
     //
-    // The near side is not named at all, and used to be: the filter read
-    // `(the servers' /24s) and (host <this machine>)`.
+    // The near side is deliberately NOT named. The socket table gives the
+    // address a socket is BOUND to, which is not necessarily the one on the
+    // frames a capture sees: a split-tunnel VPN binds to the tunnel and puts a
+    // different address on the wire, and a machine with more than one route can
+    // send from an address the game's socket never mentions. When the two
+    // differ, `and (host ...)` matches nothing at all — a green status line
+    // with every counter at zero.
     //
-    // That address came from the operating system's socket table, and it is the
-    // address the socket is BOUND to — not necessarily the one on the frames
-    // this capture sees. A split-tunnel VPN, which plenty of players run for
-    // the ping, binds to the tunnel and puts a different address on the wire; a
-    // machine with more than one route can send from an address the game's
-    // socket never mentions. When the two differ, `and (host ...)` matches
-    // nothing whatever: the status line stays green, every counter stays at
-    // zero, and nothing says why. Players reported exactly that — "no errors,
-    // nothing, just nothing recorded" — and this file already carries the same
-    // story once before, in `unmap`, where a v4-mapped address compiled into an
-    // IPv6 test that no packet on the wire could satisfy.
-    //
-    // It was never buying much either. The capture is not promiscuous, so the
-    // adapter only hands over frames addressed to this machine in the first
-    // place, and the far side is already a /24 belonging to the game's host.
-    // Narrowing past that risked everything to exclude nothing.
+    // It buys nothing either way: the capture is not promiscuous, so the
+    // adapter only hands over frames addressed to this machine, and the far
+    // side is already a /24 belonging to the game's host.
     if remote.is_empty() {
         // Nothing to narrow to yet. Wide, because a filter that matches nothing
         // is worse than one that matches too much: what is not a game message
@@ -664,15 +623,15 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             // back where the player left it rather than where the window
             // manager fancies
             if running {
-                // The clock starts when the game does. Left alone it ran from
-                // whenever the app was started — so an app on autostart at
-                // nine and a game at eight in the evening divided every
-                // per-hour figure by eleven idle hours, and filed that as the
-                // run's length when the game closed. Outside `if auto` on
-                // purpose: the same is true with the overlay switched off.
-                // The game appearing is the one reset with a blackout behind
-                // it: the zone carried over from the last session, and nothing
-                // says it is still the zone.
+                // The clock starts when the game does, not when the app does:
+                // on autostart the idle hours before the game opens would
+                // otherwise divide every per-hour figure and be filed as the
+                // run's length. Outside `if auto` on purpose — the same holds
+                // with the overlay switched off.
+                //
+                // This is the one reset with a blackout behind it: the zone
+                // carried over from the last session, and nothing says it is
+                // still the zone.
                 stats.lock().unwrap_or_else(|e| e.into_inner()).reset_after_blackout();
                 if auto {
                     crate::show_overlay(&app);
@@ -839,14 +798,13 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
             let iface = ifaces.join(" + ");
             let packets: u32 = alive.iter().map(|c| c.packets.load(Ordering::Relaxed)).sum();
 
-            // Capturing and hearing anything are different states, and on the
-            // status line they looked the same. Players have reported this as
-            // "no errors, nothing, just nothing recorded", and there was
-            // nothing in the log to answer them with — so the two are counted
-            // apart now: frames that got past the filter, and frames that
-            // decoded into something. Nothing past the filter is an adapter or
-            // a filter that the game's traffic never reaches; plenty past it
-            // and nothing decoded is traffic that no longer parses.
+            // Capturing and hearing anything are different states, counted
+            // apart: frames that got past the filter, and frames that decoded
+            // into something. Nothing past the filter means an adapter or a
+            // filter the game's traffic never reaches; plenty past it and
+            // nothing decoded means traffic that no longer parses. On the
+            // status line the two look identical, which leaves a player with
+            // nothing to report but "nothing is recorded".
             let heard: u32 = alive.iter().map(|c| c.hits.load(Ordering::Relaxed)).sum();
             if heard > 0 {
                 // it came back; a later relapse is worth another line
@@ -982,15 +940,14 @@ fn capture_loop(
             _ => continue,
         };
         let Some(TransportSlice::Tcp(tcp)) = &pkt.transport else { continue };
-        // The filter is deliberately wide (everything this machine sends and
-        // receives), so TLS is skipped here: an encrypted stream cannot yield
-        // the plaintext the parser looks for, and reassembling it is pure cost.
-        // Port 443 is skipped as encrypted, which is a fair assumption right up
-        // until something moves the game's traffic onto it — a route optimiser
-        // relaying it does exactly that — and then it is one more rule that
-        // throws everything away without saying so. Reading everything means
-        // reading this too; the cost of being wrong that way is scanning
-        // payloads that never match, which the scan budget already bounds.
+        // Port 443 is skipped as encrypted: a TLS stream cannot yield the
+        // plaintext the parser looks for, and reassembling it is pure cost.
+        //
+        // The assumption holds until something moves the game's traffic onto
+        // that port — a route optimiser relaying it does — and then the rule
+        // throws everything away without saying so. Under a wide capture the
+        // port is read anyway; being wrong that way costs only scanning
+        // payloads that never match, which the scan budget bounds.
         if tcp.source_port() == 443 || tcp.destination_port() == 443 {
             tls.fetch_add(1, Ordering::Relaxed);
             if !wide_capture() {
@@ -1143,13 +1100,11 @@ mod tests {
 
     /// And once it does, the filter names the far end only.
     ///
-    /// It used to name both — `(the servers' /24s) and (host <this machine>)`.
-    /// The far side is what stops the capture being "every connection this
-    /// machine holds", which is how half a week of an unrelated project ended
-    /// up in a capture taken to debug the drop counters. The near side added
-    /// nothing to that and could be wrong: it is the address the socket is
-    /// bound to, and behind a split tunnel that is not the address on the wire.
-    /// When they differ the old filter matched nothing at all, silently.
+    /// The far side is what keeps the capture from being every connection the
+    /// machine holds. Naming the near side as well adds nothing and can be
+    /// wrong: it is the address the socket is bound to, which behind a split
+    /// tunnel is not the address on the wire, and when they differ the filter
+    /// matches nothing at all.
     #[test]
     fn the_filter_names_the_far_end_and_leaves_this_machine_alone() {
         let remote: BTreeSet<IpAddr> =

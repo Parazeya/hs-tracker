@@ -1,4 +1,5 @@
 <script>
+  import { itemName, locale, say, t } from './say.svelte.js';
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
@@ -7,6 +8,15 @@
   import { ALL_BUFFS } from './buffs.js';
 
   const ALERT_RARITIES = ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'];
+
+  // The name column is fixed so the sliders line up under each other, and 62px
+  // is what the English words needed. "Сатанинский" is eleven characters and
+  // ran under the slider, so the width is taken from the words themselves —
+  // the four rows below the rarities included, since they share the track.
+  const ALERT_NAMES = [...ALERT_RARITIES, 'Mail', 'Zone change', 'Relic'];
+  let rnameWidth = $derived(
+    Math.max(62, ...ALERT_NAMES.map((name) => Math.ceil(t(name).length * 6.6))),
+  );
   const TIERS = [
     [0, 'any'],
     [1, 'D'],
@@ -21,9 +31,8 @@
   let settings = $state(null);
   let saveTimer;
 
-  // The same five rarities used to be configured in two places — whether they
-  // alert at all here, and how loud and with which file one tab away. They are
-  // one question and are now asked once, on one row each.
+  // Whether a rarity alerts, how loud, and with which file are one question, so
+  // they are asked once, on one row each, rather than split across two tabs.
   const SOUND_KEY = { Satanic: 'satanic', Set: 'set', Heroic: 'heroic', Angelic: 'angelic', Unholy: 'unholy' };
   let custom = $state({});
 
@@ -76,15 +85,14 @@
     save();
   }
 
-  // Whether the buff list is on show. Local, and seeded from the setting
-  // rather than stored beside it: what is persisted is the list, and a second
-  // switch saying "the list is in use" is a second thing that can disagree
-  // with it.
-  // null means "not decided here yet", so the list itself answers. It has to
-  // go back to null whenever the settings are replaced from outside — a tray
-  // change, an import — or a player who had closed the picker would be shown
-  // "every rotation alerts" while a list carried over from the new settings
-  // quietly filtered them.
+  // Whether the buff list is on show. Local, and seeded from the setting rather
+  // than stored beside it: the list is what is persisted, and a second switch
+  // saying "the list is in use" is a second thing that can disagree with it.
+  //
+  // `null` means "not decided here yet", so the list answers. It has to return
+  // to null whenever the settings are replaced from outside — a tray change, an
+  // import — or a closed picker would claim every rotation alerts while a list
+  // carried in with the new settings quietly filtered them.
   let picking = $state(null);
   let pickingOn = $derived(picking ?? (settings?.zone_buffs?.length ?? 0) > 0);
   let buffsPicked = $derived(settings?.zone_buffs?.length ?? 0);
@@ -122,13 +130,11 @@
 
   // Every relic in the game, by the id the wire numbers it with.
   //
-  // Type 16 is the relics and nothing else, and the table's ids run 0..155 with
-  // no gaps — which is also every id seen dropping across the owner's captures.
-  // So the id IS the relic, and that is what gets stored: the picker never
-  // writes a name, because three relic names belong to another item as well
-  // (`Shrunken Head` to a Satanic charm, `Death's Scythe` to a Set polearm,
-  // `Satan's Horn` to a Common collectible) and the last shares the rarity too,
-  // so no spelling could have separated it. `hunted_relic` matches the id.
+  // Type 16 is the relics and nothing else, and their ids run 0..155 without
+  // gaps, so the id IS the relic. That is what the picker stores — never a
+  // name, because three relic names belong to another item as well
+  // (`Shrunken Head`, `Death's Scythe`, `Satan's Horn`) and the last shares the
+  // rarity too, so no spelling could separate it. `hunted_relic` matches ids.
   const RELIC_TYPE = 16;
   // Grouped by name, not one row per id. Two of the 156 are both called "Bomb"
   // — ids 65 and 150 — and as two rows they were two identical ticks: pick one,
@@ -154,28 +160,35 @@
 
   let relicQuery = $state('');
   let relicsBrowsing = $state(false);
-  // Counted in ROWS, so the number on the screen and the number of rows ticked
-  // are the same thing. `settings.relics` holds ids and is one longer whenever
-  // Bomb is hunted, which is the engine's business and not the note's.
+  // Counted in ROWS, so the number on screen matches the number of rows ticked.
+  // `settings.relics` holds ids, and one row can carry more than one.
   //
-  // `every`, not `some`: only this picker writes the field and it always writes
-  // a row's ids together, so a half-ticked Bomb can only come from a file
-  // edited by hand — and showing that as unticked while one of them still
-  // chimes is the error a player can hear and then act on.
+  // `every`, not `some`: the picker always writes a row's ids together, so a
+  // half-ticked row can only come from a hand-edited file — and showing it as
+  // unticked while one of its ids still chimes is an error the player can hear
+  // but not see.
   let pickedIds = $derived(new Set(settings?.relics ?? []));
   let relicsPicked = $derived(ALL_RELICS.filter((r) => r.ids.every((id) => pickedIds.has(id))).length);
   let allRelicsPicked = $derived(relicsPicked === ALL_RELICS.length);
   let relicVolume = $derived(Math.round((settings?.relic?.volume ?? 0.5) * 100));
 
-  // At rest this shows what is being hunted, not the whole table: the question
-  // a player has when they open the panel is "what am I listening for", and 156
-  // rows do not answer it. Typing searches all of them; "show all" is there for
-  // browsing, which is a different question and a rarer one.
+  // At rest this shows what is being hunted rather than the whole table: the
+  // question on opening the panel is what the player is listening for, and 156
+  // rows do not answer it. Typing searches all of them; "show all" is for
+  // browsing.
+  //
+  // Ordered and searched by the name ON SCREEN, not the English underneath, or
+  // a translated client sorts by words the reader cannot see and finds nothing
+  // when they type the ones they can.
+  const relicName = (r) => itemName(RELIC_TYPE, r.ids[0], 0) || r.name;
   let relicShown = $derived.by(() => {
     const q = relicQuery.trim().toLowerCase();
-    if (q) return ALL_RELICS.filter((r) => r.key.includes(q));
-    if (relicsBrowsing) return ALL_RELICS;
-    return ALL_RELICS.filter((r) => r.ids.every((id) => pickedIds.has(id)));
+    const inOrder = [...ALL_RELICS].sort((a, b) => relicName(a).localeCompare(relicName(b), locale()));
+    if (q) {
+      return inOrder.filter((r) => r.key.includes(q) || relicName(r).toLowerCase().includes(q));
+    }
+    if (relicsBrowsing) return inOrder;
+    return inOrder.filter((r) => r.ids.every((id) => pickedIds.has(id)));
   });
 
   function toggleRelic(row) {
@@ -221,12 +234,9 @@
 
   /// Whether a rarity makes a sound at all — the first control on this panel.
   ///
-  /// It went the same way `setNumber` did, and for the same reason: the custom
-  /// filter moved to its own tab and took the definitions with it while the
-  /// callers stayed. An undefined call in a template throws where nobody
-  /// looks, so every tick on the rarity rows stopped answering the mouse and
-  /// the panel looked untouched. Found by auditing for the shape rather than
-  /// by anyone reporting it, which is the only way this kind is found.
+  /// Defined here beside its callers. An undefined call in a Svelte template
+  /// throws where nobody sees it, so a control whose handler has gone missing
+  /// simply stops answering the mouse while the panel looks untouched.
   function toggleAlert(rarity) {
     const on = new Set(settings.alerts ?? []);
     on.has(rarity) ? on.delete(rarity) : on.add(rarity);
@@ -234,13 +244,9 @@
     save();
   }
 
-  /// One number of the settings, written and saved.
-  ///
-  /// It went missing when the custom filter moved to its own tab — the half
-  /// that used it stayed here and the definition left with the other half — and
-  /// nothing said so: an undefined call in a template throws where nobody is
-  /// looking, so Min tier, Size and Shading simply stopped answering the mouse
-  /// and the panel looked fine. Reported as "can't change Min Tier" (#9).
+  /// One number of the settings, written and saved. Shared by Min tier, Size
+  /// and Shading, so losing it takes all three down at once and silently — see
+  /// `toggleAlert` above.
   function setNumber(key, value) {
     if (!settings || !Number.isFinite(value) || settings[key] === value) return;
     settings[key] = value;
@@ -269,20 +275,20 @@
 
 </script>
 
-<div class="panel two">
+<div class="panel two" style:--rname-w="{rnameWidth}px">
   <div class="col">
   {#if settings}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
-      <div class="sechead" data-tauri-drag-region>Rarity alerts — what makes a sound at all</div>
+      <div class="sechead" data-tauri-drag-region>{t("Rarity alerts — what makes a sound at all")}</div>
       {#each ALERT_RARITIES as rarity}
         {@const key = SOUND_KEY[rarity]}
         {@const on = (settings.alerts ?? []).includes(rarity)}
         {@const vol = Math.round((settings[key]?.volume ?? 0.7) * 100)}
         <div class="rrow" class:off={!on}>
-          <button class="check" onclick={() => toggleAlert(rarity)} aria-label={rarity}>
+          <button class="check" onclick={() => toggleAlert(rarity)} aria-label={t(rarity)}>
             <img src={on ? art('check_on') : art('check_off')} alt="" />
           </button>
-          <span class="rname {rarityCls[rarity]}">{rarity}</span>
+          <span class="rname {rarityCls[rarity]}">{t(rarity)}</span>
           <input
             class="vol"
             type="range"
@@ -293,12 +299,12 @@
             oninput={(e) => setVolume(key, e.currentTarget.value / 100)}
           />
           <span class="pct">{vol}%</span>
-          <span class="src" title={custom[key] ? `sounds/${custom[key]}` : 'built-in sound'}>
-            {custom[key] ?? 'built-in'}
+          <span class="src" title={custom[key] ? `sounds/${custom[key]}` : t('built-in sound')}>
+            {custom[key] ?? t('built-in')}
           </span>
           <div class="rbtns">
-            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity(key)}>Test</button>
-            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound(key)}>Browse…</button>
+            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity(key)}>{t("Test")}</button>
+            <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound(key)}>{t("Browse…")}</button>
             <button
               class="btn sm"
               style:--btn="url({art('button')})"
@@ -306,17 +312,17 @@
               style:--btn-down="url({art('button_down')})"
               disabled={!custom[key]}
               onclick={() => danger(`snd-${key}`, () => invoke('clear_sound', { rarity: key }).catch(() => {}))}
-            >{armed === `snd-${key}` ? 'Sure?' : 'Default'}</button>
+            >{armed === `snd-${key}` ? t('Sure?') : t('Default')}</button>
           </div>
         </div>
       {/each}
 
       <!-- not a drop, but it is a sound and it lived on the tab that went away -->
       <div class="rrow" class:off={!settings.mail?.enabled}>
-        <button class="check" onclick={() => { settings.mail.enabled = !settings.mail.enabled; save(); }} aria-label="mail">
+        <button class="check" onclick={() => { settings.mail.enabled = !settings.mail.enabled; save(); }} aria-label={t("mail")}>
           <img src={settings.mail?.enabled ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="rname c-gold">Mail</span>
+        <span class="rname c-gold">{t("Mail")}</span>
         <input
           class="vol"
           type="range"
@@ -327,10 +333,10 @@
           oninput={(e) => setVolume('mail', e.currentTarget.value / 100)}
         />
         <span class="pct">{mailVolume}%</span>
-        <span class="src" title={custom.mail ? `sounds/${custom.mail}` : 'built-in sound'}>{custom.mail ?? 'built-in'}</span>
+        <span class="src" title={custom.mail ? `sounds/${custom.mail}` : t('built-in sound')}>{custom.mail ?? t('built-in')}</span>
         <div class="rbtns">
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('mail')}>Test</button>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('mail')}>Browse…</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('mail')}>{t("Test")}</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('mail')}>{t("Browse…")}</button>
           <button
             class="btn sm"
             style:--btn="url({art('button')})"
@@ -338,7 +344,7 @@
             style:--btn-down="url({art('button_down')})"
             disabled={!custom.mail}
             onclick={() => danger('snd-mail', () => invoke('clear_sound', { rarity: 'mail' }).catch(() => {}))}
-          >{armed === 'snd-mail' ? 'Sure?' : 'Default'}</button>
+          >{armed === 'snd-mail' ? t('Sure?') : t('Default')}</button>
         </div>
       </div>
       <!-- Also not a drop: the game moving the satanic zone, which is the one
@@ -347,10 +353,10 @@
            App.svelte. The pillar has its own, under Announcement; which
            rotations count at all is the section below. -->
       <div class="rrow" class:off={!settings.zone?.enabled}>
-        <button class="check" onclick={() => { settings.zone.enabled = !settings.zone.enabled; save(); }} aria-label="satanic zone change">
+        <button class="check" onclick={() => { settings.zone.enabled = !settings.zone.enabled; save(); }} aria-label={t("satanic zone change")}>
           <img src={settings.zone?.enabled ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="rname c-zone" title="The satanic zone rotating: the chime, and the zone chip pulsing on the overlay">Zone change</span>
+        <span class="rname c-zone" title={t("The satanic zone rotating: the chime, and the zone chip pulsing on the overlay")}>{t("Zone change")}</span>
         <input
           class="vol"
           type="range"
@@ -361,10 +367,10 @@
           oninput={(e) => setVolume('zone', e.currentTarget.value / 100)}
         />
         <span class="pct">{zoneVolume}%</span>
-        <span class="src" title={custom.zone ? `sounds/${custom.zone}` : 'built-in sound — the zone chime'}>{custom.zone ?? 'built-in'}</span>
+        <span class="src" title={custom.zone ? `sounds/${custom.zone}` : t('built-in sound — the zone chime')}>{custom.zone ?? t('built-in')}</span>
         <div class="rbtns">
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('zone')}>Test</button>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('zone')}>Browse…</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('zone')}>{t("Test")}</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('zone')}>{t("Browse…")}</button>
           <button
             class="btn sm"
             style:--btn="url({art('button')})"
@@ -372,15 +378,15 @@
             style:--btn-down="url({art('button_down')})"
             disabled={!custom.zone}
             onclick={() => danger('snd-zone', () => invoke('clear_sound', { rarity: 'zone' }).catch(() => {}))}
-          >{armed === 'snd-zone' ? 'Sure?' : 'Default'}</button>
+          >{armed === 'snd-zone' ? t('Sure?') : t('Default')}</button>
         </div>
       </div>
       <div class="line">
-        <span class="name">Min tier</span>
+        <span class="name">{t("Min tier")}</span>
         <div class="tiers">
           {#each TIERS as [value, label]}
             <button class="tier" class:on={(settings.min_tier ?? 0) === value} onclick={() => setNumber('min_tier', value)}>
-              {label}
+              {t(label)}
             </button>
           {/each}
         </div>
@@ -391,33 +397,28 @@
          chime as much as the pillar, and the chime is the half that still works
          on a session with no overlay at all. -->
     <div class="section" style:border-image-source="url({art('chip_dark')})">
-      <div class="sechead" data-tauri-drag-region>Zone buffs — which rotations are worth the alert</div>
+      <div class="sechead" data-tauri-drag-region>{t("Zone buffs — which rotations are worth the alert")}</div>
       <div class="line">
-        <button class="check" onclick={togglePicking} aria-label="narrow the zone alert">
+        <button class="check" onclick={togglePicking} aria-label={t("narrow the zone alert")}>
           <img src={pickingOn ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="opt" title="A rotation is announced only when the zone it lands on carries at least one of the buffs you tick">
-          Only alert when the new zone rolls one of these buffs
-        </span>
+        <span class="opt" title={t("A rotation is announced only when the zone it lands on carries at least one of the buffs you tick")}> {t("Only alert when the new zone rolls one of these buffs")} </span>
       </div>
 
       {#if !pickingOn}
-        <div class="note">Every rotation alerts. Tick buffs to alert on fewer.</div>
+        <div class="note">{t("Every rotation alerts. Tick buffs to alert on fewer.")}</div>
       {:else if buffsPicked === 0}
         <!-- The one state a player can be misled by: the list is on show, it is
              empty, and empty is not silence. Say so where they are looking. -->
-        <div class="note warn">Nothing ticked yet, so every rotation still alerts.</div>
+        <div class="note warn">{t("Nothing ticked yet, so every rotation still alerts.")}</div>
       {:else if allBuffsPicked}
         <!-- Not quite the same as an empty list, and the difference is a
              silence: a rotation the game gives no buffs at all matches nothing
              on any list, and so does a buff this table does not know yet. An
              empty list asks no question and lets both through. -->
-        <div class="note">
-          Every buff in the table ticked. A rotation with no buffs at all, or with one this
-          table does not know, still passes in silence — clear the list to hear every rotation.
-        </div>
+        <div class="note"> {t("Every buff in the table ticked. A rotation with no buffs at all, or with one this table does not know, still passes in silence — clear the list to hear every rotation.")} </div>
       {:else}
-        <div class="note">{buffsPicked} ticked — a rotation with none of them passes in silence.</div>
+        <div class="note">{say('{n} ticked — a rotation with none of them passes in silence.', { n: buffsPicked })}</div>
       {/if}
 
       {#if pickingOn}
@@ -434,11 +435,11 @@
           {/each}
         </div>
         <div class="line ends">
-          <button class="link" onclick={tickAllBuffs}>tick all {ALL_BUFFS.length}</button>
+          <button class="link" onclick={tickAllBuffs}>{t('tick all')} {ALL_BUFFS.length}</button>
           <!-- Never "none": with an empty list meaning every rotation, a link
                named as the opposite of "all" lands on the same behaviour. -->
           <button class="link" class:armed={armed === 'zone-buffs'} onclick={() => danger('zone-buffs', clearBuffs)}>
-            {armed === 'zone-buffs' ? 'clear it?' : 'clear — alert on every rotation'}
+            {armed === 'zone-buffs' ? t('clear it?') : t('clear — alert on every rotation')}
           </button>
         </div>
       {/if}
@@ -455,13 +456,13 @@
          it is the next thing along in either layout — which is why the note
          below never leaves it unsaid. -->
     <div class="section" style:border-image-source="url({art('chip_dark')})">
-      <div class="sechead" data-tauri-drag-region>Relics — a chime for the ones you are hunting</div>
+      <div class="sechead" data-tauri-drag-region>{t("Relics — a chime for the ones you are hunting")}</div>
 
       <div class="rrow" class:off={!settings.relic?.enabled}>
-        <button class="check" onclick={() => { settings.relic.enabled = !settings.relic.enabled; save(); }} aria-label="relic chime">
+        <button class="check" onclick={() => { settings.relic.enabled = !settings.relic.enabled; save(); }} aria-label={t("relic chime")}>
           <img src={settings.relic?.enabled ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="rname c-relic" title="A relic you ticked hitting the floor: the chime, the drop feed and the pillar">Relic</span>
+        <span class="rname c-relic" title={t("A relic you ticked hitting the floor: the chime, the drop feed and the pillar")}>{t("Relic")}</span>
         <input
           class="vol"
           type="range"
@@ -472,10 +473,10 @@
           oninput={(e) => setVolume('relic', e.currentTarget.value / 100)}
         />
         <span class="pct">{relicVolume}%</span>
-        <span class="src" title={custom.relic ? `sounds/${custom.relic}` : 'the built-in relic chime'}>{custom.relic ?? 'built-in'}</span>
+        <span class="src" title={custom.relic ? `sounds/${custom.relic}` : t('the built-in relic chime')}>{custom.relic ?? t('built-in')}</span>
         <span class="btns">
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('relic')}>Test</button>
-          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('relic')}>Browse…</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => testRarity('relic')}>{t("Test")}</button>
+          <button class="btn sm" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={() => pickRaritySound('relic')}>{t("Browse…")}</button>
           <button
             class="btn sm"
             style:--btn="url({art('button')})"
@@ -483,7 +484,7 @@
             style:--btn-down="url({art('button_down')})"
             disabled={!custom.relic}
             onclick={() => danger('snd-relic', () => invoke('clear_sound', { rarity: 'relic' }).catch(() => {}))}
-          >{armed === 'snd-relic' ? 'Sure?' : 'Default'}</button>
+          >{armed === 'snd-relic' ? t('Sure?') : t('Default')}</button>
         </span>
       </div>
 
@@ -493,25 +494,30 @@
              says "3 of 155 hunted" is describing a hunt that is not running.
              The grid goes with it, the way the buff picker's does. -->
         <div class="note">
-          The relic chime is off, so none of these sound
-          {#if relicsPicked}, including the {relicsPicked} ticked{/if}. Switch it on above.
+          {relicsPicked
+            ? say('The relic chime is off, so none of these sound, including the {n} ticked. Switch it on above.', { n: relicsPicked })
+            : t('The relic chime is off, so none of these sound. Switch it on above.')}
         </div>
       {:else if relicsPicked === 0}
         <!-- The misleading state, and it is misleading the other way round from
              the buff picker's empty list: nothing ticked here is silence, not
              everything. Said in words, where they are looking. -->
-        <div class="note warn">Nothing ticked, so no relic chimes. Search below and click one to hunt it.</div>
+        <div class="note warn">{t("Nothing ticked, so no relic chimes. Search below and click one to hunt it.")}</div>
       {:else if allRelicsPicked}
         <!-- The other one. All 156 is not a filter at all, and the rate is the
              only thing that makes that concrete. -->
         <div class="note warn">
-          All {ALL_RELICS.length} ticked — that is about {RELICS_PER_HOUR} chimes an hour, one every
-          83 seconds, and every one of them reaches the drop feed too. Clear it and tick the few you
-          are actually hunting.
+          {say(
+            'All {n} ticked — that is about {rate} chimes an hour, one every 83 seconds, and every one of them reaches the drop feed too. Clear it and tick the few you are actually hunting.',
+            { n: ALL_RELICS.length, rate: RELICS_PER_HOUR },
+          )}
         </div>
       {:else}
         <div class="note">
-          {relicsPicked} of {ALL_RELICS.length} hunted — every other relic falls in silence.
+          {say('{n} of {all} hunted — every other relic falls in silence.', {
+            n: relicsPicked,
+            all: ALL_RELICS.length,
+          })}
         </div>
       {/if}
 
@@ -519,7 +525,7 @@
       <input
         class="field"
         style:border-image-source="url({art('chip_dark')})"
-        placeholder="search relics by name…"
+        placeholder={t("search relics by name…")}
         bind:value={relicQuery}
       />
 
@@ -527,19 +533,19 @@
         <div class="grid relics">
           {#each relicShown as r (r.name)}
             {@const on = r.ids.every((id) => pickedIds.has(id))}
-            <button class="secopt relic" class:off={!on} onclick={() => toggleRelic(r)} title={r.name}>
+            <button class="secopt relic" class:off={!on} onclick={() => toggleRelic(r)} title={relicName(r)}>
               <img src={on ? art('check_on') : art('check_off')} alt="" />
-              <span class="bname">{r.name}</span>
+              <span class="bname">{relicName(r)}</span>
             </button>
           {/each}
         </div>
       {:else if relicQuery.trim()}
-        <div class="note">no relic matches “{relicQuery.trim()}”.</div>
+        <div class="note">{say('no relic matches “{name}”.', { name: relicQuery.trim() })}</div>
       {/if}
 
       <div class="line ends">
         <button class="link" onclick={() => (relicsBrowsing = !relicsBrowsing)}>
-          {relicsBrowsing ? 'show only the ones I hunt' : `show all ${ALL_RELICS.length}`}
+          {relicsBrowsing ? t('show only the ones I hunt') : `${t('show all')} ${ALL_RELICS.length}`}
         </button>
         <!-- The one link on this panel that asks twice. "tick all" reads like
              the buff picker's harmless one above and is the opposite: there it
@@ -548,12 +554,12 @@
              not what gets clicked. -->
         <button class="link" class:armed={armed === 'relics-all'} onclick={() => danger('relics-all', tickAllRelics)}>
           {armed === 'relics-all'
-            ? `all ${ALL_RELICS.length}? that is ~${RELICS_PER_HOUR} chimes an hour`
-            : `tick all ${ALL_RELICS.length}`}
+            ? say('all {n}? that is ~{rate} chimes an hour', { n: ALL_RELICS.length, rate: RELICS_PER_HOUR })
+            : `${t('tick all')} ${ALL_RELICS.length}`}
         </button>
         {#if relicsPicked}
           <button class="link" class:armed={armed === 'relics'} onclick={() => danger('relics', clearRelics)}>
-            {armed === 'relics' ? 'clear it?' : 'clear — hunt no relic'}
+            {armed === 'relics' ? t('clear it?') : t('clear — hunt no relic')}
           </button>
         {/if}
       </div>
@@ -562,14 +568,12 @@
 
     {#if canAnnounce}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
-        <div class="sechead" data-tauri-drag-region>Announcement — the loot pillar over the screen</div>
+        <div class="sechead" data-tauri-drag-region>{t("Announcement — the loot pillar over the screen")}</div>
         <div class="line">
-          <button class="check" onclick={() => { settings.flourish = !settings.flourish; save(); }} aria-label="flourish">
+          <button class="check" onclick={() => { settings.flourish = !settings.flourish; save(); }} aria-label={t("flourish")}>
             <img src={settings.flourish ? art('check_on') : art('check_off')} alt="" />
           </button>
-          <span class="opt" title="The game's own loot pillar, played over the screen where you put it">
-            Announce a drop with the game's loot pillar
-          </span>
+          <span class="opt" title={t("The game's own loot pillar, played over the screen where you put it")}> {t("Announce a drop with the game's loot pillar")} </span>
         </div>
 
         {#if settings.flourish}
@@ -577,80 +581,70 @@
             <button
               class="check"
               onclick={() => { settings.flourish_listed = !settings.flourish_listed; save(); }}
-              aria-label="follow the filter"
+              aria-label={t("follow the filter")}
             >
               <img src={settings.flourish_listed ? art('check_on') : art('check_off')} alt="" />
             </button>
-            <span class="opt" title="Anything on a list of the selected watchlist is announced, whatever its rarity or grade">
-              Announce everything the watchlist names
-            </span>
+            <span class="opt" title={t("Anything on a list of the selected watchlist is announced, whatever its rarity or grade")}> {t("Announce everything the watchlist names")} </span>
           </div>
           {#if settings.flourish_listed && !settings.use_filter}
-            <!-- It used to say "switched off below", and below is where it was.
-                 The watchlist has a tab of its own now, so the sentence has to
-                 name it: a warning that points at a place the reader is already
-                 looking at, and it is not there, reads as the warning being
+            <!-- The sentence names the watchlist tab rather than saying
+                 "below": the watchlist has a tab of its own, and a warning that
+                 points at the page the reader is already looking at, where it
+                 is not, reads as the warning being
                  wrong rather than the setting. -->
-            <div class="note warn">
-              The watchlist is switched off on its own tab, so this does nothing yet.
-            </div>
+            <div class="note warn"> {t("The watchlist is switched off on its own tab, so this does nothing yet.")} </div>
           {/if}
 
           <div class="line">
             <button
               class="check"
               onclick={() => { settings.flourish_zone = !settings.flourish_zone; save(); }}
-              aria-label="announce the satanic zone"
+              aria-label={t("announce the satanic zone")}
             >
               <img src={settings.flourish_zone ? art('check_on') : art('check_off')} alt="" />
             </button>
-            <span class="opt" title="The satanic zone rotating gets the pillar too, drawn its own way — the zone and the buffs it rolled">
-              Announce the satanic zone when it rotates
-            </span>
+            <span class="opt" title={t("The satanic zone rotating gets the pillar too, drawn its own way — the zone and the buffs it rolled")}> {t("Announce the satanic zone when it rotates")} </span>
           </div>
           {#if settings.flourish_zone && !settings.zone?.enabled}
-            <div class="note">
-              The chime for it is off above; the pillar still plays.
-            </div>
+            <div class="note"> {t("The chime for it is off above; the pillar still plays.")} </div>
           {/if}
 
           <div class="grid">
             {#each ALERT_RARITIES as name}
               <button class="secopt" onclick={() => toggleFlourish(name)}>
                 <img src={(settings.flourish_rarities ?? []).includes(name) ? art('check_on') : art('check_off')} alt="" />
-                <span class={rarityCls[name]}>{name}</span>
+                <span class={rarityCls[name]}>{t(name)}</span>
               </button>
             {/each}
           </div>
           <div class="line">
-            <span class="name">Min Tier</span>
+            <span class="name">{t("Min Tier")}</span>
             <input type="range" min="1" max="6" bind:value={settings.flourish_tier} oninput={() => save()} />
             <span class="pct">{FX_TIERS[(settings.flourish_tier ?? 6) - 1]}</span>
           </div>
           <div class="line">
-            <span class="name">Size</span>
+            <span class="name">{t("Size")}</span>
             <input type="range" min="50" max="200" bind:value={scalePct} oninput={() => setNumber('flourish_scale', scalePct / 100)} />
             <span class="pct">{Math.round((settings.flourish_scale ?? 1) * 100)}%</span>
           </div>
           <div class="line">
-            <span class="name">Duration</span>
+            <span class="name">{t("Duration")}</span>
             <input type="range" min="2" max="12" step="0.5" bind:value={settings.flourish_secs} oninput={() => save()} />
             <span class="pct">{(settings.flourish_secs ?? 6).toFixed(1)}s</span>
           </div>
           <div class="line">
-            <span class="name">Shading</span>
+            <span class="name">{t("Shading")}</span>
             <input type="range" min="0" max="90" bind:value={shadePct} oninput={() => setNumber('flourish_shade', shadePct / 100)} />
             <span class="pct">{Math.round((settings.flourish_shade ?? 0.55) * 100)}%</span>
           </div>
 
           {#if overlay}
             <div class="line">
-              <button class="check" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }} aria-label="flourish always">
+              <button class="check" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }} aria-label={t("flourish always")}>
                 <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
               </button>
-              <span class="opt" title="It draws nothing between drops, but OBS can only capture a window that is there">
-                Keep its window on screen so OBS can capture it
-              </span>
+              <span class="opt" title={t("It draws nothing between drops, but OBS can only capture a window that is there")}> {t("Keep its window on screen so OBS can capture it")} </span>
             </div>
             <div class="line">
               <button
@@ -659,30 +653,25 @@
                 style:--btn-hover="url({art('button_hover')})"
                 style:--btn-down="url({art('button_down')})"
                 onclick={() => invoke('place_flourish', { placing: true })}
-              >
-                Change location
-              </button>
+              > {t("Change location")} </button>
             </div>
           {/if}
         {/if}
       </div>
     {/if}
 
-    <!-- A feature that moves without a sign left behind reads as a feature
-         that was deleted. This is where the custom filter used to be. -->
-    <div class="note pointer">
-      Named items, and a sound of their own, live on the Watchlist tab.
-    </div>
+    <!-- A feature that moves without a sign left behind reads as one that was
+         deleted. The custom filter was here. -->
+    <div class="note pointer"> {t("Named items, and a sound of their own, live on the Watchlist tab.")} </div>
   {/if}
   </div>
 </div>
 
 <style>
-  /* Two columns: what makes a sound at all on the left, the two narrower
-     alerts and the pillar on the right. The right column used to be the custom
-     filter, which now has a tab of its own — without a second column the page
-     was one 1,150px-wide strip of rows on the owner's own 1400px window, with
-     a rarity row's controls half a screen from its name.
+  /* Two columns: what makes a sound at all on the left, the two narrower alerts
+     and the pillar on the right. In one column the page is a single strip of
+     rows over a thousand pixels wide, with a rarity row's controls half a screen
+     from its name.
      A narrow window falls back to one column, where side by side would leave
      neither half readable. */
   .panel.two {
@@ -741,7 +730,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
     /* the sections stack up; when they outgrow the window the whole pane
@@ -780,7 +769,7 @@
      left edge cannot be compared at a glance. */
   .rrow {
     display: grid;
-    grid-template-columns: 18px 62px minmax(44px, 1fr) 34px minmax(90px, 1.4fr) auto;
+    grid-template-columns: 18px var(--rname-w, 62px) minmax(44px, 1fr) 34px minmax(90px, 1.4fr) auto;
     align-items: center;
     gap: 6px;
     padding: 1px 0;
@@ -924,7 +913,7 @@
     padding: 2px 7px;
     cursor: pointer;
   }
-  .tier.on { color: var(--bone-13); border-color: var(--edge-4); background: rgba(150, 37, 56, 0.45); }
+  .tier.on { color: var(--bone-13); border-color: var(--edge-4); background: rgba(var(--pick-rgb), 0.45); }
 
   .note { color: var(--dim-2); font-size: 10px; line-height: 1.4; }
   .note.pointer { padding: 2px 2px 4px; }
