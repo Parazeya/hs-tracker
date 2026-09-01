@@ -15,6 +15,12 @@
   // had switched off.
   let enabled = $state(false);
   let nowTick = $state(Date.now());
+  // Under the overlay the rows stack from the top of this window, which puts
+  // the first of them against the panel. Over the overlay that same stacking
+  // leaves the window's whole height between the row and the panel, so the
+  // list reads as having jumped to the top of the screen. The backend knows
+  // which way it hung the window and says so.
+  let above = $state(false);
   let nextKey = 0;
 
   function label(d) {
@@ -52,6 +58,7 @@
     invoke('get_settings').then((s) => (enabled = s?.ticker ?? true));
     const unsubs = [
       listen('settings-changed', (e) => (enabled = e.payload?.ticker ?? true)),
+      listen('ticker-above', (e) => (above = !!e.payload)),
       listen('drop-entry', (e) => {
         if (!enabled) return;
         const d = e.payload;
@@ -76,7 +83,7 @@
   };
 </script>
 
-<div class="stack">
+<div class="stack" class:above>
   {#each entries as it (it.key)}
     <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source="url({art('chip_dark')})">
       <span class="rar {rarityCls[rarity(it)] ?? ''}">{t(rarity(it))}</span>
@@ -106,6 +113,9 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+    /* so the rows can be held against whichever edge the overlay is on */
+    height: 100vh;
+    justify-content: flex-start;
     /* The panel's own inset, not the gap between its chips. Both windows are
        444 CSS px on the same x, so the numbers line up directly: the overlay's
        chip columns run 20…424 (14px border-image + 6px padding), while 8px here
@@ -117,6 +127,10 @@
     font-size: 12px;
     color: var(--bone-6);
   }
+
+  /* hanging over the overlay: the rows sit at the foot of the window, which is
+     the edge the panel is on */
+  .stack.above { justify-content: flex-end; }
 
   .entry {
     box-sizing: border-box;

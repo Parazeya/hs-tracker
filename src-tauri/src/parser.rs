@@ -1290,22 +1290,35 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // ordinary potions through it is the bug this rule exists to stop.
     // The grade, on the same terms as the rarity above.
     //
-    // Odyssey has an item space of its own, and its `n` reads 6 — the top grade
-    // — on ordinary nameless bases, which lands them in the SS column. Refusing
-    // it loses nothing: a named item's grade comes from the item table by name,
-    // which holds whatever mode dropped it, and `GameStats` looks it up
-    // whenever the packet offers none.
+    // `n` reads 6 — the top grade — on ordinary nameless bases, which lands
+    // them in the SS column. Odyssey was where that was first seen and the
+    // refusal was written against the mode; a trade-league run says the mode
+    // was never the thing. In half an hour of acts it claimed the top grade
+    // twenty-six times, every one of them on an item the game does not name,
+    // sixteen of those on gear types, and the panel read four SS the player
+    // never found.
+    //
+    // What settles it is the item tables: the ordinary bases are graded D
+    // through S and not one of the two hundred is SS. So a nameless item
+    // claiming the top grade is claiming something no nameless item can be,
+    // whatever mode it came from. Refusing it loses nothing — a named item's
+    // grade comes from the table by name, and `GameStats` looks it up whenever
+    // the packet offers none.
+    //
+    // The lower grades stand: `n` is the only thing that grades a white base,
+    // and 1..5 it reads honestly.
     //
     // The range check is separate and applies to every mode: `n` also arrives
     // as 6666, which is not a grade. Being greater than zero is not enough of
     // a test.
+    let named_flag = int_field(obj, &["c"]) == 1;
     let claimed_tier = int_field(obj, &["tier", "n"]);
-    let tier = if odyssey || !(1..=crate::stats::SS_TIER).contains(&claimed_tier) {
+    let unnamed_top = !named_flag && claimed_tier >= crate::stats::SS_TIER;
+    let tier = if odyssey || unnamed_top || !(1..=crate::stats::SS_TIER).contains(&claimed_tier) {
         0
     } else {
         claimed_tier
     };
-    let named_flag = int_field(obj, &["c"]) == 1;
     let resource = SELF_NUMBERED.contains(&item_type);
     let worth_naming = crate::stats::rarity_from_packet(&rarity)
         .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
@@ -2633,6 +2646,44 @@ named things, by what the tracker made of them:");
     }
 
     #[test]
+    /// A nameless base claiming the top grade is refused whatever mode it came
+    /// from. The tables grade every ordinary base D through S, so the claim
+    /// describes an item that does not exist — and believing it put four SS in
+    /// a half-hour act run that produced none.
+    #[test]
+    fn a_nameless_base_cannot_be_the_top_grade() {
+        let top = json!({
+            "status": 1,
+            "message": "Success on inventory update ext",
+            "itemsAdded": { "99-1-1a0-1": { "a": 408783704u64, "b": 8, "c": 0, "d": 10, "n": 6 } },
+        });
+        let events = events_from_messages(std::slice::from_ref(&top));
+        let graded: Vec<i64> = events
+            .iter()
+            .filter_map(|e| match e {
+                GameEvent::ItemAdded { tier, .. } => Some(*tier),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(graded, vec![0], "a nameless base claimed SS and was believed");
+
+        // and the grades it really can carry still arrive
+        let s = json!({
+            "status": 1,
+            "message": "Success on inventory update ext",
+            "itemsAdded": { "99-1-1a0-2": { "a": 408783704u64, "b": 8, "c": 0, "d": 10, "n": 5 } },
+        });
+        let events = events_from_messages(std::slice::from_ref(&s));
+        let graded: Vec<i64> = events
+            .iter()
+            .filter_map(|e| match e {
+                GameEvent::ItemAdded { tier, .. } => Some(*tier),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(graded, vec![5], "S is a grade a base can be, and it was thrown away");
+    }
+
     fn an_odyssey_pickup_claims_no_rarity() {
         // straight out of a capture: every pickup on an Odyssey character, all
         // of them ordinary, arrives with d = 7 — which on the seasonal scale

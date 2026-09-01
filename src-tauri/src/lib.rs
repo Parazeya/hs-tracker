@@ -1068,6 +1068,9 @@ fn restore_window_positions(app: &AppHandle) {
 fn spawn_ticker_glue(app: AppHandle) {
     std::thread::spawn(move || {
         let mut shown = false;
+        // which way the window was hung last time, so the page is told only
+        // when it changes rather than three times a second
+        let mut hung_above = false;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(300));
             let (Some(main), Some(ticker)) = (app.get_webview_window("main"), app.get_webview_window("ticker"))
@@ -1110,6 +1113,12 @@ fn spawn_ticker_glue(app: AppHandle) {
                     Some(bottom) if below + height as i32 > bottom => pos.y - height as i32 - 4,
                     _ => below,
                 };
+                // Which way it ended up hanging. The window is a fixed height
+                // and its rows stack from the top of it: under the overlay the
+                // first row then sits against the panel, over the overlay it
+                // floats the window's whole height clear of it, which reads as
+                // the drop list having wandered to the top of the screen.
+                let above = y < pos.y;
                 // The panel's width, not the window's: the window carries the
                 // control strip beside the panel now, and a ticker as wide as
                 // the window would hang past the overlay it belongs under.
@@ -1126,6 +1135,9 @@ fn spawn_ticker_glue(app: AppHandle) {
                 // for an unmapped one. This window hides and shows dozens of
                 // times a run, far more often than the overlay it sits under.
                 if !shown {
+                    // A window that has just been mapped knows nothing, so the
+                    // side is stated again rather than only on a change.
+                    hung_above = !above;
                     reveal(&app, "ticker", false);
                     let _ = ticker.set_zoom(scale);
                     set_click_through(&ticker, true);
@@ -1137,6 +1149,10 @@ fn spawn_ticker_glue(app: AppHandle) {
                 // remembering the request as if it had worked left the ticker
                 // sitting across the middle of the overlay for the rest of the
                 // session. Asking again costs nothing when it already agrees.
+                if above != hung_above {
+                    let _ = app.emit_to("ticker", "ticker-above", above);
+                    hung_above = above;
+                }
                 let here = (ticker.outer_position().ok(), ticker.outer_size().ok());
                 if here != (Some(want.0), Some(want.1)) {
                     let _ = ticker.set_position(want.0);

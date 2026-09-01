@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1 — 2026-09-01
+
+### Fixed
+
+- A white base no longer counts as an SS find: the packet grades a nameless
+  item at the top, and only an Odyssey run refused the claim.
+- The drop list keeps to the overlay's edge when it hangs above it, rather than
+  floating its own height clear of it.
+
 ## 1.1.0 — 2026-09-01
 
 ### Added
