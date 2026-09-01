@@ -150,8 +150,10 @@ html[data-skin='plain'] [style*='border-image-source'] {
    and the overlay's chips, which have no page to sit on at all.
    
    `input` is excluded because a field is a control and has to look like one;
-   its own rule further down gives it the raised ground. */
-html[data-skin='plain'] [style*='border-image-source']:not(.panel):not(.pane):not(.card):not(.clock):not(.chip):not(input) {
+   its own rule further down gives it the raised ground. `.menu` is excluded
+   because it floats over the page: a popup with no ground shows whatever it
+   was opened on top of straight through its own text. */
+html[data-skin='plain'] [style*='border-image-source']:not(.panel):not(.pane):not(.card):not(.clock):not(.chip):not(.menu):not(input) {
   background: none;
   box-shadow: none;
   border-width: 6px;
@@ -603,8 +605,12 @@ html[data-skin='plain'] .panel {
    as the `.panel` rule above and, being lower in the file, won. Every window in
    this app is transparent underneath — that is how the overlay works — so a
    window at seven tenths is a window you can read the desktop through, and that
-   is what it did. */
-html[data-skin='plain'] [style*='border-image-source']:not(.panel):not(.pane) {
+   is what it did.
+
+   `.menu` is excluded for the same reason at a smaller scale: a popup is opened
+   ON TOP of the row it is about, so seven tenths shows that row's own words
+   through its own. */
+html[data-skin='plain'] [style*='border-image-source']:not(.panel):not(.pane):not(.menu) {
   background-color: var(--plain-card-bg);
 }
 
