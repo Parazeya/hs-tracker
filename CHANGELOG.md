@@ -9,6 +9,39 @@ next set of changes here against the same upstream — and resets when upstream
 moves. It is what keeps the two projects' tags and installers from colliding,
 which they did on the day both reached 1.0.6.
 
+## 1.0.6-tc.2 — 2026-09-01
+
+### Fixed
+
+- A drop's announcement carries over the game, end to end. The pool of shadow
+  behind the name was shorter than the name: it reached nothing 186px from the
+  middle of a 560px window, while the line it is there to back — the rarity
+  pill, the name and the tier — runs to about 216. The outer third of every long
+  drop was set on the bare game at any setting, and turning Shading up only
+  darkened a blob between the words. Wider and flatter across the middle now,
+  and still out before the window's edge, which is what keeps the shadow from
+  being clipped into a rectangle with corners on it.
+- Size no longer applies itself twice to that shadow. The window already grows
+  with the setting, so at 200% the pool was magnified to twice the window and
+  cut off at both sides while still two thirds opaque — a straight vertical edge
+  of shade over the game. It matches the window at every size.
+- In the Modern skin the rarity's colour behind the name kept a sprite's
+  numbers: 340px across, against a pool of shadow that spans the window, under
+  an entrance that stops at half opacity. Wider and at its full opacity, so it
+  reaches the ends of the name — and no stronger, because the rarity word is set
+  in that same colour and past about 60% it becomes a ground the word cannot be
+  read off. That also takes out a flash at the end of every announcement: the
+  entrance held at 0.5 and the exit began at 1, so the colour doubled for a
+  frame at the moment it started to leave.
+- On Linux the Modern skin's glow is the skin's own again. A Linux-only rule
+  copied from the one above it did nothing but outrank the skin's override.
+
+### Changed
+
+- The drop's name is bold in the Modern skin, and the tier with it. It was the
+  one bright figure there left at the body weight — the other two skins wear a
+  pixel face with a single weight and no choice in the matter.
+
 ## 1.0.6-tc.1 — 2026-08-31
 
 ### Added
