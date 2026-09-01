@@ -23,8 +23,7 @@
 ### Removed
 
 - Where it happened, from the run card.
-- The Satanic Key counter — no item in the game carries that name. A counter
-  list that has been edited is left alone, and a deleted counter stays deleted.
+- The Satanic Key counter
 
 ### Fixed
 
