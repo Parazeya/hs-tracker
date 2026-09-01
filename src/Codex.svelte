@@ -8,7 +8,7 @@
   import { DROP_CHASE, DROP_PLACES, DROP_RATE, DROP_ZONES, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, TYPE_NAMES, tierLabel } from './items.js';
   import { itemName, locale, placeLabel, placeList, say, t, typeLabel } from './say.svelte.js';
   import { art } from './skin.svelte.js';
-  import { recall, remember } from './bridge.js';
+  import { invoke, recall, remember } from './bridge.js';
 
   /// What this row is called where the reader can see it. The record keeps the
   /// English name because that is what the tables are keyed by and what the
@@ -99,7 +99,59 @@
     return list;
   });
 
+  // ── the shopping list, from here ──────────────────────────────────────────
+  //
+  // Reading the catalogue and wanting one of these on the list is the same
+  // moment, and until now it meant changing tab and typing the name out.
+  //
+  // The name that goes on the list is the one on the screen. The list is a
+  // note the player reads back and types into the game's own search, and the
+  // game is in the language they picked too.
+  let menu = $state(null);
+  let said = $state('');
+  let saidTimer;
+
+  const MENU_W = 210;
+  const MENU_H = 62;
+
+  function openMenu(e, it) {
+    e.preventDefault();
+    // clamped, so a right-click by the window's edge does not put the menu
+    // half off it
+    menu = {
+      name: shown(it),
+      x: Math.min(e.clientX, window.innerWidth - MENU_W - 8),
+      y: Math.min(e.clientY, window.innerHeight - MENU_H - 8),
+    };
+  }
+
+  const closeMenu = () => (menu = null);
+
+  /// Add what the menu is holding, and say which of the two things happened.
+  ///
+  /// The list is read back rather than kept here: the Shopping List tab writes
+  /// it too, and whichever of them last wrote is the one that counts.
+  async function addToShopping() {
+    const name = menu?.name;
+    closeMenu();
+    if (!name) return;
+    try {
+      const list = (await invoke('get_shopping')) ?? [];
+      const already = list.some((row) => row.trim().toLowerCase() === name.toLowerCase());
+      if (!already) {
+        await invoke('set_shopping', { items: [...list, name] });
+      }
+      said = already ? say('{name} is already on the shopping list', { name })
+                     : say('{name} added to the shopping list', { name });
+    } catch (e) {
+      said = String(e);
+    }
+    clearTimeout(saidTimer);
+    saidTimer = setTimeout(() => (said = ''), 2500);
+  }
 </script>
+
+<svelte:window onkeydown={(e) => e.key === 'Escape' && closeMenu()} onblur={closeMenu} />
 
 <div class="panel">
   <div class="body">
@@ -138,6 +190,7 @@
             <div
               class="row"
               role="listitem"
+              oncontextmenu={(e) => openMenu(e, it)}
             >
               <span class="name {RARITY_CLASS[it.rarity] ?? ''}" title={it.rarity ? t(it.rarity) : t('unlisted')}>{shown(it)}</span>
               <span class="kind dim">{kindOf(it)}</span>
@@ -165,6 +218,7 @@
             <div
               class="card {RARITY_CLASS[it.rarity] ?? ''}"
               role="listitem"
+              oncontextmenu={(e) => openMenu(e, it)}
             >
               <div class="cname" title={it.rarity ? t(it.rarity) : t('unlisted')}>{shown(it)}</div>
               <div class="cline dim">{kindOf(it)}{it.tier ? ` · ${tierLabel(it.tier)}` : ''}</div>
@@ -190,6 +244,10 @@
         </div>
       {/if}
 
+      {#if said}
+        <div class="said">{said}</div>
+      {/if}
+
       <div class="foot dim">
         {#if found.length > SHOWN}
           {say('showing {n} of {total} — narrow the search to see the rest', { n: SHOWN, total: found.length })}
@@ -200,6 +258,24 @@
     </div>
   </div>
 </div>
+
+{#if menu}
+  <!-- The backdrop is what closes it: a menu that outlives the click that
+       opened it is a menu that follows the reader down the page. -->
+  <div
+    class="scrim"
+    role="presentation"
+    onclick={closeMenu}
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      closeMenu();
+    }}
+  ></div>
+  <div class="menu" style:left="{menu.x}px" style:top="{menu.y}px" style:border-image-source="url({art('chip_dark')})">
+    <div class="mname">{menu.name}</div>
+    <button class="mitem" onclick={addToShopping}>{t('Add to the shopping list')}</button>
+  </div>
+{/if}
 
 <style>
   @font-face {
@@ -383,6 +459,61 @@
   }
 
   .empty { padding: 12px 0; text-align: center; }
+  /* Above everything, and fixed to the viewport because the coordinates are
+     the cursor's. */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+  .menu {
+    position: fixed;
+    z-index: 41;
+    /* Under the art rather than instead of it: the game skin's nine-slice is
+       drawn with `fill` and covers this, and the plain skin has no art to
+       cover anything. A popup that is not opaque is unreadable over whatever
+       it was opened on. */
+    background: var(--ground-1);
+    width: 210px;
+    box-sizing: border-box;
+    border: 6px solid transparent;
+    border-image-slice: 6 fill;
+    border-image-width: 6px;
+    image-rendering: pixelated;
+    padding: 6px 4px;
+    font-family: var(--face);
+  }
+  .mname {
+    font-size: 11px;
+    color: var(--bone-3);
+    padding: 2px 8px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mitem {
+    display: block;
+    width: 100%;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    color: var(--bone-12);
+    background: none;
+    border: none;
+    padding: 5px 8px;
+    cursor: pointer;
+  }
+  .mitem:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--gold-2);
+  }
+
+  .said {
+    font-size: 11px;
+    color: var(--gold-2);
+    padding: 4px 2px 0;
+  }
+
   .foot { padding-top: 4px; font-size: 11px; }
   .dim { color: var(--bone-3); }
 
