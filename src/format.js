@@ -1,14 +1,17 @@
 // The numbers, said the same way everywhere.
 //
-// `fmt` was byte-identical in three panels and a fourth copy on the run card
-// had quietly drifted into another dialect — `2.4M` and `4.5k` on the picture
-// that leaves the app, against `2.40kk` and `4,500` in the panel it was copied
-// from, and it turned to `k` at a thousand rather than ten. The card is the
-// artefact people paste into chat, so it was the one place the app spoke a
-// language of its own.
+// One copy on purpose. Four panels and the run card all format the same figures,
+// and a second copy drifts: the card once said `2.4M` where the panel it was
+// copied from said `2.40kk`, on the one artefact that leaves the app.
 //
-// Hero Siege itself says kk and kkk rather than M and B, which is why these
-// are not the SI suffixes a general-purpose helper would reach for.
+// Hero Siege says kk and kkk rather than M and B, which is why these are not
+// the SI suffixes a general-purpose helper would reach for.
+//
+// The words go through the language runtime — `Hell 3` and `1h 24m` are read in
+// every panel — so a formatter answering in English would be the last English
+// left in a translated window.
+
+import { t, locale } from './say.svelte.js';
 
 /** 1234 -> "1,234"; 12345 -> "12.3k"; 1234567 -> "1.23kk". */
 export function fmt(n) {
@@ -19,7 +22,7 @@ export function fmt(n) {
   // below ten thousand the digits still fit, and reading them exactly is
   // worth more than the two characters saved
   if (abs >= 10_000) return `${(v / 1e3).toFixed(1)}k`;
-  return v.toLocaleString('en-US');
+  return v.toLocaleString(locale());
 }
 
 /** Seconds as a running clock: 3661 -> "1:01:01". Hours never wrap. */
@@ -38,9 +41,9 @@ export function span(secs) {
   const mins = Math.round(s / 60);
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  if (h && m) return `${h}h ${m}m`;
-  if (h) return `${h}h`;
-  return `${m}m`;
+  if (h && m) return `${h}${t('h')} ${m}${t('m')}`;
+  if (h) return `${h}${t('h')}`;
+  return `${m}${t('m')}`;
 }
 
 /// The colour each rarity is drawn in. The same five classes are declared in
@@ -53,27 +56,39 @@ export const RARITY_CLASS = {
   Unholy: 'c-unh',
 };
 
+/// How the ten rarities rank against each other, in the order the engine keeps
+/// them (see RARITIES in stats.rs). Beside the classes above for the reason
+/// those are here at all: the run card sorts by this, and a second private copy
+/// is exactly how the card's number formatting drifted from the panel's.
+export const RARITY_RANK = {
+  Unholy: 10,
+  Heroic: 9,
+  Blessed: 8,
+  Angelic: 7,
+  Satanic: 6,
+  Mythic: 5,
+  Set: 4,
+  Rare: 3,
+  Superior: 2,
+  Common: 1,
+};
+
 /// The five the app counts, in the order every panel lists them.
 export const RARITIES = ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'];
 
 /// What the game calls the difficulty a character is on.
 ///
-/// The table was Normal / Nightmare / Hell and stopped there, so a character on
-/// the fourth difficulty was shown as "D3" — which is what a maxed season 9
-/// character reports, and Inferno is what sits after Hell. That gap is the bug
-/// this fixes.
-///
-/// Season 10 (21 August 2026) retires Nightmare and splits Hell into five
-/// grades, so these numbers will mean different names. That is not written in
-/// yet on purpose: the packets carry a season number whose relation to the
-/// season's public name is not established — a character playing season 9
-/// reports 10 — and naming a difficulty wrongly is worse than naming it D4,
-/// because a wrong name looks like the app understood.
+/// Falls back to `D<n>` rather than guessing. Season 10 (21 August 2026) retires
+/// Nightmare and splits Hell into five grades, so these numbers will come to
+/// mean different names — which is deliberately not written in yet: the packets
+/// carry a season number whose relation to the season's public name is not
+/// established (a character playing season 9 reports 10), and a wrong name looks
+/// like the app understood where `D4` does not.
 export function difficulty(n, hellSub = 0) {
   if (n == null) return null;
   const name = ['Normal', 'Nightmare', 'Hell', 'Inferno'][n] ?? `D${n}`;
   // Hell is five difficulties wearing one name, and the game says which in a
   // field of its own. Only shown on Hell: it carries a value on characters who
   // are not there, and reading it out then would be inventing a fact.
-  return name === 'Hell' && hellSub >= 1 && hellSub <= 5 ? `Hell ${hellSub}` : name;
+  return name === 'Hell' && hellSub >= 1 && hellSub <= 5 ? `${t('Hell')} ${hellSub}` : t(name);
 }

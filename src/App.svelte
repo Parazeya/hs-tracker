@@ -1,4 +1,5 @@
 <script>
+  import { say, t } from './say.svelte.js';
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen, native } from './bridge.js';
@@ -93,15 +94,14 @@
         mailTimer = setTimeout(() => (mailFresh = false), 20000);
       }),
       listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
-      // The rotation, from the backend, which only says so for a real one —
-      // never for the zone this app has just learned about, and never for one
-      // whose buffs the player did not ask to hear about. That last is decided
-      // there rather than here: the pillar asks the same question, and a rule
-      // written out twice in two languages is a rule that comes to disagree.
+      // The rotation, from the backend, which fires only for a real one — not
+      // for the zone this app has just learned about, and not for one whose
+      // buffs the player did not ask about. That filtering lives there rather
+      // than here because the pillar asks the same question, and one rule
+      // written in two languages comes to disagree with itself.
       //
-      // Chime and pulse answer to the one switch: they are two halves of the
-      // same alert. The pillar has its own, because being shown and being told
-      // are not the same want.
+      // Chime and pulse share a switch, being two halves of one alert. The
+      // pillar has its own: being shown and being told are different wants.
       listen('zone-changed', () => {
         if (cfg?.zone?.enabled === false) return;
         playSound('zone');
@@ -112,9 +112,9 @@
       listen('settings-changed', (e) => (cfg = e.payload)),
       listen('strip-hover', (e) => {
         nearStrip = !!e.payload;
-        // Walking away disarms Reset. The question used to be written on a wide
-        // button; on an icon it is a blink, and a blink you have walked away
-        // from is a control still holding a click you have forgotten giving it.
+        // Walking away disarms Reset. On an icon the armed state is a blink
+        // rather than a sentence, and a blink the cursor has left is a control
+        // still holding a click nobody remembers giving it.
         if (!nearStrip) disarm();
       }),
       listen('sounds-changed', async (e) => (urls[e.payload] = await soundUrl(e.payload))),
@@ -156,30 +156,28 @@
 
   // The game says outright when the character is standing in the satanic zone,
   // and that is what colours the name here. The flag rides the game's own state
-  // packet, which since the August 2026 patch arrives about twenty times less
-  // often than it used to, so it is held against the act — which every save
-  // write states. Walk into another act and the colour goes, even though no
-  // heartbeat has said so yet.
+  // packet, which since the August 2026 patch arrives rarely, so it is held
+  // against the act — which every save states. Walking into another act clears
+  // the colour without waiting for a heartbeat.
   let satanicHere = $derived(
     Boolean(snap?.satanic_here && snap?.act && zoneAct(snap?.satanic_zone?.zone) === snap.act)
   );
 
   // The window is only ever as tall as the panel inside it. Measuring here and
-  // telling the backend keeps the two in step whatever rows are switched on —
-  // and means adding a row to this file needs nothing done anywhere else.
-  // `bind:this` writes this, and an effect reads it. As a plain `let` that
-  // works by the order the two happen to run in; behind an `{#if}` it would
-  // stop working with nothing to see — the overlay would simply never resize
-  // itself again.
+  // telling the backend keeps the two in step whatever rows are switched on, so
+  // adding a row needs nothing done anywhere else.
+  //
+  // `$state`, not a plain `let`: `bind:this` writes it and an effect reads it,
+  // and a plain binding would work only by the order the two happen to run in —
+  // behind an `{#if}` the overlay would silently stop resizing.
   let panelEl = $state(null);
   $effect(() => {
     if (!panelEl) return;
     const report = () => {
       const { width, height } = panelEl.getBoundingClientRect();
-      // The width goes with it now. It used to be a constant on both sides, and
-      // on a machine whose text came out wider the chips — fixed widths, no
-      // wrapping — spilled over the row instead of the panel giving way. See
-      // "Squished Panel".
+      // The width goes with it. Held as a constant on both sides, a machine
+      // whose text comes out wider spills the chips — fixed widths, no wrapping
+      // — over the row instead of the panel giving way. See "Squished Panel".
       if (height > 0) invoke('fit_overlay', { height, width }).catch(() => {});
     };
     const observer = new ResizeObserver(report);
@@ -192,16 +190,19 @@
     const s = snap?.status ?? '';
     if (s.startsWith('capturing')) {
       const [, iface, hosts, dropped] = s.split('|');
-      const loss = Number(dropped) > 0 ? `, ${dropped} packets dropped` : '';
-      return { cls: Number(dropped) > 0 ? 'warn' : 'ok', tip: `Capturing: ${iface} (${hosts} hosts${loss})` };
+      const loss = Number(dropped) > 0 ? say(', {n} packets dropped', { n: dropped }) : '';
+      return {
+        cls: Number(dropped) > 0 ? 'warn' : 'ok',
+        tip: say('Capturing: {iface} ({hosts} hosts{loss})', { iface, hosts, loss }),
+      };
     }
-    if (s === 'waiting-for-game') return { cls: 'warn', tip: 'Waiting for Hero Siege to start' };
-    if (s === 'npcap-missing') return { cls: 'err', tip: 'Npcap is not installed — https://npcap.com' };
+    if (s === 'waiting-for-game') return { cls: 'warn', tip: t('Waiting for Hero Siege to start') };
+    if (s === 'npcap-missing') return { cls: 'err', tip: t('Npcap is not installed — https://npcap.com') };
     if (s === 'no-access')
-      return { cls: 'err', tip: 'Npcap will not let this app read traffic — run as administrator, or reinstall it without “Restrict to Administrators”' };
+      return { cls: 'err', tip: t('Npcap will not let this app read traffic — run as administrator, or reinstall it without “Restrict to Administrators”') };
     // elsewhere libpcap is always there; what is missing is the right to use it
-    if (s === 'no-capture') return { cls: 'err', tip: 'No capture device — the binary needs cap_net_raw' };
-    return { cls: 'err', tip: 'No suitable network interface' };
+    if (s === 'no-capture') return { cls: 'err', tip: t('No capture device — the binary needs cap_net_raw') };
+    return { cls: 'err', tip: t('No suitable network interface') };
   });
 
   const shown = (id) => !(cfg?.hidden ?? []).includes(id);
@@ -238,8 +239,8 @@
   }
 
   /// Nothing stays armed across a change of mind. The lock does not go through
-  /// `danger`, so arming Reset and then locking used to leave the question
-  /// standing behind a strip the poller never reported leaving.
+  /// `danger`, so without this, arming Reset and then locking leaves the
+  /// question standing behind a strip the poller never reports leaving.
   const disarm = () => {
     clearTimeout(armTimer);
     armed = null;
@@ -250,6 +251,10 @@
   // The strip, under the lock. These were the right-click menu, which was a menu
   // nobody could find: nothing on the panel ever hinted it was there.
   const ENTRIES = [
+    // The titles are the English, not a translation: this array is built once
+    // when the script runs — before the language file has been fetched — so a
+    // t() in here would freeze at English and never move again. It is called
+    // where the title is printed instead.
     { key: 'dashboard', icon: 'dashboard', title: 'Dashboard', run: () => invoke('full_mode') },
     { key: 'hide', icon: 'minimize', title: 'Hide to tray', run: () => invoke('hide_window') },
     { key: 'reset', icon: 'reset', title: 'Reset stats', danger: true, run: reset },
@@ -290,10 +295,10 @@
         class:has={snap?.has_mail}
         class:fresh={mailFresh && snap?.has_mail}
         style:border-image-source="url({art('chip_dark')})"
-        title={snap?.has_mail ? 'there is mail waiting' : 'no mail'}
+        title={snap?.has_mail ? t('there is mail waiting') : t('no mail')}
       >
         <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
-        <span class="val">{snap?.has_mail ? 'Mail!' : 'No mail'}</span>
+        <span class="val">{snap?.has_mail ? t('Mail!') : t('No mail')}</span>
       </div>
       <!-- The third cell of the session row, which stood empty from the day the
            magic-find figure came out of it: every row on this panel is
@@ -310,7 +315,7 @@
       <div
         class="chip md"
         style:border-image-source="url({art('chip_dark')})"
-        title="bosses put down this session"
+        title={t("bosses put down this session")}
       >
         <img src={icon('boss')} alt="" class="ic" />
         <span class="val">{fmt(tallied('boss'))}</span>
@@ -320,20 +325,20 @@
 
   {#if shown('items')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="Angelic | Unholy">
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={t("Angelic | Unholy")}>
         <img src={icon('chest')} alt="" class="ic" />
         <span class="val">
           <span class="c-ang">{fmt(item('Angelic').total)}</span>
           | <span class="c-unh">{fmt(item('Unholy').total)}</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Satanic | per hour">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("Satanic | per hour")}>
         <span class="val">
           <span class="c-sat">{fmt(item('Satanic').total)}</span>
-          | <span class="c-sat">{fmt(item('Satanic').per_hour)}/h</span>
+          | <span class="c-sat">{fmt(item('Satanic').per_hour)}{t('/h')}</span>
         </span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="Heroic | Set">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("Heroic | Set")}>
         <span class="val">
           <span class="c-her">{fmt(item('Heroic').total)}</span>
           | <span class="c-set">{fmt(item('Set').total)}</span>
@@ -344,36 +349,35 @@
 
   {#if shown('gold')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="gold earned this session">
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={t("gold earned this session")}>
         <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
         <span class="val">+{fmt(snap?.gold?.earned)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="gold per hour">
-        <span class="val">{fmt(snap?.gold?.per_hour)}/h</span>
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("gold per hour")}>
+        <span class="val">{fmt(snap?.gold?.per_hour)}{t('/h')}</span>
       </div>
-      <!-- Kills is a statistic and has stopped standing in for the button. It
-           used to render only when the Reset button was switched off or the
-           overlay was ghosted, which made the panel's one combat figure a thing
-           you saw by accident. -->
+      <!-- Kills is a statistic, not a stand-in for the button. Rendering it
+           only when the Reset button is off or the overlay is ghosted makes the
+           panel's one combat figure something you see by accident. -->
       <div class="chip md" style:border-image-source="url({art('chip_dark')})">
         <span class="dot {status.cls}"></span>
-        <span class="val">{fmt(snap?.kills?.earned)} kills</span>
+        <span class="val">{fmt(snap?.kills?.earned)} {t('kills')}</span>
       </div>
     </div>
   {/if}
 
   {#if shown('xp')}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title="experience earned this session">
+      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={t("experience earned this session")}>
         <img src={icon('xp')} alt="" class="ic" />
         <span class="val">+{fmt(snap?.xp?.earned)}</span>
       </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title="experience per hour">
+      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("experience per hour")}>
         <span class="val">{fmt(snap?.xp?.per_hour)}/h</span>
       </div>
-      <!-- The cell the Reset button used to end the row with. The button was the
-           only one that came and went — ghost mode draws none — so the panel
-           finished on a gap exactly when it was pinned over the game.
+      <!-- The cell that ends the row. The Reset button was the only chip that
+           came and went — ghost mode draws none — so the panel finished on a gap
+           exactly when it was pinned over the game.
 
            SS is the top tier, and the number a run is judged by whatever colour
            the drops came out in. The backend has counted every tier all along;
@@ -383,7 +387,7 @@
       <div
         class="chip md"
         style:border-image-source="url({art('chip_dark')})"
-        title="SS drops this session — the top tier, counted whatever the rarity"
+        title={t("SS drops this session — the top tier, counted whatever the rarity")}
       >
         <span class="grade">SS</span>
         <span class="val">{fmt(snap?.ss)}</span>
@@ -399,7 +403,7 @@
             class="buff"
             src={b ? b.icon : defaultBuffIcon}
             alt=""
-            title={b ? `${b.name} : ${b.desc}` : 'Satanic Zone'}
+            title={b ? `${b.name} : ${b.desc}` : t('Satanic Zone')}
           />
         {/each}
       </div>
@@ -437,9 +441,9 @@
       style:--i="url({art(locked ? 'lock_gold' : 'lock_pale')})"
       onclick={toggleLock}
       title={locked
-        ? 'Locked — click to unlock (Ctrl+Shift+L)'
-        : 'Click to lock: the overlay becomes click-through except this strip (Ctrl+Shift+L)'}
-      aria-label={locked ? 'unlock the overlay' : 'lock the overlay'}
+        ? t('Locked — click to unlock (Ctrl+Shift+L)')
+        : t('Click to lock: the overlay becomes click-through except this strip (Ctrl+Shift+L)')}
+      aria-label={locked ? t('unlock the overlay') : t('lock the overlay')}
     >
     </button>
     {#each ENTRIES as e}
@@ -449,8 +453,8 @@
         style:--i="url({art(e.icon)})"
         style:--i-hover="url({art(`${e.icon}_hover`)})"
         onclick={() => (e.danger ? danger(e.key, e.run) : e.run())}
-        title={armed === e.key ? `${e.title} — click again` : e.title}
-        aria-label={e.title}
+        title={armed === e.key ? `${t(e.title)}${t(' — click again')}` : t(e.title)}
+        aria-label={t(e.title)}
       >
       </button>
     {/each}
@@ -492,7 +496,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 13px;
     color: var(--bone-6);
   }
@@ -700,8 +704,8 @@
     overflow: hidden;
     /* 140 + 240 is 380 in a 404 box, so this plate needs the 24px slack pushed
        in front of it to keep its right edge on the same boundary as the chips
-       above. It used to come from `space-between` on the row, which the short
-       rows above can no longer afford. */
+       above. `space-between` on the row would do it, but the short rows above
+       cannot afford that. */
     margin-left: auto;
     width: 240px;
     height: 29px;

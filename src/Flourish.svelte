@@ -7,7 +7,8 @@
   // so they are used as masks and painted, which is what lets one set of frames
   // serve every rarity.
   import { appWindow, invoke, listen, native } from './bridge.js';
-  import { itemName, tierLabel, typeLabel } from './items.js';
+  import { tierLabel } from './items.js';
+  import { itemName, nameOf, satanicZoneName, t, typeLabel } from './say.svelte.js';
   import { buffInfo, zoneName } from './buffs.js';
   import { art } from './skin.svelte.js';
 
@@ -134,7 +135,7 @@
   let tint = $derived(RARITY_TINT[drop?.rarity] ?? '#f0e0b0');
   let label = $derived.by(() => {
     if (!drop || drop.kind === 'zone') return '';
-    if (drop.name) return drop.name;
+    if (drop.name) return nameOf(drop.name, drop.item_type, drop.item_id, drop.weapon_type);
     const known = itemName(drop.item_type, drop.item_id, drop.weapon_type);
     return known ?? typeLabel(drop.item_type, drop.weapon_type);
   });
@@ -170,16 +171,16 @@
           <div class="zbody">
             <div class="zkind">
               <img src={art('satanic_star')} alt="" />
-              <span class="txt">Satanic Zone</span>
+              <span class="txt">{t("Satanic Zone")}</span>
               <img src={art('satanic_star')} alt="" />
               {#if drop.debuffs?.length}
                 <!-- the buffs are the decision, the curses are the small print:
                      spelling them out doubles the height for something nobody
                      picks a zone by -->
-                <span class="zcurse">{drop.debuffs.length} curses</span>
+                <span class="zcurse">{drop.debuffs.length} {t('curses')}</span>
               {/if}
             </div>
-            <div class="zplate"><span class="zname">{zoneName(drop.zone)}</span></div>
+            <div class="zplate"><span class="zname">{satanicZoneName(drop.zone, zoneName(drop.zone))}</span></div>
             {#if zbuffs.length}
               <div class="zbuffs">
                 <!-- keyed by position: the ids come from the packet and
@@ -188,7 +189,7 @@
                 {#each zbuffs as b, i (i)}
                   <div class="zbuff" class:more={b.more}>
                     {#if b.more}
-                      <span class="bname">+{b.more} more</span>
+                      <span class="bname">+{b.more} {t('more')}</span>
                     {:else}
                       <img src={b.icon} alt="" />
                       <span class="bname">{b.name}</span>
@@ -197,7 +198,7 @@
                 {/each}
               </div>
             {:else}
-              <div class="znone">no buffs this rotation</div>
+              <div class="znone">{t("no buffs this rotation")}</div>
             {/if}
           </div>
         </div>
@@ -214,7 +215,7 @@
       <div class="sparks over"></div>
       {#if drop}
         <div class="caption">
-          <span class="rar">{drop.rarity}</span>
+          <span class="rar">{t(drop.rarity)}</span>
           <span class="name">{label}</span>
           {#if drop.tier > 0}<span class="grade">{tierLabel(drop.tier)}</span>{/if}
         </div>
@@ -227,8 +228,8 @@
     <!-- while it is being placed the window takes the mouse, so it can be
          dragged, and says what it is -->
     <div class="place" data-tauri-drag-region>
-      <div class="hint" data-tauri-drag-region>Drag this box where you want drops announced</div>
-      <button class="done" onclick={stopPlacing}>Done — or press Esc</button>
+      <div class="hint" data-tauri-drag-region>{t("Drag this box where you want drops announced")}</div>
+      <button class="done" onclick={stopPlacing}>{t("Done — or press Esc")}</button>
     </div>
   {/if}
 </div>
@@ -252,7 +253,7 @@
     position: relative;
     width: 100vw;
     height: 100vh;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     overflow: hidden;
   }
 

@@ -79,8 +79,8 @@ for bid, part in BUFF_SPRITES.items():
     im.save(BUFFS / f"{bid}.png")
 print("buffs:", len(BUFF_SPRITES))
 
-# The tray icon used to be the game's coin, exported here. It is the app's own
-# mark now — tools/gen_icon.py owns it, and this file must not write over it.
+# The tray icon is the app's own mark, and tools/gen_icon.py owns it. This file
+# must not write over it.
 
 # settings-window bits: square button, gold token, checkbox states, padlock
 dw.sprite_frames("UI_Button_Square_spr")[0].save(DEST / "square.png")
@@ -112,6 +112,5 @@ for i, fname in enumerate(["check_off.png", "check_on.png"]):
     bright.save(DEST / fname)
 print("settings sprites done")
 
-# The app icon used to be made here from the gold coin. It is the app's own mark
-# now — tools/gen_icon.py owns icon.png, the .ico and the tray, and this file
-# must not write over them.
+# The app icon is the app's own mark. tools/gen_icon.py owns icon.png, the .ico
+# and the tray, and this file must not write over them.

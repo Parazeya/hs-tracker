@@ -19,13 +19,9 @@ pub struct Currency {
 impl Currency {
     /// The one purse with anything in it, when exactly one has.
     ///
-    /// Which purse a character banks into is stated by its save, and a save
-    /// arrives when the game feels like saving — until then the balance cannot
-    /// be read at all, and a player who has just started sees a bank of zero
-    /// while the session counts up beside it. A packet with money in a single
-    /// purse can only be that character's. Several, and there is nothing to go
-    /// on, so it keeps waiting: showing the wrong purse is worse than showing
-    /// none, and that is a mistake this app has made before.
+    /// The save states which purse a character banks into, but it arrives only
+    /// when the game saves. Until then a single funded purse is unambiguous and
+    /// several are not, so this answers `None` rather than guess.
     pub fn only_purse(&self) -> Option<&'static str> {
         let mut found = None;
         for (name, value) in
@@ -59,20 +55,17 @@ pub enum GameEvent {
     XpGain(i64),
     /// Inventory fingerprints that just left the player's bags.
     ///
-    /// Dropping a worn item on the floor and picking it back up is two ordinary
-    /// inventory operations, and the second is indistinguishable from finding
-    /// the thing — same shape, same named flag, same identity. The only thing
-    /// that tells them apart is having watched the first: the fingerprint the
-    /// game gives an item survives the round trip exactly, so an addition of one
-    /// the player has just let go of is a return.
+    /// An item dropped and picked back up arrives as an ordinary addition —
+    /// same shape, same named flag, same identity as a find. The fingerprint
+    /// survives the round trip unchanged, so an addition of one the player has
+    /// just let go of is a return.
     ItemsLetGo(Vec<String>),
     /// The account this client is logged in as.
     ///
-    /// Every fingerprint the game hands out carries the account it was made
-    /// for in its second field, and it keeps it for the life of the item — so
-    /// knowing our own number is the whole of telling our things from other
-    /// people's. The client says it in nearly every request it sends, which is
-    /// why this is worth reading rather than deducing.
+    /// A fingerprint's second field is the account it was minted for and keeps
+    /// it for the life of the item, so this number is the whole of telling our
+    /// items from other players'. The client states it in nearly every request,
+    /// so it is read rather than deduced.
     WhoseAccount(String),
     Account {
         experience: i64,
@@ -123,13 +116,11 @@ pub enum GameEvent {
     },
     ItemAdded {
         rarity: Value,
-        /// An Odyssey item the game did not flag as named. Odyssey keeps its
-        /// own item space, so neither its packet nor a name read out of the
-        /// seasonal tables says anything about what this is worth. A named
-        /// Odyssey item is exempt: `c == 1` is the game's own claim that this
-        /// is that item, and the tables are right about it whatever mode
-        /// dropped it — which is what keeps the Satanic count on an Odyssey
-        /// character correct.
+        /// An Odyssey item the game did not flag as named. Odyssey has an item
+        /// space of its own, so neither the packet nor the seasonal tables say
+        /// what this one is worth. `c == 1` is exempt: that is the game's own
+        /// claim that this is the named item, and the tables hold for it
+        /// whatever mode dropped it.
         unscaled: bool,
         mf: bool,
         tier: i64,
@@ -163,20 +154,19 @@ const MAX_SPAN: usize = 256 << 10;
 /// this is the ceiling that stops a buffer of them from stalling capture.
 const SCAN_BUDGET: usize = 8;
 /// A carried tail is the truncated end of one message, so the cap has to clear
-/// the biggest message the game sends: 35,674 bytes in a 16,104-message capture.
-/// At 8 KB it did not, and the tail of every large answer — which is to say
-/// every answer that lists drops — was refused on length alone.
+/// the largest the game sends — the biggest observed is 35,674 bytes, and the
+/// answers that list drops are the large ones.
 ///
-/// It is not what tells a real tail from framing noise any more; see
-/// `opens_a_value`. It is only a bound on what one flow may hold.
+/// It is only a bound on what one flow may hold; `opens_a_value` is what tells
+/// a real tail from framing noise.
 const CARRY_CAP: usize = 64 << 10;
 const CARRY_ROUNDS: u8 = 3;
 const BUF_TTL: Duration = Duration::from_secs(15);
 /// What we send is only flushed when the ack changes, and the ack only changes
 /// when the server sends something back. Character saves — the one source of
-/// kills and experience — would sit here until the next server burst, which is
-/// why counters used to move only on a zone change. A quiet buffer is flushed
-/// on its own.
+/// kills and experience — would then sit here until the next server burst, so
+/// the counters would move only on a zone change. A quiet buffer is flushed on
+/// its own.
 const IDLE_FLUSH: Duration = Duration::from_millis(250);
 
 struct Pending {
@@ -187,8 +177,8 @@ struct Pending {
 /// One side of one TCP connection: source address and both ports. The game
 /// holds several connections to the same server at once — a busy one (the
 /// world) and a quiet one (character saves). Keyed by address alone they share
-/// a buffer, and during a fight the world traffic shreds the save that is being
-/// assembled: exactly the case where counters used to stop moving.
+/// a buffer, and during a fight the world traffic shreds the save being
+/// assembled — which is exactly when the counters must not stop moving.
 pub type Flow = (IpAddr, u16, u16);
 
 /// Payloads are buffered per flow and ack, and flushed when the ack from that
@@ -243,22 +233,15 @@ impl Reassembler {
     }
 
     fn finish(&mut self, flow: Flow, flushed: Vec<u8>) -> Vec<u8> {
-        // Stitch the previous tail back on, and count how many flushes it has
-        // waited. The count has to come out of the map with the tail:
-        // recomputing it from whether the tail was empty — which is what this
-        // did — made it 0 or 1 forever, so it never reached CARRY_ROUNDS and
-        // the give-up below could never fire.
+        // Stitch the previous tail back on. The flush count travels in the map
+        // with it — derived from whether the tail was empty it would stay at 0
+        // or 1 and never reach CARRY_ROUNDS.
         //
-        // Giving up used to mean dropping the tail. That threw away more than
-        // the stray brace it was aimed at: everything the brace was holding
-        // went with it. A `[` or `{` in binary framing is followed by whatever
-        // the stream sent next, and if a drop answer sat behind it, three
-        // flushes later the drop was gone — never counted, never chimed, never
-        // journalled, and nothing said so.
-        //
-        // So the bytes are kept and parsed instead. What was behind the opener
-        // is read on this pass, and no new carry is taken from it: carrying
-        // again would hand the same opener another three flushes of hostages.
+        // Giving up keeps the bytes and parses them rather than dropping the
+        // tail: a stray `[` or `{` in binary framing is followed by whatever
+        // the stream sent next, so discarding the tail discards any message
+        // sitting behind the opener. What was behind it is read on this pass,
+        // and no new carry is taken from it.
         let (mut data, rounds, giving_up) = match self.carry.remove(&flow) {
             Some((tail, rounds)) if rounds < CARRY_ROUNDS => (tail, rounds, false),
             Some((tail, _)) => (tail, 0, true),
@@ -269,18 +252,11 @@ impl Reassembler {
         // Is the unterminated value at the end a real message, or a framing
         // byte that happens to be a brace?
         //
-        // This used to ask whether anything complete followed the opener, on
-        // the reasoning that a truncated message is the last thing in the
-        // stream. It is — but the test cannot see that, because it reads what
-        // is INSIDE the truncated message: a drop answer whose first item
-        // object has already closed looks exactly like a stray brace with a
-        // whole message after it. Every split message with a closed value in it
-        // was thrown away, and a drop cut this way is never counted, never
-        // chimed and never journalled — nothing later recovers it.
-        //
-        // The two cannot be told apart by brackets at all: a stray brace never
-        // closes either, so everything after it counts as nested. What tells
-        // them apart is the next byte, which `opens_a_value` reads.
+        // Bracket structure cannot answer it. A stray brace never closes
+        // either, so everything after it counts as nested, and a truncated drop
+        // answer whose first item object has already closed is indistinguishable
+        // from a stray brace with a whole message behind it. The byte after the
+        // opener is the discriminator — see `opens_a_value`.
         let cut = unterminated_start(&data);
         let truncated = !giving_up
             && cut < data.len()
@@ -316,15 +292,12 @@ impl Reassembler {
 
 /// Whether an unterminated opener reads as the beginning of a real value.
 ///
-/// The game's messages are JSON objects whose first member is a quoted key. The
-/// framing bytes a stray brace lives in are binary, and a `{` in them is
-/// followed by whatever byte came next — `\x02` in the capture this is tested
-/// against. So the byte after the opener is the discriminator that the bracket
-/// structure cannot give: an object must be followed by a quote or its own
+/// The game's messages are JSON objects whose first member is a quoted key,
+/// while the framing bytes a stray brace lives in are binary and can be
+/// followed by anything. So an object must be followed by a quote or its own
 /// close, and an array by something that can start a value.
 ///
-/// A tail that ends at the opener itself is a truncation too, and the most
-/// ordinary one there is.
+/// A tail that ends at the opener itself is an ordinary truncation.
 fn opens_a_value(tail: &[u8]) -> bool {
     let Some(&opener) = tail.first() else { return false };
     let mut i = 1;
@@ -516,17 +489,15 @@ fn parse_query_value(v: String) -> Value {
     Value::String(v)
 }
 
-/// Balanced-bracket scan: a flushed buffer often carries SEVERAL concatenated
-/// JSON messages; a greedy first-to-last span drops all of them.
+/// Balanced-bracket scan: a flushed buffer often carries several concatenated
+/// JSON messages, and a greedy first-to-last span keeps only the outermost.
 ///
-/// An opener that never closes costs a walk to the end of the buffer and the
-/// scan resumes at the next byte, so a buffer full of them cost the square of
-/// its length. The filter captures every plaintext TCP byte on the machine,
-/// the buffer runs to `BUF_CAP`, and this runs on the capture thread between
-/// `next_packet` calls: 1 MB of `{` measured 536 seconds in release, nine
-/// minutes in which the pcap ring overflows and the game's own packets are
-/// lost. The budget holds one flush to a constant multiple of its own length
-/// whatever the bytes turn out to be.
+/// An opener that never closes costs a walk to the end of the buffer before the
+/// scan resumes at the next byte, so a buffer of them is quadratic in its
+/// length — a megabyte of `{` takes minutes in release, long enough for the
+/// pcap ring to overflow and lose the game's own packets. This runs on the
+/// capture thread between `next_packet` calls, so the budget bounds one flush
+/// to a constant multiple of its length whatever the bytes are.
 fn extract_json_values(bytes: &[u8]) -> Vec<Value> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -607,16 +578,11 @@ fn json_end(b: &[u8], start: usize, walked: &mut usize) -> Option<usize> {
 
 /// Which act the character is in, out of the save.
 ///
-/// The exact room is only ever in `game_state`, and the game sends that when it
-/// feels like it — in town, and when a panel is opened. A player grinding one
-/// zone can go a thousand packets without one, which left the zone panel saying
-/// "waiting for the game" for as long as they kept playing.
-///
-/// The save has no room in it, but it does carry `act_previous`, whose second
-/// element is the act. Checked against every room the same capture reported:
-/// `[1,7,..]` before `Act_07_05`, `[1,5,..]` before `Act_05_03`, `[1,4,..]`
-/// before `Town_04_rm`, and eight more, without an exception. It is coarser
-/// than a room, and it arrives with every save, which is often.
+/// The exact room is only in `game_state`, which the game sends in town and
+/// when a panel is opened — a player grinding one zone can go a thousand
+/// packets without one. The save carries no room, but its `act_previous` has
+/// the act as its second element, and a save arrives often. Coarser than a
+/// room, and always available.
 fn act_of(d: &Value) -> i64 {
     let from = |v: Option<&Value>| match v {
         Some(Value::Array(xs)) => xs.get(1).and_then(as_int).unwrap_or(0),
@@ -710,27 +676,20 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
         }));
     }
     if has(d, XP_TOTAL_FIELDS) {
-        events.push(GameEvent::XpGain(xp_gain(d)));
+        events.push(GameEvent::XpGain(guild_share_to_character(xp_gain(d))));
     }
-    // The client's heartbeat, base64'd: where the character stands and how it
-    // stands there. It arrives every few seconds, which is what makes it worth
-    // reading — the character save, where most of these numbers also live,
-    // arrives when the game feels like saving.
     // The client's heartbeat, base64'd, in either of the two shapes it takes.
+    // It arrives every few seconds, where the character save arrives only when
+    // the game saves.
     //
-    // One carries magic find and a satanic-zone flag; the other carries a
-    // session's telemetry — how long it has been logged in, how many pickups,
-    // which panel is open — and no magic find at all. They are not two versions
-    // of one packet, they are two reports about the same session, and which one
-    // arrives depends on where the character is: over a whole capture the first
-    // came 52 times from a town and once from anywhere else, while the second
-    // came 86 times and every single one of them from an act.
+    // One shape carries magic find and a satanic-zone flag and is sent from
+    // town; the other carries session telemetry — time logged in, pickups, the
+    // open panel — no magic find, and is sent from an act. Both are reports
+    // about the same session, so the second is the only one that says where the
+    // player is while they are playing, and it must not be refused.
     //
-    // So the second is the only thing that says where the player is while they
-    // are actually playing. Refusing it — which reading `reason_id` as "this is
-    // a crash report" did — leaves the whole zone panel waiting forever. Its
-    // `region` says "ERROR" and its `season` says 0, which is what made it look
-    // like wreckage; its room and its levels track the real ones exactly.
+    // Its `region` reads "ERROR" and its `season` 0. Neither means the packet
+    // is wreckage: its room and its levels track the real ones exactly.
     if let Some(Value::String(blob)) = field(d, &["game_state", "gameState"]) {
         if let Some(state) = b64_json(&blob) {
             if let Some(room) = field_ref(&state, &["room"]).and_then(|v| v.as_str()) {
@@ -760,13 +719,11 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
     }
     // A whole word, not a substring, and not something a person said.
     //
-    // "Lost Master's Platemail" is a real Set item and the server announces Set
-    // finds to everybody on the shard, so a stranger's drop was ringing our
-    // chime; whole words settled that. They do not settle a player typing the
-    // word, and in one capture three did — "mail", "mailbox", "mailbox in
-    // town" — each of which rang the chime and latched the indicator for
-    // everyone on the shard. It was reported by a player on Bloodpact, a mode
-    // with no mailbox in it at all.
+    // "Lost Master's Platemail" is a Set item, and the server announces Set
+    // finds to the whole shard — matched as a substring, a stranger's drop rang
+    // the mail chime. Whole words settle that; they do not settle a player
+    // typing "mail" or "mailbox" in chat, which is why chat is excluded here as
+    // well.
     if !is_chat(d) && (says_mail(&message) || has(d, MAIL_FIELDS)) {
         events.push(GameEvent::Mail(mail_is_present(d)));
     }
@@ -821,35 +778,62 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
             ),
             tallies: tallies(d),
         });
-    // The guild share of somebody else's experience, and the one event here
-    // with no shape of its own to check against: a single field called `xp`.
+    // The guild share of somebody else's experience — the one event with no
+    // shape of its own to check against, just a field called `xp`.
     //
-    // Field names are matched with the punctuation and case stripped out, which
-    // is what lets `experience_gained` and `experienceGained` be one rule — and
-    // it also means any two-letter key that normalises to `xp` matches. The
-    // capture filter takes every plaintext message this machine sends or
-    // receives, so that is not only the game: a junk packet from another device
-    // on the same network carried `"Xp\u{fffd}"`, matched, and was the only
-    // experience event in twenty-three thousand messages. It came to nothing
-    // because its value was not a number, but a number would have been divided
-    // by the guild share and credited.
+    // Field names are matched with case and punctuation stripped, so that
+    // `experience_gained` and `experienceGained` are one rule; that also means
+    // any key normalising to `xp` matches. The capture filter takes every
+    // plaintext message on the machine, not only the game's, so a stray key
+    // from another program can reach here and be credited as experience.
     //
-    // So this one is held to the same standard as the item path: it has to
-    // arrive in something shaped like a game message. Every one of them carries
-    // a `status` or a `message`; the junk packet carried two fields and neither.
+    // Hence the same standard as the item path: it has to arrive in something
+    // shaped like a game message, and every one of those carries a `status` or
+    // a `message`.
     } else if !full_account
         && !identity_account
         && (has(d, &["status"]) || !msg_text(d).is_empty())
         && has(d, XP_GAIN_FIELDS)
         && !has(d, XP_TOTAL_FIELDS)
     {
-        events.push(GameEvent::XpGain(xp_gain(d)));
+        let raw = xp_gain(d);
+        events.push(GameEvent::XpGain(if is_quest_reward(d) {
+            raw
+        } else {
+            guild_share_to_character(raw)
+        }));
     }
     events
 }
 
 fn has_currency_totals(d: &Value) -> bool {
     ["GSS", "GSH", "GNS", "GNH", "GBP"].iter().any(|f| has(d, &[f]))
+}
+
+/// Guild XP is fifteen percent of the character XP that earned it, so the share
+/// scales back up to what the character got.
+///
+/// Only the guild share is scaled. A quest reward arrives in the same shape —
+/// `status`, a message, a field called `xp` — but is already character XP, and
+/// scaling it credits nearly seven times its value. The save that follows
+/// cannot take that back: it corrects upwards only. `is_quest_reward` is the
+/// discriminator.
+fn guild_share_to_character(guild: i64) -> i64 {
+    // Nearly seven times larger, so a share near the top of the range does not
+    // survive the scaling. Anything that does not fit is not a share the game
+    // sent: the capture filter takes every plaintext byte on the machine, and a
+    // stray key normalising to `xp` can carry any number at all. A cast alone
+    // saturates such a number to `i64::MAX`, which the counters then add up.
+    let scaled = guild as f64 / 0.15;
+    if !scaled.is_finite() || scaled >= i64::MAX as f64 {
+        return 0;
+    }
+    scaled as i64
+}
+
+/// A quest paying out is not a guild share; `questId` is what says so.
+fn is_quest_reward(d: &Value) -> bool {
+    has(d, &["questId", "quest_id", "questID"])
 }
 
 /// XP gain is the first number in the message text, else the xp field.
@@ -877,25 +861,19 @@ const SELF_NUMBERED: [i64; 5] = [12, 13, 14, 15, 19];
 
 /// Relics. Type 16 holds the 156 of them and nothing else.
 ///
-/// They are here because the ground path keeps only `c == 1` and a relic is
-/// never that: across the owner's two captures, 1,652 relic sightings — 827 on
-/// the floor, 70 picked up, 755 in inventory snapshots — carry `c == 0` without
-/// a single exception, and every id seen lands inside the table's own 0..155.
-/// So the flag that means "named item" cannot be what admits a relic; the type
-/// has to.
+/// The ground path admits only `c == 1`, and a relic is always `c == 0`, so the
+/// named-item flag cannot admit one — the type has to.
 ///
-/// Read off the FINGERPRINT, not the item: a relic packet carries no `type`
-/// field at all, so the trailing number of the key it arrives under is the only
-/// place its type is written. A relic reaching `is_item_like` without a
-/// fingerprint therefore stays refused — none of the 827 did.
+/// Read off the FINGERPRINT, not the item: a relic packet has no `type` field,
+/// so the trailing number of the key it arrives under is the only place its
+/// type is written. A relic without a fingerprint stays refused.
 ///
-/// Deliberately NOT added to `SELF_NUMBERED` above. That list is what makes a
-/// type nameable, and naming relics would change what lists already saved on
-/// disk mean: `Death's Scythe` is a Set polearm AND relic 60, `Shrunken Head` a
-/// Satanic charm AND relic 28, and a list holding either name today can only
-/// ever have meant the non-relic one, because no relic has ever reached the
-/// engine to match it. Relics stay nameless and are alerted on by identity
-/// instead — see `GameStats::hunted_relic`.
+/// Deliberately NOT in `SELF_NUMBERED`. That list is what makes a type
+/// nameable, and naming relics would change the meaning of watchlists already
+/// on disk: `Death's Scythe` is a Set polearm and relic 60, `Shrunken Head` a
+/// Satanic charm and relic 28, and a saved list holding either name can only
+/// have meant the non-relic. Relics are alerted on by identity instead — see
+/// `GameStats::hunted_relic`.
 const RELIC: i64 = 16;
 
 /// What only a market message carries. See `item_sources`.
@@ -943,23 +921,17 @@ fn object_items(v: &Value) -> Vec<(Option<String>, Value)> {
 fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
     // A trip to the market is not a find.
     //
-    // Taking an item back off the trade board is answered like this:
+    // Taking an item back off the trade board answers with the item in full —
+    // named, identified, `c: 1` — which is the shape of a drop answer:
     //
     // ```text
     //   {"message": "Removal success", "marketId": "138066",
     //    "fingerprint": "8-4559708-...", "itemData": "{...\"c\":1...}"}
     // ```
     //
-    // which is an item, named, with its identity — the same shape a drop answer
-    // has, and it was read as one. Two players' worth of gear came back from the
-    // board and every piece of it was announced, chimed and journalled as though
-    // it had just fallen. Listing an item sends the mirror of it, with a price
-    // and a seller.
-    //
-    // The marks are unambiguous: in a 25 MB capture, 16,410 messages carry an
-    // item and exactly four carry any of these — the two removals and the two
-    // listings that caused this report. A drop answer has no price, no seller
-    // and no market id, because none of those things is true of the floor.
+    // Listing sends the mirror of it, with a price and a seller. Those marks
+    // are the discriminator: a drop answer carries no price, no seller and no
+    // market id, because none of them is true of the floor.
     if MARKET_FIELDS.iter().any(|f| has(d, &[f])) {
         return vec![];
     }
@@ -968,6 +940,19 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         _ => None,
     };
     let ops = field(d, &["operations"]).unwrap_or(Value::Null);
+
+    // Splitting a stack is not finding anything.
+    //
+    // A split answers with the new half as `itemsAdded`, under a fingerprint
+    // and an `sh` that have never been seen — the same shape a pickup arrives
+    // in, so the half the player already owned is counted and chimed as a find.
+    // The operation names itself, and no genuine pickup carries it.
+    //
+    // Stash moves need no guard of their own: stashadd, stashtake and stashedit
+    // carry no item.
+    if has(&ops, &["split"]) {
+        return vec![];
+    }
 
     let pickups = |v: Vec<(Option<String>, Value)>| -> Vec<(Option<String>, Value, bool)> {
         v.into_iter().map(|(fp, item)| (fp, item, false)).collect()
@@ -1006,16 +991,15 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
             }
             return pickups(object_items(&item_data));
         }
-        // Unrouted itemData is the server answering "here is what dropped" —
-        // which only holds while the server is the one talking. We put an item
-        // in the same field ourselves when we post it to the market, and every
-        // listing was read as a fresh drop at our feet: journalled, counted,
-        // announced and chimed, for an item we already owned and were selling.
+        // Unrouted itemData is the server answering "here is what dropped",
+        // which holds only while the server is the one talking. This client
+        // puts an item in the same field when it posts one to the market, so
+        // without a check every listing reads as a fresh drop at the player's
+        // feet.
         //
-        // Our own requests are the ones carrying the session credentials, and
-        // in a full session's capture not one of the 7702 packets from a server
-        // carried them — the drop answers arrive with `itemGenHash` and nothing
-        // else that names us.
+        // The client's own requests are the ones carrying session credentials;
+        // a server's drop answer arrives with `itemGenHash` and nothing that
+        // names the player.
         if has(d, CLIENT_ENVELOPE_FIELDS) {
             return vec![];
         }
@@ -1030,20 +1014,16 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         };
         // A quest's reward is not lying on the floor either.
         //
-        // Walking into a zone whose quest pays a named item has the client ask
-        // for the item to be made, and the answer is a drop answer in every
-        // respect — one named item, no owner, `itemGenHash` — so the thing was
-        // announced the moment the zone loaded, before the quest was so much as
-        // started. It is not in the world: it goes into `fortune_item` in the
-        // save, and only reaches the bags through an ordinary pickup later.
+        // Entering a zone whose quest pays a named item has the client ask for
+        // the item to be made, and the answer is a drop answer in every respect
+        // — one named item, no owner, `itemGenHash`. It is not in the world: it
+        // goes into the save's `fortune_item` and reaches the bags later
+        // through an ordinary pickup.
         //
-        // What tells them apart is that a thing in the world says where it is.
-        // Six captures — the five kept here and the one from the machine that
-        // reported this — carry 5,098 named items in a server's answer: 4,137
-        // give the world's id for the spot they are on, 943 give a player whose
-        // slot they sit in, and 18 give nothing. Seventeen of those eighteen are
-        // the trade board, refused above; the eighteenth is the Mana Bender's
-        // Will this was reported for.
+        // The discriminator is that a thing in the world says where it is. A
+        // named item in a server's answer carries either the world's id for the
+        // spot it lies on, or the player whose slot it sits in, or nothing —
+        // and nothing means it is not on the floor.
         return candidates
             .into_iter()
             .filter(|(fp, item)| {
@@ -1068,38 +1048,25 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
 
 /// Whether this item is in somebody's slot rather than lying on the ground.
 ///
-/// The server answers "here is what dropped" and "here is what the merchant has"
-/// in the same shape, down to the message, which is `ok` for both. What tells
-/// them apart is what the item says about where it is: a thing on the ground has
-/// a place on the map, and a thing in a shop window has a player.
+/// The server answers "here is what dropped" and "here is what the merchant
+/// has" in the same shape, `ok` message included. The item's own account of
+/// where it is discriminates: on the ground it has a place on the map, in a
+/// shop window it has a player.
 ///
 /// ```text
 ///   somewhere in the world   "gd": 2422649   or   "gd": {"pos": [11, 0]}
 ///   in somebody's slot       "gd": {"player": 0}
 /// ```
 ///
-/// The number and the position are both the world; the captures here send the
-/// number for named items and the position for ordinary ones. See
-/// `lies_on_the_floor`, which reads the same field for the other half of the
-/// question.
+/// The number and the position are both the world; named items tend to carry
+/// the number and ordinary ones the position. `lies_on_the_floor` reads the
+/// same field for the other half of the question.
 ///
-/// Opening the Black Market poured its whole stock into the journal as a
-/// cascade of finds at the player's feet — twenty-five named items in one
-/// packet, none of which had dropped. Over a session's capture the two never
-/// mix: every `{player}` sits in one of the two merchant listings and every
-/// `{pos}` in one of the three drop answers.
-///
-/// Both spellings, because the game uses both. This read `gd` alone and three
-/// captures in this repository disagree about which one carries the marker: in
-/// one, `gd` holds the ownership 268 times and `gid` never; in another `gid`
-/// holds it 28 times and `gd` holds a position instead. Whichever the patch of
-/// the day sends, a listing spelled the way this did not know went back to
-/// pouring the merchant's stock into the journal as finds — the very thing this
-/// function exists to stop, silently undone by a rename.
-///
-/// Both names are read separately, because taking whichever comes first reads
-/// the wrong one on the capture where `gd` holds a position and `gid` holds the
-/// owner.
+/// Both spellings are read, and read SEPARATELY. Patches disagree about which
+/// of `gd` and `gid` carries the ownership — either may hold it while the other
+/// holds a position — so taking whichever comes first reads the wrong one, and
+/// a listing spelled the way the code did not expect pours a merchant's whole
+/// stock into the journal as finds.
 fn belongs_to_a_player(item: &Value) -> bool {
     OWNER_FIELDS
         .iter()
@@ -1109,20 +1076,15 @@ fn belongs_to_a_player(item: &Value) -> bool {
 
 /// Whether the item says where in the world it is.
 ///
-/// The field above says one of three things, and only the third is a claim to
-/// be somewhere: a plain number, which is the world's id for the spot the thing
-/// is lying on; `{"pos": [11, 0]}`, a place on the map; or `{"player": 0}`,
-/// which is a slot and is `belongs_to_a_player`'s to refuse. An item that says
-/// none of the three is not anywhere at all — see the fortune item in
-/// `item_sources`.
+/// The field says one of three things: a plain number, the world's id for the
+/// spot the thing lies on; `{"pos": [11, 0]}`, a place on the map; or
+/// `{"player": 0}`, a slot, which is `belongs_to_a_player`'s to refuse. An item
+/// that says none of them is nowhere — see the fortune item in `item_sources`.
 ///
-/// So this asks only whether the item says anything, and leaves which of the
-/// two worldly answers it gave alone. Reading the number and not the position
-/// would have been enough for every capture kept here — of 5,098 named items in
-/// a server's answer, 4,137 carry a number, 943 a player and 18 nothing, and
-/// not one carries a position — but the position is what ordinary items on the
-/// ground carry, so a named one arriving that way is a shape the game already
-/// speaks, and refusing it would lose a real find.
+/// This asks only whether the item says anything worldly, without preferring
+/// the number to the position: the position is what ordinary ground items
+/// carry, so a named one arriving that way is a shape the game already speaks
+/// and refusing it would lose a real find.
 fn lies_on_the_floor(item: &Value) -> bool {
     OWNER_FIELDS.iter().any(|f| field_ref(item, &[*f]).is_some())
 }
@@ -1132,15 +1094,13 @@ fn lies_on_the_floor(item: &Value) -> bool {
 const OWNER_FIELDS: &[&str] = &["gd", "gid"];
 
 fn item_events(d: &Value) -> Vec<GameEvent> {
-    // What left the bags, before what entered them: the two arrive in one
-    // message when an item is moved, and the engine has to know the item is
-    // coming back before it is told that it arrived.
+    // What left the bags, before what entered them: both arrive in one message
+    // when an item is moved, and the engine has to know the item is coming back
+    // before it is told that it arrived.
     //
-    // Both spellings, for the reason `belongs_to_a_player` reads two: a list of
-    // fingerprints is what the game sends today, and the sibling operation
-    // `add` is keyed by fingerprint instead — so the object form is the one a
-    // rename would land on. Every object-shaped `remove` in the captures here
-    // is empty, so reading its keys costs nothing and would survive the swap.
+    // The list and the object form are both read. The game sends a list of
+    // fingerprints today, but the sibling operation `add` is keyed by
+    // fingerprint, so the object form is what a rename would land on.
     let fps: Vec<String> = match field(d, &["operations"]).as_ref().and_then(|o| field(o, &["remove"])) {
         Some(Value::Array(gone)) => gone.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
         Some(Value::Object(gone)) => gone.keys().cloned().collect(),
@@ -1168,27 +1128,30 @@ fn fingerprint_type(fingerprint: Option<&str>) -> Option<i64> {
     fingerprint?.rsplit('-').next()?.parse().ok()
 }
 
-/// Packet rarity is unreliable (inventory syncs report Common/Rare for
-/// Satanic gear); the wiki-sourced rarity of the resolved NAME wins over it.
-/// What the tables know about the item a packet is announcing, where the name
-/// it goes by cannot say. See `items::BY_ID`.
+/// What the tables know about the item a packet is announcing, resolved by
+/// identity rather than by name. See `items::BY_ID`.
 ///
-/// A drop packet names the exact item — `(type, id, weaponType)` — and the
-/// naming above already reads that triple. Only the name is passed on, though,
-/// and two items can answer to one name, so the fact that the packet had said
-/// which of them this was got thrown away on the way here.
+/// Packet rarity is unreliable — inventory syncs report Common or Rare for
+/// Satanic gear — so the tables win over it. A drop packet names the exact item
+/// as `(type, id, weaponType)`; the name alone is ambiguous, because two items
+/// can answer to one.
 ///
-/// Only where the identity names the same item. A find announced in the chat
-/// line has no identity of its own, and the zeroes it carries are a real triple
-/// belonging to a real item. Odyssey is refused here as it is everywhere: it
-/// numbers its items in a space of its own, so a triple read on that scale is
-/// not the triple this table is keyed by.
+/// Answers only where the identity names the same item. A chat-announced find
+/// carries no identity of its own, and its zeroes are a real triple belonging
+/// to a real item. Odyssey is refused: it numbers items in a space of its own,
+/// so a triple read on that scale is not what this table is keyed by.
 pub fn known_item(name: &str, unscaled: bool, id: (i64, i64, i64)) -> Option<crate::items::Known> {
     if unscaled || name.is_empty() {
         return None;
     }
     crate::items::known_by_identity(id.0, id.1, id.2)
-        .filter(|k| k.name.eq_ignore_ascii_case(name.trim()))
+        // In any language, not only in English. The guard is here to refuse the
+        // triple of zeroes a chat-announced find carries, and it did that by
+        // asking whether the packet's name was the table's — but the packet's
+        // name is whatever the player's client prints, so for a German or a
+        // Korean client it refused everything, and the rarity, the grade and
+        // the chime all fell back to whatever the packet claimed.
+        .filter(|k| crate::items::same_item(name, k.name, id.0, id.1, id.2))
 }
 
 pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool, id: (i64, i64, i64)) -> String {
@@ -1204,10 +1167,10 @@ pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool, id: (i64, i64,
     }
     // An item off a scale these tables do not read claims nothing at all.
     //
-    // This used to fall out by accident: the name table held only the five
-    // rarities worth announcing, so an ordinary item found nothing there and
-    // the packet — already refused for Odyssey — left it Unknown. Filling the
-    // table in for every item turned that accident into a claim, and an
+    // Refused explicitly, not by accident. While the name table held only the
+    // five rarities worth announcing, an ordinary item found nothing there and
+    // the packet — already refused for Odyssey — left it Unknown. A table that
+    // answers for every item turns that silence into a claim, and an
     // Odyssey rune came back as a seasonal Common.
     let known = if name.is_empty() || unscaled {
         None
@@ -1215,15 +1178,12 @@ pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool, id: (i64, i64,
         crate::items::rarity_by_name(name)
     };
     // A named item's rarity is a fact about that item, and the tables carry it
-    // from the game's own data. The packet does not: over the 6,617 rolls one
-    // session's capture recorded, its rarity field took two values, and one of
-    // them reads as "Angelic" here.
+    // from the game's own data. The packet's rarity field does not track it —
+    // on an inventory sync it takes only a couple of values, one of which reads
+    // as "Angelic" here.
     //
-    // This used to defer to the packet whenever its claim was not one of the
-    // four the code called weak — so a claim of Angelic outranked the tables,
-    // and a D-grade Satanic ring was announced, chimed and filed as an Angelic
-    // find. Where the name is known, the name is the answer; the packet is only
-    // consulted for items the tables have never heard of.
+    // So where the name is known, the tables are the answer; the packet is
+    // consulted only for items the tables have never heard of.
     if let Some(k) = known {
         return k.to_string();
     }
@@ -1235,10 +1195,9 @@ pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool, id: (i64, i64,
     // find announced in the chat line, which carries the name and nothing else,
     // and about that one there is genuinely nothing to say.
     //
-    // The silence used to fall through to the packet, which claims Angelic for
-    // nearly everything, so a Satanic charm named Shrunken Head and a Set gun
-    // named Angel were both announced, chimed and journalled as Angelic finds.
-    // Reported as "Non-Angelics showing up as angelic items".
+    // The silence must not fall through to the packet, which claims Angelic for
+    // nearly everything: a Satanic charm named Shrunken Head and a Set gun named
+    // Angel would both be announced, chimed and journalled as Angelic finds.
     //
     // Unknown is a plain answer. Angelic is a wrong one.
     if crate::items::muddled(name) {
@@ -1288,91 +1247,58 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // A capture of 12 Odyssey and 38 seasonal pickups splits on `h` exactly.
     let odyssey = has(obj, &["h"]);
     let claimed = field(obj, ITEM_RARITY_FIELDS).unwrap_or(Value::Number(0.into()));
-    // An ordinary base cannot be Angelic or Unholy. Those two grades belong only
-    // to named items — the Discord line leans on the same fact, taking them back
-    // out of the SS count because every Angelic and Unholy item is SS-graded —
-    // and `c` is the game's own flag for which id space an item came from, the
-    // one the ground path already keeps only `c == 1` of.
+    // An ordinary base cannot carry a named item's rarity, and `c` is the
+    // game's own flag for which id space an item came from — the ground path
+    // already keeps only `c == 1`.
     //
-    // The `d == 7` that once filled a practice run with Angelic finds came back
-    // in packets without the `h` that used to mark them: of 42 such pickups in a
-    // capture, 17 carried `h` and 25 did not, and the 25 were indistinguishable
-    // from seasonal ones except by a `d` nothing should believe anyway. Across
-    // the 6,617 rolls the drop path saw in that session it took two values, 2
-    // and 7, and the pickup path a third, 1 — not the ten-point scale the table
-    // reads it as, and 7 is "Angelic" there.
-    // Refusing the claim where it is impossible rather than where it is
-    // recognised covers the keys, potions and white bases whatever mode made
-    // them, and leaves the grades an ordinary base really can carry alone.
+    // The packet's `d` is not the ten-point scale the table reads it as: on a
+    // pickup it takes a handful of low values, and 7 among them reads as
+    // "Angelic". Refusing the claim where it is impossible, rather than where
+    // it is recognised, covers keys, potions and white bases whatever mode made
+    // them, and leaves an ordinary base the grades it really can carry.
     let plain_base = has(obj, &["c"]) && int_field(obj, &["c"]) == 0;
-    // Any rarity only a named item can carry, not just two of them.
+    // Any rarity only a named item can carry, not a hand-written subset of
+    // them: the game numbers bases and named items in two independent spaces,
+    // so a white charm can share its triple with a Satanic one and claim that
+    // rarity.
     //
-    // This listed 7 and 10 by hand — Angelic and Unholy — on the reasoning that
-    // an ordinary base cannot be either. The reasoning was right and the list
-    // was short: 9 is Heroic, no ordinary base is Heroic either, and Heroic is
-    // in `JOURNAL_RARITIES`, so a base claiming it was named, announced,
-    // chimed and counted. `Wind Token` is the one that showed it — a white
-    // charm with `b: 17` and `c: 0`, which the tables answer for as the Satanic
-    // charm sharing that triple, because the game numbers bases and named items
-    // in two independent spaces.
+    // On a base the field is not a rarity at all — it ranges well past the
+    // ten-point scale — so it is believed only where believing it is harmless.
     //
-    // On 22,205 base sightings across two captures the field takes every value
-    // from 1 to 43 — 6,985 of them 9, and 92 of them 24, which is not a rarity
-    // at all — against 8,295 that say Superior. It is not a rarity on a base;
-    // it is only ever believed here where believing it is harmless.
-    //
-    // Derived from the journal list rather than written out again, so the two
-    // cannot drift apart: those five are exactly the rarities that make an item
-    // worth naming below.
+    // Derived from the journal list rather than written out again: those five
+    // are exactly the rarities that make an item worth naming below.
     let named_only = crate::stats::rarity_from_packet(&claimed)
         .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
     let rarity = if odyssey || (plain_base && named_only) { Value::Null } else { claimed };
     // A name read out of the tables is a guess about which item this is, and a
-    // guess must not become evidence about what it is worth. `resolve_rarity`
-    // trusts the name over a weak packet rarity, so an ordinary base whose
-    // id-in-category lands on a unique's slot was handed that unique's name
-    // and then promoted to its rarity — a white sword counted as Satanic, a
-    // potion as Angelic.
+    // guess must not become evidence about what it is worth: `resolve_rarity`
+    // trusts the name over a weak packet rarity, so a base whose id lands on a
+    // unique's slot would be handed that unique's name and then its rarity.
     //
-    // The drop path already refuses this: it keeps only `c == 1`, the game's
-    // own flag for a named item, "while `c == 0` drops are ordinary bases
-    // numbered 0..20". The pickup path never learnt the rule, and a pickup is
-    // what the counters see. It cannot simply drop `c == 0` — an ordinary item
-    // going into the bag is still an item — so it stays uncounted-by-name
-    // instead: asked of the table only when the game has said this is a named
-    // item, or when the rarity on the packet is already one worth naming.
+    // The ground path avoids this by keeping only `c == 1`. A pickup cannot —
+    // an ordinary item going into the bag is still an item — so it goes
+    // unnamed instead: the table is asked only when the game has said this is a
+    // named item, or when the packet's rarity is already one worth naming.
     //
-    // Keys, gems, runes and materials are the exception, and they have to be:
-    // for those types `c == 0` is simply what they are — 471 of them against 2
-    // in a capture — and the id IS the identity, so the table is right about
-    // them. Naming them is not a guess. Three counters read that name and go
-    // quiet without it: the two dull keys are filtered out by name, the notable
-    // list (Angelic Key, Satanic Dice, the rune grades) is matched by name, and
-    // a resource's grade comes from `tier_by_name`. Refusing the packet's rarity
-    // above had silently taken all three down with it, because `worth_naming`
-    // is read from the rarity this decides.
+    // Keys, gems, runes and materials are the exception. For those types
+    // `c == 0` is simply what they are and the id IS the identity, so naming
+    // them is not a guess — and three counters go quiet without the name: the
+    // dull keys are filtered by name, the notable groups are matched by name,
+    // and a resource's grade comes from `tier_by_name`.
     //
-    // Type 18 is NOT in the list, on purpose: slot 18:8 is an Angelic potion,
-    // and reading ordinary potions through it is the exact bug the rule above
-    // exists to stop.
+    // Type 18 is NOT in the list: slot 18:8 is an Angelic potion, and reading
+    // ordinary potions through it is the bug this rule exists to stop.
     // The grade, on the same terms as the rarity above.
     //
-    // Odyssey keeps its own item space and its `d` is already refused as
-    // unreadable there. Its `n` is no more ours to read, and it says 6 — the
-    // top grade — on ordinary white bases: ten of them in one capture, every
-    // one `c == 0` and nameless, against not a single `n == 6` in the 235
-    // seasonal pickups from the same session. Those ten were the SS column.
-    //
-    // Refusing it does not lose the grade. A named item's grade comes from the
-    // item table by name, which is this program's own reading of the game and
-    // is right whatever mode dropped the thing; `GameStats` already looks it up
-    // whenever the packet offers nothing. So refusing a number we cannot read
-    // is what lets the number we can read be used.
+    // Odyssey has an item space of its own, and its `n` reads 6 — the top grade
+    // — on ordinary nameless bases, which lands them in the SS column. Refusing
+    // it loses nothing: a named item's grade comes from the item table by name,
+    // which holds whatever mode dropped it, and `GameStats` looks it up
+    // whenever the packet offers none.
     //
     // The range check is separate and applies to every mode: `n` also arrives
-    // as 6666 — five times in that capture, in both modes — which is not a
-    // grade at all. It was counted as one because the only test it had to pass
-    // was being greater than zero.
+    // as 6666, which is not a grade. Being greater than zero is not enough of
+    // a test.
     let claimed_tier = int_field(obj, &["tier", "n"]);
     let tier = if odyssey || !(1..=crate::stats::SS_TIER).contains(&claimed_tier) {
         0
@@ -1659,14 +1585,12 @@ mod tests {
         ), "{events:?}");
     }
 
-    /// Leaving town and playing on, as the two packets really arrive.
+    /// Leaving town and playing on, as the two heartbeats really arrive.
     ///
-    /// The town heartbeat states magic find; the one that comes from an act
-    /// does not, and it is the only one that says which act. Between them the
-    /// player must end up in the right room with the magic find they had — the
-    /// second packet answering "nothing" about a number is not the same as it
-    /// answering zero, and reading it as zero left a dash in the overlay for
-    /// most of a session.
+    /// The town one states magic find; the one from an act does not, and it is
+    /// the only one that says which act. Between them the player must end up in
+    /// the right room with the magic find they had: silence about a number is
+    /// not the same as zero.
     #[test]
     fn leaving_town_keeps_the_magic_find_and_takes_the_room() {
         let in_town = json!({
@@ -1691,20 +1615,10 @@ mod tests {
         assert_eq!(snap.mf, 1447, "silence about a number is not zero");
     }
 
-    /// A quest's reward is not lying on the floor.
-    ///
-    /// Walking into a zone whose quest pays a named item announced it there and
-    /// then, before the quest was started: the client asks for the item to be
-    /// made on entering, and the answer is a drop answer in every respect. The
-    /// message below is the one that reported this, verbatim — the item is a
-    /// Mana Bender's Will, and it went into `fortune_item` in the save rather
-    /// than into the world.
     /// Somebody saying "mailbox" is not mail arriving.
     ///
-    /// All three lines are out of one capture, verbatim but for the account
-    /// numbers: three strangers in the global chat, each of whom rang the mail
-    /// chime and lit the indicator for everyone reading. Reported by a player
-    /// on Bloodpact, which has no mailbox in it.
+    /// Three lines of global chat, verbatim but for the account numbers. Each
+    /// rings the mail chime for everyone reading unless chat is excluded.
     #[test]
     fn a_stranger_saying_mailbox_is_not_mail() {
         for said in ["mail", "mailbox", "mailbox in town"] {
@@ -1742,6 +1656,12 @@ mod tests {
         );
     }
 
+    /// A quest's reward is not lying on the floor.
+    ///
+    /// Entering a zone whose quest pays a named item has the client ask for the
+    /// item to be made, and the answer is a drop answer in every respect. The
+    /// message below is one such, verbatim: the item goes into the save's
+    /// `fortune_item`, not into the world.
     #[test]
     fn a_quest_reward_waiting_to_be_earned_is_not_a_drop() {
         let fortune = json!({
@@ -1826,13 +1746,11 @@ mod tests {
 
     /// A white charm is not the Satanic charm that shares its number.
     ///
-    /// Straight out of a capture taken 2026-08-21, five times over. `c: 0` is
-    /// the game's own flag for an ordinary base and `10:17:0` is a triple two
-    /// items hold — the white charm the player actually picked up, and
-    /// `Wind Token`, which the tables answer with because bases are not in
-    /// them. The `d: 9` is what let it through: Heroic is a rarity worth
-    /// naming, so the base was named, announced and chimed as a find the
-    /// player never made.
+    /// `c: 0` is the game's flag for an ordinary base, and `10:17:0` is a triple
+    /// two items hold: the white charm actually picked up, and the named one the
+    /// tables answer with, because bases are not in them. `d: 9` is what lets it
+    /// through — Heroic is a rarity worth naming, so the base is named, chimed
+    /// and counted as a find nobody made.
     #[test]
     fn a_white_charm_is_not_wind_token() {
         let msg = json!({
@@ -1861,16 +1779,13 @@ mod tests {
 
     /// A relic on the floor is seen, and the ordinary bases beside it are not.
     ///
-    /// Verbatim from the owner's capture, trimmed only of the bases that make
-    /// no new point. Every relic in 1,652 sightings carries `c == 0`, so the
-    /// `c == 1` rule that admits a named drop threw all 827 of them away and no
-    /// relic had ever reached the engine at all — which is why nothing could be
-    /// alerted on one. The type has to do the admitting, read off the
-    /// fingerprint because a relic packet has no `type` field.
+    /// A relic always carries `c == 0`, so the `c == 1` rule that admits a named
+    /// drop rejects every one of them. The type has to do the admitting, read
+    /// off the fingerprint because a relic packet has no `type` field.
     ///
     /// The trap is in the same packet on purpose: `99-...-555-3` is a `c == 0`
-    /// type-3 base with a `gd` of its own, and it must still be refused. Letting
-    /// the relic in by type must not let its neighbours in by accident.
+    /// type-3 base with a `gd` of its own and must still be refused. Letting the
+    /// relic in by type must not let its neighbours in with it.
     #[test]
     fn a_relic_on_the_floor_is_seen_and_the_bases_beside_it_are_not() {
         let msg = json!({
@@ -1934,12 +1849,10 @@ mod tests {
     /// A relic is Common and D-graded, and the packet is not allowed to say
     /// otherwise.
     ///
-    /// The name table used to hold a rarity only for the five worth
-    /// announcing, so everything else — relics, runes, potions, keys — found
-    /// nothing there and `resolve_rarity` fell back to the packet. That field
-    /// takes two values over thousands of rolls and one of them reads as
-    /// Angelic here, which is how a Common relic was announced, chimed and
-    /// filed as an Angelic find.
+    /// Where the name table holds no rarity, `resolve_rarity` falls back to the
+    /// packet — and the packet's rarity field reads as Angelic for nearly
+    /// everything, which is how a Common relic gets chimed as an Angelic find.
+    /// The table has to answer for relics, runes, potions and keys too.
     #[test]
     fn a_relic_is_what_the_tables_say_it_is() {
         let relic = "Jungle Vial";
@@ -1956,14 +1869,13 @@ mod tests {
         assert_eq!(resolve_rarity(&json!(7), relic, true, NO_IDENTITY), "Angelic");
     }
 
-    /// The client's heartbeat, as one really arrived on 2026-08-21 — the
-    /// packet's own base64, not a hand-written one.
+    /// The client's heartbeat: a real packet's own base64, not a hand-written
+    /// one.
     ///
-    /// It is the only place magic find comes from, and it rides on a packet
-    /// carrying the session credentials, which the item path throws away
-    /// wholesale. This pins the field names against a real packet so a patch
-    /// that renames one of them fails here rather than quietly emptying the
-    /// top row of the overlay.
+    /// It is the only source of magic find, and it rides on a packet carrying
+    /// session credentials, which the item path discards wholesale. Pinning the
+    /// field names against a real packet makes a rename fail here rather than
+    /// quietly empty the top row of the overlay.
 
 
     #[test]
@@ -1988,10 +1900,10 @@ mod tests {
     }
     /// The capture filter takes every plaintext TCP byte the machine sends or
     /// receives, so a bulk transfer on any other port arrives here as one
-    /// buffer of up to `BUF_CAP`. Every opener used to be chased to the end of
-    /// it and the scan resumed one byte later, which is the square of the
-    /// length: 256 KB of `{` measured 288 seconds in a debug build, and this
-    /// runs on the capture thread, so the game's own packets are dropped for
+    /// buffer of up to `BUF_CAP`. Chasing every opener to the end and resuming
+    /// one byte later is quadratic in the length — a quarter of a megabyte of
+    /// `{` takes minutes — and this runs on the capture thread, so the game's
+    /// own packets are dropped for
     /// the duration. Messages ahead of the noise are still read.
     #[test]
     fn a_buffer_of_open_braces_does_not_stall_capture() {
@@ -2058,6 +1970,49 @@ mod tests {
             "item_data": {"a": 566876198, "b": 44, "c": 1, "d": 1, "e": 10, "j": 0, "w": 1}
         });
         assert!(events_from_messages(&[listing]).is_empty(), "nor does putting one up");
+    }
+
+    /// Splitting a stack is not finding anything.
+    ///
+    /// A real split, verbatim: half a stack of Angelic Keys dragged into the
+    /// next slot. The new half arrives as `itemsAdded` under a fingerprint and
+    /// an `sh` that have never been seen, so every test for "is this new"
+    /// answers yes and the keys are counted a second time.
+    #[test]
+    fn splitting_a_stack_is_not_a_find() {
+        let split = json!({
+            "itemsAdded": {
+                "99-4964607-65a531f3501570001-12": {
+                    "a": 528483482, "b": 8, "c": 0, "d": 10, "e": 0,
+                    "j": 0, "o": 2, "sh": "b3db67b0edef", "w": 1
+                }
+            },
+            "message": "ok",
+            "newData": {
+                "99-4964607-1a052d56d30-12": {"location": 0, "sh": "a358a8f4256f"},
+                "99-4964607-65a531f3501570001-12": {"location": 0, "sh": "b3db67b0edef"}
+            },
+            "operations": {
+                "split": {
+                    "99-4964607-1a052d56d30-12": {"amount": 2, "location": 0, "targetLocation": 0}
+                }
+            },
+            "removedItems": [],
+            "status": 1
+        });
+        assert!(
+            events_from_messages(std::slice::from_ref(&split)).is_empty(),
+            "the far half of a stack is not a new item"
+        );
+
+        // The same shape without the operation IS a pickup, so the guard is on
+        // the split and not on the message.
+        let mut pickup = split.clone();
+        pickup.as_object_mut().expect("an object").remove("operations");
+        assert!(
+            !events_from_messages(std::slice::from_ref(&pickup)).is_empty(),
+            "an ordinary itemsAdded is still a find"
+        );
     }
 
     #[test]
@@ -2184,10 +2139,34 @@ mod tests {
         let events = events_from_messages(&payloads);
         assert_eq!(events.len(), 3);
         assert!(matches!(&events[0], GameEvent::Gold(c) if c.gss == 100));
-        assert!(matches!(events[1], GameEvent::XpGain(15)));
+        assert!(matches!(events[1], GameEvent::XpGain(100)), "the guild share scales to character xp");
         assert!(
             matches!(&events[2], GameEvent::SatanicZone { zone, buffs, .. } if zone == "SZ_1_1" && buffs == &[1, 26])
         );
+    }
+
+
+    /// A quest paying out is character XP already.
+    ///
+    /// The packet below is the shape that really arrives, and it lands in the
+    /// branch written for the guild share — which scales it by six and two
+    /// thirds. `questId` is the only thing that separates them.
+    #[test]
+    fn a_quest_reward_is_not_a_guild_share() {
+        let quest = json!({"message": "qrwrd ok", "questId": 1301, "status": 1, "xp": 50_000, "gold": 35_000});
+        let events = events_from_messages(std::slice::from_ref(&quest));
+        assert!(
+            events.iter().any(|e| matches!(e, GameEvent::XpGain(50_000))),
+            "a quest reward is credited as it stands, not scaled: {events:?}"
+        );
+    }
+
+    /// And the share it was written for still scales.
+    #[test]
+    fn a_guild_share_still_scales_to_character_xp() {
+        let share = json!({"message": "guild", "status": 1, "xp": 150});
+        let events = events_from_messages(std::slice::from_ref(&share));
+        assert!(events.iter().any(|e| matches!(e, GameEvent::XpGain(1000))), "{events:?}");
     }
 
     #[test]
@@ -2203,7 +2182,7 @@ mod tests {
         let raw = b"\x00\x1f{\"currency_data\":{\"GSS\":7}}\x00\x05{\"total_guild_xp\":3,\"message\":\"Gained 9 XP\"}";
         let events = events_from_messages(&extract_messages(raw));
         assert!(events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 7)));
-        assert!(events.iter().any(|e| matches!(e, GameEvent::XpGain(9))));
+        assert!(events.iter().any(|e| matches!(e, GameEvent::XpGain(60))));
     }
 
     #[test]
@@ -2212,7 +2191,7 @@ mod tests {
         let messages = extract_messages(raw);
         assert_eq!(messages.len(), 1);
         let events = events_from_messages(&messages);
-        assert!(matches!(events[0], GameEvent::XpGain(15)));
+        assert!(matches!(events[0], GameEvent::XpGain(100)));
     }
 
     #[test]
@@ -2263,20 +2242,16 @@ mod tests {
         assert_eq!(resolve_rarity(&json!(7), "No Such Item", false, NO_IDENTITY), "Angelic");
     }
 
-    /// Two items, one name, and both were announced as Angelic finds.
+    /// Two items, one name.
     ///
-    /// Reported as "Non-Angelics showing up as angelic items": Shrunken Head is
-    /// a Satanic charm and Angel a Set gun. Neither was in the rarity table,
-    /// because each name is claimed by two different items — the charm and a
-    /// Common relic, the gun and a Heroic orb — and a name two items disagree
-    /// about is dropped rather than answered wrongly. The silence then fell
+    /// Shrunken Head is a Satanic charm and also a Common relic; Angel is a Set
+    /// gun and also a Heroic orb. Dropping a name two items disagree about
+    /// rather than answering it wrongly leaves a silence, and that silence falls
     /// through to the packet, which claims Angelic for nearly everything.
     ///
-    /// Where only one of the claimants is one of the five, that one is the
-    /// answer: a Common relic sharing a name with a Satanic charm is not a
-    /// competing claim about which of the five a find is. Where two of the five
-    /// answer to one name, a name is not enough, and the packet is refused too
-    /// — a drop packet is answered by its identity instead, below.
+    /// Where only one claimant is one of the five journal rarities, that one is
+    /// the answer. Where two are, a name is not enough and the packet is refused
+    /// too — a drop packet is answered by its identity instead, below.
     #[test]
     fn a_name_two_items_answer_to_is_never_angelic_by_default() {
         // settled, because only one claimant is one of the five
@@ -2340,15 +2315,44 @@ mod tests {
         assert!(known_item("Angel", true, angel_gun).is_none(), "Odyssey numbers its own");
     }
 
+    /// The guard that decides whether a packet's identity may be trusted.
+    ///
+    /// It refuses the triple of zeroes a chat-announced find carries, which is
+    /// a real item's identity (the Harlequinn's Crest). The name it matches
+    /// against is whatever the player's client prints, so the comparison has to
+    /// accept every language the game ships — matching English alone refuses
+    /// every non-English client and drops rarity, grade and chime back to what
+    /// the packet claims.
+    ///
+    /// Here rather than in `items.rs`, which is generated and rewritten by
+    /// `gen_items.py`.
+    #[test]
+    fn an_item_answers_to_its_name_in_any_language() {
+        let english = "Harlequinn's Crest";
+        assert!(crate::items::same_item(english, english, 0, 0, 0), "an English client");
+        assert!(crate::items::same_item("Harlekins Wappen", english, 0, 0, 0), "a German one");
+        assert!(crate::items::same_item("Герб Арлекина", english, 0, 0, 0), "a Russian one");
+        assert!(crate::items::same_item("할리퀸의 문장", english, 0, 0, 0), "a Korean one");
+    }
+
+    /// And the refusal it was written for still holds: a name belonging to some
+    /// other item does not unlock this identity, in any language.
+    #[test]
+    fn another_items_name_is_still_refused() {
+        let english = "Harlequinn's Crest";
+        assert!(!crate::items::same_item("Ra's Band", english, 0, 0, 0));
+        assert!(!crate::items::same_item("Engel", english, 0, 0, 0), "German, another item");
+        assert!(!crate::items::same_item("", english, 0, 0, 0));
+    }
+
     /// Read a whole session back through the parser.
     ///
-    /// `lib.rs` has been writing `debug-capture.jsonl` since the beginning so
-    /// that a real session could be replayed "when counters look wrong", and
-    /// until now nothing replayed it: every check here is a packet built by
-    /// hand, which proves the rule and not the traffic.
+    /// Every other check here is a packet built by hand, which proves the rule
+    /// and not the traffic. `lib.rs` writes `debug-capture.jsonl` for exactly
+    /// this.
     ///
-    /// Ignored, because it wants a file the repository does not carry. Point it
-    /// at one and read the report:
+    /// Ignored: it wants a file the repository does not carry. Point it at one
+    /// and read the report:
     ///
     ///     HS_CAPTURE=... cargo test replay_a_capture -- --ignored --nocapture
     #[test]
@@ -2440,8 +2444,8 @@ mod tests {
         };
         let total = |by: &BTreeMap<(String, String), usize>| by.values().sum::<usize>();
 
-        // What the fix is for: names the tables refuse, which used to be handed
-        // to the packet, whose claim here is the one the report complained of.
+        // What this is for: names the tables refuse, which must not be handed
+        // to the packet.
         println!("
 names the tables refuse on purpose:");
         for (name, by) in found.iter().filter(|(n, _)| crate::items::muddled(n)) {
@@ -2481,13 +2485,9 @@ named things, by what the tracker made of them:");
 
     /// The same two, through a whole packet rather than one function.
     ///
-    /// Built on a drop packet taken out of a real capture — the shape, the
-    /// fields and the fingerprint are the server's, and only the identity is
-    /// changed: `-10` and `b: 37` is Shrunken Head, `-3` with `b: 11` and
-    /// `j: 14` is Angel. `d: 7` is the packet claiming Angelic, which is what
-    /// it claims for nearly everything — over one session it says 8 on 155,459
-    /// of 171,295 items, and the four other values it takes there are wrong
-    /// about the item every time.
+    /// A real drop packet with only the identity changed: `-10` with `b: 37` is
+    /// Shrunken Head, `-3` with `b: 11` and `j: 14` is Angel. `d: 7` is the
+    /// packet claiming Angelic, which it claims for nearly everything.
     #[test]
     fn a_real_drop_packet_named_by_two_items_is_not_announced_as_angelic() {
         let dropped = |fingerprint: &str, id: i64, wt: i64| {
@@ -2577,16 +2577,10 @@ named things, by what the tracker made of them:");
         let plain = json!({"a": 116892350, "b": 0, "c": 0, "d": 7, "e": 10, "j": 7, "n": 2, "sh": "cb"});
         assert_eq!(pickup(plain), Some(Value::Null), "an ordinary base claims no grade");
 
-        // Heroic is no more a base's rarity than Angelic is.
-        //
-        // This asserted the opposite — that 9 on a base was "attested" — on the
-        // strength of having seen it in a capture. Seeing it is not evidence
-        // that it means Heroic: across 22,205 base sightings the field takes
-        // every value from 1 to 43, and 6,985 of them are 9. Nor is any
-        // ordinary base Heroic in the game's own data: all 413 items whose key
-        // marks them a base are Common, and not one is Heroic, Angelic,
-        // Satanic, Set or Unholy. Believing the 9 named a white charm
-        // `Wind Token` and announced it as a Satanic find.
+        // Heroic is no more a base's rarity than Angelic is. The field ranges
+        // far past the ten-point scale on a base, and in the game's own data
+        // every ordinary base is Common — none is Heroic, Angelic, Satanic, Set
+        // or Unholy.
         let ordinary = json!({"a": 1, "b": 8, "c": 0, "d": 9, "e": 10, "j": 0, "sh": "cb"});
         assert_eq!(pickup(ordinary), Some(Value::Null), "nor is a base Heroic");
 
@@ -2845,10 +2839,10 @@ named things, by what the tracker made of them:");
     ///
     /// An opener in framing noise looks exactly like a truncated message — the
     /// bytes after it are whatever the stream sent next — so it is carried, and
-    /// after three flushes the carry is given up. Giving up used to mean
-    /// dropping the tail, and a real message sitting behind the brace went with
-    /// it: never counted, never chimed, never journalled. Now the bytes are
-    /// parsed on the way out.
+    /// after three flushes the carry is given up. Giving up must not mean
+    /// dropping the tail: a real message sitting behind the brace would go with
+    /// it, never counted, never chimed, never journalled. The bytes are parsed
+    /// on the way out instead.
     #[test]
     fn a_message_held_hostage_by_a_stray_opener_is_recovered() {
         let mut asm = Reassembler::default();

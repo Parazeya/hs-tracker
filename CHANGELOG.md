@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.1.0 — 2026-09-01
+
+### Added
+
+- The app speaks ten languages besides English: German, Spanish, Finnish,
+  French, Polish, Portuguese, Russian, Chinese, Japanese and Korean. Pick one in
+  Settings. Item names, rarities, grades, zones and the Satanic Zone's buffs come
+  from the game's own translation files, so they read exactly as they do in the
+  game; the app's own words are written out. Anything a language does not name
+  stays English rather than going blank, so a half-translated corner is a mixed
+  window and never a broken one. The tray menu, the file dialogs, the Discord
+  card and the run card speak it too.
+- Two skins that do not look like the game: **Plain dark** and **Plain light**,
+  beside Hero Siege and Ebontharn in Settings.
+- A second copy button on a run: **Full**, which draws every find as a ledger —
+  best grade first, with the game's own odds beside each name — where the small
+  card has room for one line of names. The card travels as a PNG now rather than
+  raw pixels, so the bigger card costs about a twelfth of what the small one did.
+- A counter for Prophet's Wisdom, beside Satanic Dice.
+- A run keeps 120 of its finds rather than 40. Runs already saved keep whatever
+  they were saved with.
+
+### Fixed
+
+- Experience read low for anyone levelling often. The save reports experience
+  inside the current hero level and starts again at each one, so every level-up
+  arrived as a large negative step and the whole crossing was thrown away.
+- A quest reward was credited at nearly seven times its value. It arrives in the
+  same shape as a guild share, which is a fifteenth of the experience that earned
+  it and is scaled back up; a quest reward is already character experience.
+- The panel came out squished again ([#3]). The window size was decided in two
+  places, one of them from the width the panel was first drawn for, so every
+  settings change — including the one at startup — undid the measurement.
+- On a client that is not English, the rarity, the grade and the chime fell back
+  to whatever the packet claimed: an item was only recognised when the name it
+  arrived under matched the English one.
+- Splitting a stack counted as a find. The new half arrives under a fingerprint
+  nothing has seen before, so every test for "is this new" said yes.
+- A counter can no longer wrap. Every total saturates instead of overflowing, and
+  an experience figure too large to be a guild share is refused rather than
+  scaled.
+- A counter name typed with a stray space in settings.json counts again. It was
+  compared whole and untrimmed, so it silently matched nothing.
+- An imported settings profile is brought up to date on the way in. One exported
+  by an older version used to arrive with its old counter list.
+
+### Removed
+
+- "Where it happened" is off the run card. The game reports the room only in a
+  state packet, and since the August 2026 patch that arrives about twenty times
+  less often, so the shares it drew were wrong more often than not. Where the
+  tallies and the loot came from is unaffected.
+- The Satanic Key counter. No item in the game carries that name, so it could
+  only ever read zero. It goes on the next launch, and so does the line in
+  settings.json — unless the counter list has been edited, in which case the
+  whole list is left alone and the row has to be taken out by hand. Deleting a
+  counter is remembered: it will not come back.
+
+[#3]: https://github.com/Parazeya/hs-tracker/issues/3
+
 ## 1.0.6 — 2026-08-31
 
 ### Fixed
