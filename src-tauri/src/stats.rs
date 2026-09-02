@@ -163,6 +163,15 @@ pub struct NotableCount {
     pub label: String,
     pub total: i64,
 }
+
+/// One resource, named, and which of the four counters it belongs to.
+#[derive(Clone, Serialize)]
+pub struct ResourceCount {
+    pub name: String,
+    /// `keys`, `materials`, `socketables` or `collectibles`
+    pub kind: String,
+    pub total: i64,
+}
 const JOURNAL_CAP: usize = 400;
 const SERIES_CAP: usize = 4000;
 
@@ -333,6 +342,14 @@ pub struct GameStats {
     tally_base: HashMap<&'static str, i64>,
     tally_earned: HashMap<&'static str, i64>,
     resources: HashMap<&'static str, i64>,
+    /// The same drops named one by one: which key, which fragment, how
+    /// many. The four totals above answer "how much did this session
+    /// gather" and nothing else — a player farming forty Battle Fragments
+    /// reads "collectibles: 63" and is none the wiser.
+    resource_items: HashMap<String, (&'static str, i64)>,
+    /// A run the player closed by hand. Nothing is counted while it holds:
+    /// the walk to town and the hour in the stash belong to no run.
+    finished: bool,
     satanic: Option<SatanicZone>,
     /// When the server last named it, in unix milliseconds.
     ///
@@ -585,6 +602,8 @@ impl Default for GameStats {
             tally_base: HashMap::new(),
             tally_earned: HashMap::new(),
             resources: RESOURCES.iter().map(|(_, name)| (*name, 0)).collect(),
+            resource_items: HashMap::new(),
+            finished: false,
             satanic: None,
             satanic_at: None,
             mf: 0,
@@ -921,6 +940,21 @@ impl GameStats {
         self.paused_at.is_some()
     }
 
+    /// Close the run by hand, or open the next one.
+    ///
+    /// Closing holds the clock as well: a finished run is not a paused one —
+    /// a pause keeps counting and only stops the divisor — so both have to be
+    /// said, and `start` lifts both.
+    pub fn set_finished(&mut self, on: bool) {
+        self.finished = on;
+        if on {
+            self.hold(Instant::now(), true);
+        } else {
+            self.release();
+        }
+        self.revision += 1;
+    }
+
     /// Stop the clock as of `since`, which is now for a pause the player asked
     /// for and the last sign of life for one the app decided on.
     fn hold(&mut self, since: Instant, by_hand: bool) {
@@ -958,6 +992,12 @@ impl GameStats {
     /// The pause button and the hotkey. A hand-made pause outranks the idle
     /// watch: it lasts until the same hand lifts it.
     pub fn set_paused(&mut self, on: bool) {
+        // A finished run is not a paused one, and the pause button cannot lift
+        // it: releasing the clock there would leave it running over a run that
+        // counts nothing. The way out of finished is to start the next one.
+        if self.finished {
+            return;
+        }
         if on {
             self.hold(Instant::now(), true);
         } else {
@@ -1203,6 +1243,13 @@ impl GameStats {
 
     /// Returns the journal entry when this event produced a new tracked drop.
     pub fn apply(&mut self, event: &GameEvent) -> Option<DropEntry> {
+        // A run closed by hand stays closed until the next one is started.
+        // Nothing counts, nothing sounds, and the clock does not move — which
+        // is the whole point of the button: what happens between two runs is
+        // not part of either.
+        if self.finished {
+            return None;
+        }
         self.revision += 1;
         match event {
             // A find the server put in chat. Everyone on the shard reads that
@@ -1648,6 +1695,17 @@ impl GameStats {
                         if !dull {
                             let seen = self.resources.get_mut(res).expect("the table has every resource");
                             *seen = seen.saturating_add(n);
+                            // and the same drop under its own name. A resource
+                            // always arrives named — its type is in
+                            // `parser::SELF_NUMBERED` for exactly that reason —
+                            // so there is nothing here to guess.
+                            if !name.is_empty() {
+                                let one = self
+                                    .resource_items
+                                    .entry(name.to_string())
+                                    .or_insert((*res, 0));
+                                one.1 = one.1.saturating_add(n);
+                            }
                         }
                     }
                     self.count_notable(name, n);
@@ -1965,6 +2023,24 @@ impl GameStats {
             carried_bank: self.stale_bank,
             carried_totals: self.stale_save,
             resources: self.resources.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+            resource_items: {
+                let mut got: Vec<ResourceCount> = self
+                    .resource_items
+                    .iter()
+                    .map(|(name, (kind, total))| ResourceCount {
+                        name: name.clone(),
+                        kind: kind.to_string(),
+                        total: *total,
+                    })
+                    .collect();
+                // most of a kind first, and the name to settle a tie so the
+                // list does not shuffle itself between two equal counts
+                got.sort_by(|a, b| {
+                    a.kind.cmp(&b.kind).then(b.total.cmp(&a.total)).then(a.name.cmp(&b.name))
+                });
+                got
+            },
+            finished: self.finished,
             notable: self
                 .prefs
                 .notable_defs
@@ -2066,6 +2142,8 @@ pub struct Snapshot {
     pub xp: Line,
     pub kills: Line,
     pub resources: HashMap<String, i64>,
+    pub resource_items: Vec<ResourceCount>,
+    pub finished: bool,
     pub notable: Vec<NotableCount>,
     pub items: HashMap<String, ItemStats>,
     pub satanic_zone: Option<SatanicZone>,

@@ -12,6 +12,11 @@
   import About from './About.svelte';
   import Codex from './Codex.svelte';
 
+  // Steam in a sandbox is a Linux problem and naming it on Windows sends a
+  // player looking for something that cannot be there.
+  const onLinux =
+    typeof document !== 'undefined' && document.documentElement.dataset.os === 'linux';
+
   const DIRECTIONS = {
     n: 'North',
     s: 'South',
@@ -126,8 +131,34 @@
     if (status === 'waiting-for-game')
       return { bad: false, title: t('Waiting for Hero Siege'), detail: t('Counting starts a moment after the game is running.') };
     if (status.startsWith('capturing')) {
-      const [, iface, hosts, , packets, deaf] = status.split('|');
+      const [, iface, hosts, , packets, deaf, local] = status.split('|');
 
+      // The game is up, the adapters are open, and the game holds no connection
+      // to anywhere but this machine.
+      //
+      // Local Mode is exactly this and is the first thing to say: it plays
+      // without a server, everything it would otherwise send stays inside the
+      // process, and there is nothing on the wire for any capture to read. Not
+      // a fault, and no setting would change it — which is why this line is
+      // not red. The old wording called it a fault and named a Flatpak first,
+      // and a player in a local game was told to go hunting for a VPN.
+      if (Number(hosts) === 0 && snap.session_secs > 60)
+        return {
+          bad: false,
+          title: t('Nothing to count in a local game'),
+          detail:
+            Number(local) > 0
+              ? t(
+                  'The game is connected to this machine and to nowhere else, which is what Local Mode looks like from here. Gold, experience and finds are read out of what the game tells its server, and a local game tells one nothing. Join an online server and counting starts on its own.',
+                )
+              : say(
+                  'Capturing on {iface}. The game is running and holds no connection at all — Local Mode looks exactly like this, and there is nothing on the wire to read. If you are playing online, a VPN or a second network adapter can carry its traffic somewhere we are not listening.',
+                  { iface },
+                ) +
+                (onLinux
+                  ? ' ' + t('A Flatpak or Snap install of Steam hides the game from us as well.')
+                  : ''),
+        };
       // Ninety seconds with the game up and not one message decoded. The
       // backend decides when that is true, because it is the only side that
       // knows when each capture started; `deaf` is 1 while only the game's own
@@ -164,19 +195,6 @@
             say(
               "Every connection on this machine is already being read — {n} packets on {iface} — and none of it decoded as Hero Siege. Whatever carries the game's traffic here is not something this app can read from outside. The packet log in Settings and hs-tracker.log are what to send.",
               { n: Number(packets).toLocaleString(locale()), iface },
-            ),
-        };
-      // the game is up and adapters are open, but nothing of the game's own has
-      // been seen — the usual causes are a sandbox around the game or a tunnel
-      // its traffic takes that we are not on
-      if (Number(hosts) === 0 && snap.session_secs > 60)
-        return {
-          bad: true,
-          title: t('Listening, but the game’s traffic is not reaching us'),
-          detail:
-            say(
-              'Capturing on {iface}. The game is running, yet none of its connections can be seen. A Flatpak or Snap install of Steam hides the game from us; a VPN or a second network adapter can carry its traffic somewhere we are not listening.',
-              { iface },
             ),
         };
       // The game's connections are known and not one frame of them is

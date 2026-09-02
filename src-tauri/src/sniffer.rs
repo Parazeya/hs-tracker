@@ -30,7 +30,15 @@ pub enum Status {
     NoAccess,
     NoInterface,
     WaitingForGame,
-    Capturing { iface: String, hosts: usize, dropped: u32, packets: u32, deaf: Deaf },
+    Capturing {
+        iface: String,
+        hosts: usize,
+        /// how many of the game's connections go nowhere but this machine
+        local: usize,
+        dropped: u32,
+        packets: u32,
+        deaf: Deaf,
+    },
 }
 
 /// Whether the capture has gone the whole of `DEAF_AFTER` without decoding a
@@ -66,14 +74,14 @@ impl Status {
             Status::NoAccess => "no-access".into(),
             Status::NoInterface => "no-interface".into(),
             Status::WaitingForGame => "waiting-for-game".into(),
-            Status::Capturing { iface, hosts, dropped, packets, deaf } => {
+            Status::Capturing { iface, hosts, local, dropped, packets, deaf } => {
                 let deaf = match deaf {
                     Deaf::No => 0,
                     Deaf::Narrow => 1,
                     Deaf::Wide => 2,
                     Deaf::Encrypted => 3,
                 };
-                format!("capturing|{iface}|{hosts}|{dropped}|{packets}|{deaf}")
+                format!("capturing|{iface}|{hosts}|{dropped}|{packets}|{deaf}|{local}")
             }
         }
     }
@@ -282,32 +290,62 @@ fn unmap(ip: IpAddr) -> IpAddr {
 }
 
 /// The far ends of the game's own connections, read out of the operating
-/// system's socket table.
+/// system's socket table, and how many of them go nowhere.
 ///
 /// The near ends were collected too and are not any more: see `scope_for` for
 /// why naming this machine's own address in the filter did more harm than the
 /// narrowing was worth.
-fn game_endpoints(pids: &[u32]) -> BTreeSet<IpAddr> {
+fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize) {
     let mut remote = BTreeSet::new();
+    // Connections the game holds to this machine itself, counted and not
+    // followed. They are worth nothing to a capture and everything to the
+    // panel: a game talking only to itself is a local game.
+    let mut homebound = 0usize;
     if pids.is_empty() {
-        return remote;
+        return (remote, homebound);
     }
-    let af = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
-    if let Ok(sockets) = netstat2::get_sockets_info(af, ProtocolFlags::TCP) {
-        for s in sockets {
+    // One family at a time, and one row at a time.
+    //
+    // `get_sockets_info` takes both families together and, in its own words,
+    // short-circuits on any error along the way: it asks Windows for the IPv6
+    // table as well, and a machine with IPv6 switched off answers that with an
+    // error — which throws away the IPv4 table holding every connection the
+    // game has. A single row it cannot parse does the same thing. Either way
+    // the endpoints came back empty for as long as the app was running, and
+    // the panel said the game's traffic was not reaching us while the traffic
+    // was arriving perfectly well and nothing knew where to look for it.
+    for (family, af) in
+        [("IPv4", AddressFamilyFlags::IPV4), ("IPv6", AddressFamilyFlags::IPV6)]
+    {
+        let rows = match netstat2::iterate_sockets_info(af, ProtocolFlags::TCP) {
+            Ok(rows) => rows,
+            Err(e) => {
+                crate::log::once(
+                    &format!("sockets-{family}"),
+                    "warn",
+                    format!("the {family} connection table would not open: {e}"),
+                );
+                continue;
+            }
+        };
+        for s in rows.flatten() {
             if !s.associated_pids.iter().any(|p| pids.contains(p)) {
                 continue;
             }
             if let ProtocolSocketInfo::Tcp(t) = &s.protocol_socket_info {
                 let far = unmap(t.remote_addr);
-                if far.is_unspecified() || far.is_loopback() {
+                if far.is_unspecified() {
+                    continue;
+                }
+                if far.is_loopback() {
+                    homebound += 1;
                     continue;
                 }
                 remote.insert(far);
             }
         }
     }
-    remote
+    (remote, homebound)
 }
 
 /// Every adapter worth listening on. A split-tunnel engine (WireSock and the
@@ -581,6 +619,13 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
     let mut can_capture = true;
     // the hosts the game is talking to, kept between the slow endpoint sweeps
     let mut hosts = 0usize;
+    // and how many of them lead back to this machine
+    let mut local = 0usize;
+    // What the last sweep found, so the log says when it changes. Without it a
+    // report of nothing being counted cannot be told apart from a report of the
+    // game never being found: both arrive as a log with the adapters in it and
+    // nothing after.
+    let mut told: Option<(usize, usize, usize)> = None;
     // When silence was last written down. `log::once` cannot do this job: it
     // dedupes on the message, and the message carries a frame count that moves
     // every second — so the first version of this wrote the same warning
@@ -652,8 +697,20 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         // inode-to-pid map — four calls in five were thrown away.
         if running && looked.elapsed() >= Duration::from_secs(5) {
             looked = std::time::Instant::now();
-            let remote = game_endpoints(&pids);
+            let (remote, homebound) = game_endpoints(&pids);
             hosts = remote.len();
+            local = homebound;
+            if told != Some((pids.len(), hosts, local)) {
+                told = Some((pids.len(), hosts, local));
+                let who: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
+                crate::log::say(
+                    "net",
+                    &format!(
+                        "the game is pid {} and holds {hosts} connections, {local} of them to this machine",
+                        who.join(", ")
+                    ),
+                );
+            }
             wanted = capture_devices();
             let narrow = scope_for(&remote);
             let next = if wide_capture() { "tcp".to_string() } else { narrow };
@@ -665,6 +722,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         if !running {
             wanted.clear();
             hosts = 0;
+            local = 0;
         }
 
         // An adapter is only judged against one that is working: with the game
@@ -844,7 +902,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                     }
                 ));
             }
-            set_status(&status, Status::Capturing { iface, hosts, dropped, packets, deaf });
+            set_status(&status, Status::Capturing { iface, hosts, local, dropped, packets, deaf });
         } else if !captures.is_empty() {
             // every capture died: whatever they stored stands
         } else if !running {
