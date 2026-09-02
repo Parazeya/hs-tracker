@@ -10,6 +10,15 @@
   import { itemName, language, locale, nameOf, placeList, satanicZoneName, say, t, typeLabel } from './say.svelte.js';
   import { fmt, difficulty, RARITIES, RARITY_CLASS } from './format.js';
 
+  // The four counters the backend keeps, and what to call them. Every resource
+  // it names belongs to one of them; see `RESOURCES` in stats.rs.
+  const RESOURCES = [
+    ['keys', 'Keys'],
+    ['materials', 'Materials'],
+    ['socketables', 'Socketables'],
+    ['collectibles', 'Collectibles'],
+  ];
+
   let snap = $state(null);
   let extra = $state(null);
   // See App.svelte: a `bind:this` an effect reads has to be state, or it
@@ -421,7 +430,13 @@
           {snap?.paused ? '' : ''}{snap ? dur(clock.secs + (snap.paused ? 0 : (nowTick - clock.at) / 1000)) : '0:00'}
           {#if snap?.paused}<img class="frost" src={art('frozen_icon')} alt="" />{/if}
         </div>
-        <div class="sub">{snap?.paused ? t('paused — click to carry on') : charSub}</div>
+        <div class="sub">
+          {snap?.finished
+            ? t('the run is over')
+            : snap?.paused
+              ? t('paused — click to carry on')
+              : charSub}
+        </div>
       </button>
       <div class="card" style:border-image-source="url({art('chip_dark')})">
         <div class="label">{t("Gold")}</div>
@@ -449,6 +464,24 @@
     {#if lag}
       <div class="lag" data-tauri-drag-region>{lag}</div>
     {/if}
+
+    <!-- Ending a run is a thing the player does, not a side effect of clearing
+         the counters. Reset files the run and the next second is already part
+         of the next one; this files it and then waits, so the walk to town and
+         the hour in the stash land in no run at all. -->
+    <div class="ends" data-tauri-drag-region>
+      {#if snap?.finished}
+        <button class="end open" onclick={() => invoke('start_run').catch(() => {})}>
+          {t('Start a new run')}
+        </button>
+        <span class="dim">{t('Nothing is counted until it does.')}</span>
+      {:else}
+        <button class="end" onclick={() => invoke('finish_run').catch(() => {})}>
+          {t('Finish the run')}
+        </button>
+        <span class="dim">{t('Files it in Runs and stops counting.')}</span>
+      {/if}
+    </div>
 
     <div class="cols">
       <!-- left: what dropped -->
@@ -483,8 +516,11 @@
 
           <div class="subhead">{t("Resources")}</div>
           <div class="tally">
-            {#each [[t('Keys'), snap?.resources?.keys], [t('Materials'), snap?.resources?.materials], [t('Socketables'), snap?.resources?.socketables], [t('Collectibles'), snap?.resources?.collectibles]] as [label, value]}
-              <div class="tallyrow"><span class="dim">{label}</span><b>{fmt(value)}</b></div>
+            {#each RESOURCES as [kind, label]}
+              <div class="tallyrow"><span class="dim">{t(label)}</span><b>{fmt(snap?.resources?.[kind])}</b></div>
+              {#each (snap?.resource_items ?? []).filter((r) => r.kind === kind) as r (r.name)}
+                <div class="tallyrow named"><span class="dim">{t(nameOf(r.name))}</span><b>{fmt(r.total)}</b></div>
+              {/each}
             {/each}
           </div>
         </div>
@@ -938,8 +974,31 @@
     padding: 2px 2px 2px 0;
     border-bottom: 1px solid rgba(58, 43, 43, 0.7);
   }
+  /* one resource under the count it belongs to */
+  .tallyrow.named { padding-left: 12px; border-bottom-color: rgba(58, 43, 43, 0.35); }
+  .tallyrow.named span, .tallyrow.named b { font-size: 10px; opacity: 0.78; }
   .tallyrow span { font-size: 11px; }
   .tallyrow b { font-size: 12px; color: var(--bone-6); }
+
+  .ends {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 2px 6px;
+  }
+  .ends .dim { font-size: 10px; }
+  .end {
+    padding: 3px 10px;
+    color: var(--bone-6);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(58, 43, 43, 0.9);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .end:hover { color: var(--bone-8); border-color: var(--bone-6); }
+  .end.open { color: var(--gold-2); border-color: rgba(120, 96, 40, 0.9); }
 
   .box-head {
     flex: none;

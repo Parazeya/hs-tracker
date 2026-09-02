@@ -52,6 +52,57 @@
 
   const drops = (r) => RARITIES.reduce((sum, name) => sum + (r.items?.[name] ?? 0), 0);
 
+  // The four numbers a run is read by, in the order the panel shows them.
+  const RATES = [
+    ['Gold', 'c-gold', (r) => r.gold],
+    ['XP', 'c-xp', (r) => r.xp],
+    ['Kills', 'c-her', (r) => r.kills],
+    ['Drops', '', drops],
+  ];
+
+  /**
+   * A run is only worth reading against runs it can be compared with.
+   *
+   * Difficulty and the grade of Hell, because an hour in Hell 5 and an hour in
+   * Normal are not the same hour and nothing else here would say so. Not the
+   * character: a player who farms the same zone on two heroes is comparing the
+   * zone, which is what they came for.
+   *
+   * Short runs are left out. Under five minutes a single lucky pack doubles
+   * the rate, and a handful of those drag the middle far enough to make an
+   * ordinary hour look poor.
+   */
+  const ENOUGH = 3;
+  const LONG_ENOUGH = 300;
+
+  /** The middle value, which is not the average: one three-hour Colosseum run
+   *  moves a mean and says nothing about a normal hour. */
+  function middle(list, of) {
+    const got = list.map(of).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+    if (!got.length) return null;
+    const at = Math.floor(got.length / 2);
+    return got.length % 2 ? got[at] : Math.round((got[at - 1] + got[at]) / 2);
+  }
+
+  const usual = $derived.by(() => {
+    if (!run) return null;
+    const like = runs.filter(
+      (r) =>
+        r.started_ms !== run.started_ms &&
+        r.secs >= LONG_ENOUGH &&
+        r.difficulty === run.difficulty &&
+        (r.hell_sub ?? 0) === (run.hell_sub ?? 0),
+    );
+    if (like.length < ENOUGH) return null;
+    return {
+      n: like.length,
+      of: RATES.map(([, , of]) => middle(like, (r) => perHour(of(r), r.secs))),
+    };
+  });
+
+  /** How far this run stands from the middle of those, in per cent. */
+  const against = (now, was) => (was ? Math.round(((now - was) / was) * 100) : null);
+
   // The bosses and chests a run put down. They are filed with every run and
   // drawn on the card you can copy from here, and were the one thing on that
   // picture the panel behind it could not show you. Runs filed before 0.9.8
@@ -172,26 +223,28 @@
               {#if run.difficulty != null}· {difficulty(run.difficulty, run.hell_sub)}{/if}
             </div>
             <div class="rates">
-              <div class="rate">
-                <div class="label">{t("Gold")}</div>
-                <div class="value c-gold">{fmt(run.gold)}</div>
-                <div class="sub">{fmt(perHour(run.gold, run.secs))}{t('/h')}</div>
-              </div>
-              <div class="rate">
-                <div class="label">{t("XP")}</div>
-                <div class="value c-xp">{fmt(run.xp)}</div>
-                <div class="sub">{fmt(perHour(run.xp, run.secs))}{t('/h')}</div>
-              </div>
-              <div class="rate">
-                <div class="label">{t("Kills")}</div>
-                <div class="value c-her">{fmt(run.kills)}</div>
-                <div class="sub">{fmt(perHour(run.kills, run.secs))}{t('/h')}</div>
-              </div>
-              <div class="rate">
-                <div class="label">{t("Drops")}</div>
-                <div class="value">{fmt(drops(run))}</div>
-                <div class="sub">{fmt(perHour(drops(run), run.secs))}{t('/h')}</div>
-              </div>
+              {#each RATES as [label, cls, of], i}
+                {@const rate = perHour(of(run), run.secs)}
+                {@const apart = usual ? against(rate, usual.of[i]) : null}
+                <div class="rate">
+                  <div class="label">{t(label)}</div>
+                  <div class="value {cls}">{fmt(of(run))}</div>
+                  <div class="sub">{fmt(rate)}{t('/h')}</div>
+                  {#if apart != null}
+                    <div
+                      class="vs"
+                      class:up={apart > 0}
+                      class:down={apart < 0}
+                      title={say('the middle of your other {n} runs on this difficulty is {rate}/h', {
+                        n: usual.n,
+                        rate: fmt(usual.of[i]),
+                      })}
+                    >
+                      {apart > 0 ? '+' : ''}{apart}% {t('vs usual')}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
             </div>
           </div>
 
@@ -396,6 +449,11 @@
   }
   .rate { min-width: 0; overflow: hidden; }
   .rate .value,
+  /* how this run stands against the ones before it */
+  .vs { margin-top: 1px; font-size: 10px; color: var(--bone-4); }
+  .vs.up { color: var(--gold-2); }
+  .vs.down { color: #b06a6a; }
+
   .rate .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .label {
     font-size: 9px;

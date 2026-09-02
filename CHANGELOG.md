@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.2 — 2026-09-02
+
+### Added
+
+- Resources are counted one by one, under the four totals.
+- A run can be ended by hand, and the next one started when you say so.
+- A run says how far it stands from the middle of your others on the same
+  difficulty.
+
+### Fixed
+
+- A local game is named as one rather than reported as a fault.
+- None of the game's connections could be seen with IPv6 switched off.
+- The log names the game's process and how many connections it holds.
+- A slow start is no longer written down as a dead one.
+
 ## 1.1.1 — 2026-09-01
 
 ### Fixed

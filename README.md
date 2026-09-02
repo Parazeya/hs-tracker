@@ -7,9 +7,40 @@
   <br>in the game's own skin.
 </p>
 
+<h3 align="center">Approved by the developer of Hero Siege</h3>
+
 <p align="center">
   <a href="../../releases"><b>➡️ Download for Windows &amp; Linux ⬅️</b></a>
 </p>
+
+<p align="center">
+  <a href="../../releases"><img alt="downloads in all" src="https://img.shields.io/github/downloads/Parazeya/hs-tracker/total?style=flat-square&amp;label=downloads&amp;color=6f42c1"></a>
+</p>
+
+<!-- downloads -->
+<table align="center">
+  <tr>
+    <td><b>Windows</b></td>
+    <td><a href="../../releases/download/v1.1.2/HS.Tracker_1.1.2_x64-setup.exe">HS.Tracker_1.1.2_x64-setup.exe</a></td>
+    <td align="right"><img alt="downloads" src="https://img.shields.io/github/downloads/Parazeya/hs-tracker/latest/HS.Tracker_1.1.2_x64-setup.exe?style=flat-square&amp;label=&amp;color=6f42c1"></td>
+  </tr>
+  <tr>
+    <td><b>Linux · AppImage</b></td>
+    <td><a href="../../releases/download/v1.1.2/HS.Tracker_1.1.2_amd64.AppImage">HS.Tracker_1.1.2_amd64.AppImage</a></td>
+    <td align="right"><img alt="downloads" src="https://img.shields.io/github/downloads/Parazeya/hs-tracker/latest/HS.Tracker_1.1.2_amd64.AppImage?style=flat-square&amp;label=&amp;color=6f42c1"></td>
+  </tr>
+  <tr>
+    <td><b>Linux · deb</b></td>
+    <td><a href="../../releases/download/v1.1.2/HS.Tracker_1.1.2_amd64.deb">HS.Tracker_1.1.2_amd64.deb</a></td>
+    <td align="right"><img alt="downloads" src="https://img.shields.io/github/downloads/Parazeya/hs-tracker/latest/HS.Tracker_1.1.2_amd64.deb?style=flat-square&amp;label=&amp;color=6f42c1"></td>
+  </tr>
+  <tr>
+    <td><b>Linux · rpm</b></td>
+    <td><a href="../../releases/download/v1.1.2/HS.Tracker-1.1.2-1.x86_64.rpm">HS.Tracker-1.1.2-1.x86_64.rpm</a></td>
+    <td align="right"><img alt="downloads" src="https://img.shields.io/github/downloads/Parazeya/hs-tracker/latest/HS.Tracker-1.1.2-1.x86_64.rpm?style=flat-square&amp;label=&amp;color=6f42c1"></td>
+  </tr>
+</table>
+<!-- /downloads -->
 
 > [!NOTE]
 > **How soon does it work when a new season starts?**

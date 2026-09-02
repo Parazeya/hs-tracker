@@ -69,6 +69,10 @@ const STRIP_GAP: f64 = 0.0;
 /// The window, which is wider than the panel so the strip can sit OUTSIDE it
 /// rather than on its frame. A webview cannot paint past its own window, so
 /// "beside the panel" and "inside the window" are the same requirement.
+///
+/// The running app asks `base_w()`, which measures; this is the width it was
+/// drawn for, and only the tests have anything to check against it.
+#[cfg(test)]
 const BASE_W: f64 = PANEL_W + STRIP_GAP + STRIP_W;
 
 fn panel_w() -> f64 {
@@ -1826,6 +1830,24 @@ fn reset_stats(app: AppHandle) {
     close_session(&app);
 }
 
+/// Close the run by hand, and open the next one when the player says so.
+///
+/// Reset does half of this already — it files the run and clears the counters —
+/// and then the next second is already part of a new run. That is right for a
+/// button pressed mid-farm and wrong for the end of a session: the walk to
+/// town, the stash, the lobby all land in a run nobody played. Finishing files
+/// the run and stops there; nothing counts until `start_run`.
+#[tauri::command(async)]
+fn finish_run(app: AppHandle) {
+    close_session(&app);
+    app.state::<Shared>().stats().set_finished(true);
+}
+
+#[tauri::command(async)]
+fn start_run(app: AppHandle) {
+    app.state::<Shared>().stats().set_finished(false);
+}
+
 /// Stop or restart the session clock. The counters are untouched either way —
 /// what a pause changes is what the run is divided by.
 #[tauri::command]
@@ -2880,9 +2902,11 @@ fn spawn_render_watchdog(app: AppHandle) {
         // which reads as the app not knowing what it is running on.
         #[cfg(windows)]
         log::error(
-            "no window has drawn anything after 20s - the web process is probably dead. \
-             The WebView2 runtime is the usual cause: repair or reinstall the Microsoft Edge \
-             WebView2 Runtime. The env line above says which version was in use.",
+            "no window has drawn anything after 20s. The web process may be dead - repair \
+             or reinstall the Microsoft Edge WebView2 Runtime, and the env line above says \
+             which version was in use. It may equally still be starting: a runtime that has \
+             just updated itself rebuilds its profile on the first run after, and that can \
+             take a minute. The next line says which of the two this was.",
         );
         #[cfg(not(windows))]
         log::error(
@@ -2891,6 +2915,30 @@ fn spawn_render_watchdog(app: AppHandle) {
              WEBKIT_DISABLE_COMPOSITING_MODE=1, then LIBGL_ALWAYS_SOFTWARE=1. Please send \
              this log and whatever the terminal printed alongside it.",
         );
+
+        // And then keep watching.
+        //
+        // The complaint above is written at twenty seconds and the window
+        // sometimes arrives after it: the first start on a freshly updated
+        // WebView2 failed twice and then came up in three seconds. A log that
+        // stops at the complaint reads as a dead web process either way, and
+        // sent that way it costs somebody an evening reinstalling a runtime
+        // that was only slow. So the arrival is written down too, and a log
+        // without this line is the one that means what the complaint says.
+        let complained = std::time::Instant::now();
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_secs(3));
+            if UI_READY.load(Ordering::Relaxed) {
+                log::say(
+                    "start",
+                    &format!(
+                        "the interface came up after all, {}s in - the web process was slow, not dead",
+                        20 + complained.elapsed().as_secs()
+                    ),
+                );
+                return;
+            }
+        }
     });
 }
 
@@ -3296,6 +3344,8 @@ pub fn run() {
             snapshot,
             get_extra,
             reset_stats,
+            finish_run,
+            start_run,
             set_paused,
             about,
             report,
