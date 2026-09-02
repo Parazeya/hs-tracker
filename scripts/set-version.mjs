@@ -20,9 +20,13 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 // The README lists the files a release carries, and a file's name carries the
 // version, so the list is written here rather than by hand. The names are the
 // bundlers' own — Tauri's NSIS installer, its .deb and its AppImage, and the
-// .rpm, whose name puts the packaging revision after the version. GitHub shows
-// a download count beside each asset only to someone who can push to the repo,
-// so the badge is what everybody else has.
+// .rpm, whose name puts the packaging revision after the version.
+//
+// No count beside each file. Shields can only count an asset within one
+// release, so those four numbers were the current version's alone and read as
+// nought for the minutes between the tag going up and the release being cut.
+// The one badge above the table counts every download of every release, which
+// is the figure worth showing.
 const ASSETS = [
   ['Windows', (v) => `HS.Tracker_${v}_x64-setup.exe`],
   ['Linux \u00b7 AppImage', (v) => `HS.Tracker_${v}_amd64.AppImage`],
@@ -34,14 +38,10 @@ const ASSETS = [
 function downloads(version, eol) {
   const rows = ASSETS.map(([what, named]) => {
     const file = named(version);
-    const count =
-      `https://img.shields.io/github/downloads/Parazeya/hs-tracker/latest/${file}` +
-      '?style=flat-square&amp;label=&amp;color=6f42c1';
     return [
       '  <tr>',
       `    <td><b>${what}</b></td>`,
       `    <td><a href="../../releases/download/v${version}/${file}">${file}</a></td>`,
-      `    <td align="right"><img alt="downloads" src="${count}"></td>`,
       '  </tr>',
     ].join(eol);
   });
