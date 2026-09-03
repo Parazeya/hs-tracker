@@ -12,6 +12,15 @@
   // a rarity" does not: the tables carry one for every item, bases included.
   const LISTABLE = new Set(['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy']);
 
+  // And the four kinds that arrive named whatever their rarity: keys,
+  // collectibles, materials and socketables. Every one of them is Common, so
+  // the rarities above could never reach them — and the wire names them all,
+  // because their id IS their identity rather than a slot in a base table
+  // (`SELF_NUMBERED` in parser.rs). A list holding a rune or a Tablet of
+  // Armada matches the moment one drops; the engine has always been able to,
+  // and this screen was the only thing refusing to offer them.
+  const STOCK = new Set([12, 13, 14, 15]);
+
   // Vaults are numbered by identity rather than by a slot in a base table, so
   // a drop of one always arrives named — which is what makes all seven
   // listable, where an ordinary item outside the five never arrives named at
@@ -56,7 +65,10 @@
   const NAMED = [
     ...new Map(
       Object.entries(ITEMS)
-        .filter(([, name]) => LISTABLE.has(RARITY_BY_NAME[name.toLowerCase()]))
+        .filter(([key, name]) =>
+          LISTABLE.has(RARITY_BY_NAME[name.toLowerCase()]) ||
+          STOCK.has(Number(key.split(':')[0])),
+        )
         .map(([key, name]) => {
           const [type, , weapon] = key.split(':').map(Number);
           return [
@@ -291,7 +303,12 @@
     if (!q && !draft) return [];
     const owned = new Set((current?.items ?? []).map((n) => n.toLowerCase()));
     return NAMED.filter(
-      (it) => (!q || it.key.includes(q)) && (!draft || ruleHits(draft, it)) && !owned.has(it.key),
+      (it) =>
+        // by the name on the screen as well as the one a list stores: the
+        // stored name is English, and a player reading Russian types Russian
+        (!q || it.key.includes(q) || shownName(it).toLowerCase().includes(q)) &&
+        (!draft || ruleHits(draft, it)) &&
+        !owned.has(it.key),
     ).slice(0, 40);
   });
 
