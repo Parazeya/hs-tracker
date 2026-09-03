@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.3 — 2026-09-03
+
+### Added
+
+- Runes, keys, materials and collectibles can go on a custom list.
+
+### Fixed
+
+- A custom list finds an item by the name on the screen, not only the English
+  one.
+
 ## 1.1.2 — 2026-09-02
 
 ### Added

@@ -21,19 +21,19 @@
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.2/HS.Tracker_1.1.2_x64-setup.exe">HS.Tracker_1.1.2_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.3/HS.Tracker_1.1.3_x64-setup.exe">HS.Tracker_1.1.3_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.2/HS.Tracker_1.1.2_amd64.AppImage">HS.Tracker_1.1.2_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.3/HS.Tracker_1.1.3_amd64.AppImage">HS.Tracker_1.1.3_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.2/HS.Tracker_1.1.2_amd64.deb">HS.Tracker_1.1.2_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.3/HS.Tracker_1.1.3_amd64.deb">HS.Tracker_1.1.3_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.2/HS.Tracker-1.1.2-1.x86_64.rpm">HS.Tracker-1.1.2-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.3/HS.Tracker-1.1.3-1.x86_64.rpm">HS.Tracker-1.1.3-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
