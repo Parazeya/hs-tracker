@@ -1,17 +1,15 @@
 <script>
   import { invoke, listen } from './bridge.js';
   import { art, css } from './skin.svelte.js';
-  import { BY_ID, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel, typeLabel } from './items.js';
+  import { BY_ID, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
+  import { locale, nameOf, say, t, typeLabel } from './say.svelte.js';
   import { soundUrl, play } from './audio.js';
 
-  // Only named items can be listed: an ordinary base has no identity of its own.
+  // Only named items can be listed. The parser leaves an ordinary pickup
+  // nameless, so a list holding a base has nothing to match and never chimes.
   //
-  // "Has a rarity" used to say that, and stopped: the tables now carry a rarity
-  // for every item, ordinary bases included, so this offered 1,440 names of
-  // which 476 could never fire. Pick "War Axe" out of the search, put it on a
-  // list, and nothing ever chimes — the parser leaves an ordinary pickup
-  // nameless, so the list has nothing to match. Being on one of the five
-  // rarities the journal keeps is what "named" actually means.
+  // Being on one of the five journal rarities is what "named" means here. "Has
+  // a rarity" does not: the tables carry one for every item, bases included.
   const LISTABLE = new Set(['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy']);
 
   // Vaults are numbered by identity rather than by a slot in a base table, so
@@ -20,23 +18,25 @@
   // all and could not fire.
   const VAULT = 19;
 
-  // Two items can wear one name — the game calls both a Set gun and a Heroic
-  // orb "Angel" — and the seven Essence Vaults share theirs across every
-  // rarity there is. A list keyed on the name alone fires for all of them and
-  // says nothing about which dropped, so where the tables answer by identity
-  // each is offered on its own and listed as "Name (Rarity)". That spelling is
-  // what the engine matches; the bare name still means any of them.
-  // The rate comes from the identity and not from the name, because these are
-  // the entries whose name cannot answer: seven Essence Vaults share one name
-  // and the game gives each its own chance, 1 in 6,750 for the Superior one up
-  // to 1 in 100,000 for the Unholy. Looked up by name they all came back with
-  // nothing and the panel showed seven dashes.
+  // Two items can wear one name — a Set gun and a Heroic orb are both "Angel" —
+  // and the seven Essence Vaults share theirs across every rarity. A list keyed
+  // on the name alone fires for all of them and says nothing about which
+  // dropped, so where the tables answer by identity each is offered on its own
+  // and listed as "Name (Rarity)". That spelling is what the engine matches; the
+  // bare name still means any of them.
+  //
+  // The drop rate comes from the identity for the same reason: the game gives
+  // each vault its own chance, and looked up by name they all come back empty.
   const SPLIT = Object.entries(BY_ID)
     .map(([key, [name, rarity, tier, rate]]) => {
-      const [type, , weapon] = key.split(':').map(Number);
+      const [type, id, weapon] = key.split(':').map(Number);
       return {
         name: `${name} (${rarity})`,
+        // the name without the bracket, so the screen can rebuild the bracket
+        // in the reader's language while the list still stores the English
+        bare: name,
         type,
+        id,
         weapon,
         rarity,
         tier,
@@ -46,19 +46,13 @@
     })
     .filter((it) => LISTABLE.has(it.rarity) || it.type === VAULT);
 
-  /// Every item a list can name — and the one table a category is counted
-  /// against, which is why the identity each row keeps had to be checked.
+  /// Every item a list can name, and the table a category is counted against.
   ///
-  /// Deduped by name, and the FIRST identity wins. Built straight from
-  /// `new Map(pairs)` the LAST won, which is how "Death's Scythe" came out
-  /// carrying type 16: the Set polearm is 3:2:6 and the Common relic sharing
-  /// its name is 16:60:0, so the relic's type was the one kept. "Shrunken
-  /// Head" came out a relic rather than the Satanic charm at 10:37:0 the same
-  /// way. Nothing read that type until this panel did, and this panel prints
-  /// it on a button — "every Set Polearm (15)" has to name the same 15 the
-  /// engine will match, and what the engine matches is the polearm that drops.
-  /// Those two names are the only two the change moves, and Generate below is
-  /// untouched by it: its pools need `rate > 0` and neither has a drop rate.
+  /// Deduped by name with the FIRST identity winning, which matters because
+  /// this panel prints the count on a button: "every Set Polearm (15)" has to
+  /// name the same fifteen the engine will match. Two names are claimed by a
+  /// listable item and a relic — `Death's Scythe` and `Shrunken Head` — and
+  /// `new Map(pairs)` would keep the relic's type for both.
   const NAMED = [
     ...new Map(
       Object.entries(ITEMS)
@@ -98,6 +92,18 @@
     );
   };
 
+  /// The name on the screen. What a list stores is the English — that is what
+  /// the engine matches a drop against — so the word is looked up here and
+  /// nowhere else. The seven Essence Vaults are stored with their rarity in a
+  /// bracket to tell them apart; the bracket is rebuilt rather than translated
+  /// as if it were part of the name, which it is not.
+  const shownName = (entry) => {
+    const it = typeof entry === 'string' ? facts(entry) : entry;
+    const stored = typeof entry === 'string' ? entry : entry.name;
+    if (it?.bare) return `${nameOf(it.bare, it.type, it.id, it.weapon)} (${t(it.rarity)})`;
+    return nameOf(stored, it?.type, it?.id, it?.weapon);
+  };
+
   // what a character wears and carries. Orbs, vials, reagents and the like are
   // named too, but nobody wants a chime for a Goblin orb in a gear band — they
   // can still be added to a list by hand.
@@ -107,13 +113,12 @@
   const rarityCls = { Satanic: 'c-sat', Set: 'c-set', Heroic: 'c-her', Angelic: 'c-ang', Unholy: 'c-unh' };
 
   // The vocabulary a category is picked from, counted off the table above so
-  // that no number on this screen is a number somebody typed.
+  // no number on this screen is one somebody typed.
   //
-  // Five rarities and no more, for the reason LISTABLE gives: those are the
-  // ones a drop arrives named under, and a category that can never match
-  // anything is the very bug that comment was written about. The three
-  // rarities the Essence Vaults carry alone — Superior, Rare and Mythic — are
-  // reached by kind instead, where all seven of them sit together.
+  // Five rarities and no more, for the reason LISTABLE gives: those are the ones
+  // a drop arrives named under. The three the Essence Vaults carry alone —
+  // Superior, Rare and Mythic — are reached by kind instead, where all seven
+  // sit together.
   const RARITY_CHOICES = ALERT_RARITIES.map((rarity) => ({
     rarity,
     n: NAMED.filter((it) => it.rarity === rarity).length,
@@ -123,37 +128,39 @@
   // weapon there is, so type 3 is split by its weapon type and everything else
   // stands on its own.
   //
-  // Relics are absent because none of them is in the table above at all: every
-  // one of the 156 is Common, they arrive nameless, and they have a picker of
-  // their own on the Alerts tab. Offering "Relic · 156" here would have been a
-  // category that could never once make a sound.
+  // Relics are absent: every one of them is Common, they arrive nameless, and
+  // they have a picker of their own on the Alerts tab. "Relic · 156" here would
+  // be a category that could never make a sound.
   const TYPE_CHOICES = (() => {
     const by = new Map();
     for (const it of NAMED) {
       const weapon = it.type === 3 ? it.weapon : null;
       const key = `${it.type}:${weapon ?? ''}`;
-      const row = by.get(key) ?? {
-        key,
-        label: typeLabel(it.type, it.weapon),
-        type: it.type,
-        weapon,
-        n: 0,
-      };
+      const row = by.get(key) ?? { key, type: it.type, weapon, n: 0 };
       row.n += 1;
       by.set(key, row);
     }
-    // Two kinds answer to one word and the player has to be able to tell them
-    // apart: the game's own tables spell type 18 "Flask" and weapon type 15
-    // "Flask" too, so the list held two rows reading "Flask" that differed
-    // only in their count. A weapon says so.
-    const rows = [...by.values()];
+    return [...by.values()];
+  })();
+
+  // The word for each kind, and the order they are listed in — both worked out
+  // where they are printed rather than where the rows are built. The rows are
+  // built once when the script runs, which is before the language file has
+  // arrived, so a label written into them stays English for good.
+  //
+  // Two kinds answer to one word and the player has to be able to tell them
+  // apart: the game's own tables spell type 18 "Flask" and weapon type 15
+  // "Flask" too, so the list held two rows reading "Flask" that differed only
+  // in their count. A weapon says so.
+  let kindChoices = $derived.by(() => {
+    const rows = TYPE_CHOICES.map((r) => ({ ...r, label: typeLabel(r.type, r.weapon ?? 0) }));
     const spoken = new Map();
     for (const r of rows) spoken.set(r.label, (spoken.get(r.label) ?? 0) + 1);
     for (const r of rows) {
-      if (spoken.get(r.label) > 1) r.label = r.weapon == null ? r.label : `${r.label} (weapon)`;
+      if (spoken.get(r.label) > 1 && r.weapon != null) r.label = `${r.label} (${t('weapon')})`;
     }
-    return rows.sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
-  })();
+    return rows.sort((a, b) => b.n - a.n || a.label.localeCompare(b.label, locale()));
+  });
 
   /// The same question the engine asks of a drop, asked of a row of the table.
   ///
@@ -169,9 +176,9 @@
 
   const ruleName = (rule) => {
     const kind = rule.item_type == null ? null : typeLabel(rule.item_type, rule.weapon ?? 0);
-    if (rule.rarity && kind) return `every ${rule.rarity} ${kind}`;
-    if (rule.rarity) return `every ${rule.rarity} item`;
-    return `every ${kind}`;
+    if (rule.rarity && kind) return say('every {rarity} {kind}', { rarity: t(rule.rarity), kind });
+    if (rule.rarity) return say('every {rarity} item', { rarity: t(rule.rarity) });
+    return say('every {kind}', { kind });
   };
 
   const sameRule = (a, b) =>
@@ -184,12 +191,10 @@
   let status = $state({});
   let saveTimer;
 
-  // Two boxes, not one. The old panel had a single field labelled "search to
-  // add, or to narrow the list below", and a field that has to be told in a
-  // label what it does is a field doing two jobs. They are apart now, and the
-  // pair loses nothing: the one thing the single box did silently — type a
-  // name, watch it vanish from the results and turn up in the list below — is
-  // the line under the results, which says it and offers the click.
+  // Two boxes, not one: a single field cannot both add an item and narrow the
+  // list below without a label explaining which it is doing. What the single
+  // box did silently — type a name, watch it move from the results into the
+  // list — is the line under the results, which says so and offers the click.
   let addQuery = $state('');
   let listQuery = $state('');
   let addRarity = $state('');
@@ -211,7 +216,7 @@
   /// the button simply is not there. `engine_rule` refuses the same thing on
   /// the way in, because a settings file can be edited by hand.
   let draft = $derived.by(() => {
-    const kind = TYPE_CHOICES.find((t) => t.key === addType) ?? null;
+    const kind = TYPE_CHOICES.find((row) => row.key === addType) ?? null;
     if (!addRarity && !kind) return null;
     return {
       rarity: addRarity || null,
@@ -237,15 +242,12 @@
   );
 
   // An item in two lists is a conflict: only the first list's sound plays, and
-  // the order of the lists decides which. The rail says so in words, and the
-  // row keeps the chip that says which other list has it.
+  // the order of the lists decides which. The rail says so in words, and the row
+  // keeps a chip naming the other list.
   //
-  // A list that is switched off is not in the running. The engine drops it
-  // before it looks at anything — `lib.rs` keeps only `l.enabled && !l.id
-  // .is_empty()` — so counting it here would make the screen name a winner
-  // that cannot sound. The old panel had the same blindness and whispered it
-  // in a tooltip; this tab puts the answer in its heading, where being wrong
-  // costs more.
+  // A list that is switched off is not in the running — `lib.rs` keeps only
+  // `l.enabled && !l.id.is_empty()` — so counting one here would name a winner
+  // that cannot sound.
   let clashes = $derived.by(() => {
     const owners = new Map();
     covered.forEach((names, i) => {
@@ -336,12 +338,10 @@
     for (const list of lists) refreshStatus(`list-${list.id}`);
   });
 
-  /// The answer is written after it arrives, never around it. Written as
-  /// `status = { ...status, [key]: await … }` the spread is evaluated before
-  /// the await — so eight lists asked at once each copied the same empty map
-  /// and the last reply overwrote the other seven. An imported filter then
-  /// claimed to have no sounds while its files sat on disk and Test played
-  /// them.
+  /// The answer is written after it arrives, never around it: in
+  /// `status = { ...status, [key]: await … }` the spread is evaluated BEFORE the
+  /// await, so several lists asked at once each copy the same empty map and the
+  /// last reply overwrites the rest.
   async function refreshStatus(key) {
     const name = await invoke('sound_status', { rarity: key }).catch(() => null);
     status[key] = name;
@@ -353,14 +353,14 @@
     saveTimer = setTimeout(() => invoke('save_settings', { settings: snapshot }).catch(() => {}), 150);
   }
 
-  // What a blank cell means, said instead of left blank.
+  // What a blank cell means, said instead of left blank. The tables carry a
+  // chance only for items the game states one for, and an empty cell reads as a
+  // hole in the app rather than as an answer.
   //
-  // The tables carry a chance for the items the game states one for, and for
-  // the rest they carry nothing — a relic that only comes out of a tower, a
-  // charm the game gives no world rate. Rendering that as an empty cell reads
-  // as a hole in the app rather than as an answer, and it was reported as one.
-  // A dash and a title say which it is.
-  const NO_ODDS = 'the game states no drop chance for this — it comes from a boss, a chest or a tower rather than falling in the world';
+  // A function, not a string: a const is filled in once and would keep the
+  // language it loaded in.
+  const NO_ODDS = () =>
+    t('the game states no drop chance for this — it comes from a boss, a chest or a tower rather than falling in the world');
 
   // "one in 576425" is true but unreadable in a row; "1/576k" is not
   function odds(rate) {
@@ -373,12 +373,12 @@
   const id = () => Math.random().toString(36).slice(2, 8);
 
   // Deleting a watchlist takes its lists and their sounds with it, and clearing
-  // a list is just as final — so anything destructive asks once. The second
-  // click does it; walking away forgets.
+  // a list is as final, so anything destructive asks once: the second click does
+  // it, walking away forgets.
   //
-  // The key has to name what is armed, not just which button. Keyed by button
-  // alone, arming the delete on one list and then picking another left the
-  // second one armed without ever having been asked about: one click, gone.
+  // The key names WHAT is armed, not just which button. Keyed by button alone,
+  // arming the delete on one list and then selecting another leaves the second
+  // armed without ever having been asked about.
   let armed = $state(null);
   let armTimer;
   function danger(key, action) {
@@ -423,16 +423,14 @@
     rules: [],
   });
 
-  // Drop rates are "one in N", so sorting by them splits a grade into the
-  // items you see often, the ones you do not, and the chase pieces.
+  // Drop rates are "one in N", so sorting by them splits a grade into the items
+  // you see often, the ones you do not, and the chase pieces.
   //
-  // Off the first screen now, in the ⋯ menu, and offered from the empty state
-  // too. It is a place to start from rather than a tool — it writes eight lists,
-  // six bands of how often a thing falls plus Angelic and Unholy, which `APART`
-  // keeps out of the bands, and the player then names them and gives each a
-  // sound — and a whole category added below covers the same ground with the
-  // player choosing the ground.
-  // The code is the same code; only the button moved.
+  // A place to start from rather than a tool: it writes eight lists — six bands
+  // of how often a thing falls, plus Angelic and Unholy, which `APART` keeps out
+  // of the bands — and the player then names them and gives each a sound. Lives
+  // in the ⋯ menu and the empty state, because adding a category below covers
+  // the same ground with the player choosing it.
   function generate() {
     const bands = [];
     for (const [tier, letter] of [
@@ -446,7 +444,7 @@
       const cut = Math.ceil(pool.length / 3);
       for (const [n, name] of [[0, 'Common'], [1, 'Rare'], [2, 'VeryRare']]) {
         const slice = pool.slice(n * cut, (n + 1) * cut);
-        if (slice.length) bands.push(band(`${letter}-${name}`, slice));
+        if (slice.length) bands.push(band(`${letter}-${t(name)}`, slice));
       }
     }
     for (const rarity of APART) {
@@ -455,7 +453,7 @@
       );
       if (own.length) bands.push(band(rarity, own));
     }
-    addFilter('Drop rate bands', bands);
+    addFilter(t('Drop rate bands'), bands);
   }
 
   /// The first list that matches wins, so the order is the priority.
@@ -472,7 +470,7 @@
   function addList() {
     filter.lists = [
       ...lists,
-      { id: id(), name: `List ${lists.length + 1}`, enabled: true, volume: 0.7, items: [], rules: [] },
+      { id: id(), name: `${t('List')} ${lists.length + 1}`, enabled: true, volume: 0.7, items: [], rules: [] },
     ];
     selected = filter.lists.length - 1;
     save();
@@ -539,7 +537,7 @@
 
   let notice = $state('');
   let noticeTimer;
-  function say(text) {
+  function notify(text) {
     notice = text;
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => (notice = ''), 4000);
@@ -548,9 +546,9 @@
   async function exportFilter() {
     try {
       const name = await invoke('export_filter', { filter: $state.snapshot(filter) });
-      if (name) say(`saved as ${name}`);
+      if (name) notify(say('saved as {name}', { name }));
     } catch (e) {
-      say(String(e));
+      notify(String(e));
     }
   }
 
@@ -572,9 +570,9 @@
       await invoke('save_settings', { settings: base });
       settings = base;
       selected = 0;
-      say(`imported ${imported.name} — ${imported.lists.length} lists`);
+      notify(say('imported {name} — {n} lists', { name: imported.name, n: imported.lists.length }));
     } catch (e) {
-      say(String(e));
+      notify(String(e));
     }
   }
 
@@ -585,7 +583,7 @@
   function duplicateFilter() {
     const pairs = lists.map((l) => [l.id, id()]);
     const made = addFilter(
-      `${filter.name} copy`,
+      `${filter.name} ${t('copy')}`,
       lists.map((l, i) => ({
         ...l,
         id: pairs[i][1],
@@ -622,27 +620,24 @@
 <div class="panel">
 {#if settings}
   <!-- The switch first, and what it does in one sentence beside it. Every
-       other control on this tab is dead while it is off, and it used to sit
-       eight controls down a column three screens long. -->
+       other control on this tab is dead while it is off, so it goes at the
+       top rather than eight controls down a long column. -->
   <div class="strip" style:border-image-source={css('chip_dark')}>
-    <button class="check" onclick={() => { settings.use_filter = !settings.use_filter; save(); }} aria-label="use this watchlist">
+    <button class="check" onclick={() => { settings.use_filter = !settings.use_filter; save(); }} aria-label={t("use this watchlist")}>
       <img src={settings.use_filter ? art('check_on') : art('check_off')} alt="" />
     </button>
     <div class="says">
-      <div class="opt">Use this watchlist</div>
-      <!-- The heading here used to read "lists that outrank the above", which
-           is true of an item that is on one and was read as true of everything
-           else: people believed a filter switched the rarity alerts off and
-           asked for the adding behaviour the app already had. It says which it
+      <div class="opt">{t("Use this watchlist")}</div>
+      <!-- Not "lists that outrank the above": that is true of an item on one
+           and reads as true of everything else, so people take it to mean a
+           filter switches the rarity alerts off and ask for the adding
+           behaviour the app already has. It says which it
            is now, and it says it in both states, because "off" is the one a
            player arrives in. -->
       {#if settings.use_filter}
-        <div class="note">
-          A listed item plays its list's sound instead of its rarity's. Everything you have
-          not listed carries on exactly as the Alerts tab says.
-        </div>
+        <div class="note"> {t("A listed item plays its list's sound instead of its rarity's. Everything you have not listed carries on exactly as the Alerts tab says.")} </div>
       {:else}
-        <div class="note warn">Nothing here makes a sound. The rarity alerts on the Alerts tab still do.</div>
+        <div class="note warn">{t("Nothing here makes a sound. The rarity alerts on the Alerts tab still do.")}</div>
       {/if}
     </div>
   </div>
@@ -664,14 +659,14 @@
         onchange={(e) => { settings.filter = e.currentTarget.value; selected = 0; save(); }}
       >
         {#each filters as f}
-          <option value={f.id}>{f.name} · {f.lists.length} lists</option>
+          <option value={f.id}>{f.name} · {f.lists.length} {t("lists")}</option>
         {:else}
-          <option value="">no watchlists yet</option>
+          <option value="">{t("no watchlists yet")}</option>
         {/each}
       </select>
     {/if}
-    <button class="btn" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={() => addFilter(`Filter ${filters.length + 1}`)}>+ New</button>
-    <button class="btn" style:--btn={btn(more ? 'button_down' : 'button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={() => (more = !more)} title="Rename, copy, import, export, delete">⋯</button>
+    <button class="btn" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={() => addFilter(`Filter ${filters.length + 1}`)}>{t("+ New")}</button>
+    <button class="btn" style:--btn={btn(more ? 'button_down' : 'button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={() => (more = !more)} title={t("Rename, copy, import, export, delete")}>⋯</button>
   </div>
 
   {#if more}
@@ -682,13 +677,13 @@
          to delete every one they had. -->
     <div class="setbar sub">
       {#if filter}
-        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={() => (renaming = true)}>Rename</button>
-        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={generate} title="Add six lists banded by how often the item falls — a place to start from">Generate</button>
-        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={duplicateFilter} title="Copy this watchlist, sounds and all">Copy</button>
+        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={() => (renaming = true)}>{t("Rename")}</button>
+        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={generate} title={t("Add six lists banded by how often the item falls — a place to start from")}>{t("Generate")}</button>
+        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={duplicateFilter} title={t("Copy this watchlist, sounds and all")}>{t("Copy")}</button>
       {/if}
-      <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={importFilter} title="Load a watchlist someone shared with you, sounds included">Import…</button>
+      <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={importFilter} title={t("Load a watchlist someone shared with you, sounds included")}>{t("Import…")}</button>
       {#if filter}
-        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={exportFilter} title="Save this watchlist to a file, sounds included">Export…</button>
+        <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={exportFilter} title={t("Save this watchlist to a file, sounds included")}>{t("Export…")}</button>
         <button
           class="btn sm"
           class:armed={armed === filterKey}
@@ -696,8 +691,8 @@
           style:--btn-hover={btn('button_hover')}
           style:--btn-down={btn('button_down')}
           onclick={() => danger(filterKey, removeFilter)}
-          title="Delete this watchlist with all its lists and sounds"
-        >{armed === filterKey ? 'delete it?' : 'Delete'}</button>
+          title={t("Delete this watchlist with all its lists and sounds")}
+        >{armed === filterKey ? t('delete it?') : t('Delete')}</button>
       {/if}
     </div>
   {/if}
@@ -717,20 +712,20 @@
              rail whose first row is unticked "1 wins" is a plain lie about the
              one thing this order decides. -->
         <div class="railhead" data-tauri-drag-region>
-          Lists{#if winner >= 0} · {winner + 1} wins{/if}
+          {t('Lists')}{#if winner >= 0}{' · '}{say('{n} wins', { n: winner + 1 })}{/if}
         </div>
         <div class="note">
           {#if winner < 0}
-            Nothing is switched on, so no list sounds.
+            {t('Nothing is switched on, so no list sounds.')}
           {:else}
-            When two switched-on lists hold the same item, the higher one sounds.
+            {t('When two switched-on lists hold the same item, the higher one sounds.')}
           {/if}
         </div>
         <div class="rows">
           {#each lists as list, i (list.id)}
             <div class="lrow" class:sel={i === selected} class:off={!list.enabled}>
               <span class="rank">{i + 1}</span>
-              <button class="check" onclick={() => { list.enabled = !list.enabled; save(); }} aria-label="{list.name} enabled">
+              <button class="check" onclick={() => { list.enabled = !list.enabled; save(); }} aria-label={say('{name} enabled', { name: list.name })}>
                 <img src={list.enabled ? art('check_on') : art('check_off')} alt="" />
               </button>
               {#if i === selected}
@@ -749,14 +744,14 @@
                    words it stood for. The chip is still on the item row, where
                    it says which other list has that one item; here there is
                    room to say what it means. -->
-              <div class="note warn cn">{clashesIn(i)} also in {clashNames(i).join(', ')}</div>
+              <div class="note warn cn">{say('{n} also in {lists}', { n: clashesIn(i), lists: clashNames(i).join(', ') })}</div>
             {/if}
           {/each}
         </div>
         <div class="railfoot">
-          <button class="link" disabled={selected === 0} onclick={() => moveList(-1)} title="Move up — a higher list wins a conflict">▲ up</button>
-          <button class="link" disabled={selected >= lists.length - 1} onclick={() => moveList(1)} title="Move down">▼ down</button>
-          <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={addList}>+ list</button>
+          <button class="link" disabled={selected === 0} onclick={() => moveList(-1)} title={t("Move up — a higher list wins a conflict")}>{t("▲ up")}</button>
+          <button class="link" disabled={selected >= lists.length - 1} onclick={() => moveList(1)} title={t("Move down")}>{t("▼ down")}</button>
+          <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={addList}>{t("+ list")}</button>
         </div>
       </div>
 
@@ -764,13 +759,13 @@
       {#if current}
         <div class="dhead" data-tauri-drag-region>
           <span class="dname">{current.name}</span>
-          {#if !current.enabled}<span class="muted">switched off</span>{/if}
+          {#if !current.enabled}<span class="muted">{t("switched off")}</span>{/if}
           <button
             class="del"
             class:armed={armed === listKey}
             onclick={() => danger(listKey, () => removeList(selected))}
-            title="Delete this list and its sound"
-          >{armed === listKey ? 'delete?' : '×'}</button>
+            title={t("Delete this list and its sound")}
+          >{armed === listKey ? t('delete?') : '×'}</button>
         </div>
 
         <div class="sound" style:border-image-source={css('chip_dark')}>
@@ -779,7 +774,7 @@
                is whether there is one at all; the path is in the tooltip for
                the times it does matter. -->
           <span class="file" class:none={!status[soundKey]} title={status[soundKey] ? `sounds/${status[soundKey]}` : ''}>
-            {status[soundKey] ? '♪ Custom sound' : 'No sound of its own — a drop here is announced by the item’s rarity'}
+            {status[soundKey] ? t('♪ Custom sound') : t('No sound of its own — a drop here is announced by the item’s rarity')}
           </span>
           <input
             class="vol"
@@ -801,10 +796,10 @@
             style:--btn-hover={btn('button_hover')}
             style:--btn-down={btn('button_down')}
             disabled={!status[soundKey]}
-            title={status[soundKey] ? 'play this list’s sound' : 'this list has no sound of its own — a drop on it is announced by the item’s rarity'}
+            title={status[soundKey] ? t('play this list’s sound') : t('this list has no sound of its own — a drop on it is announced by the item’s rarity')}
             onclick={test}
-          >Test</button>
-          <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={pickSound}>Browse…</button>
+          >{t("Test")}</button>
+          <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={pickSound}>{t("Browse…")}</button>
           <button
             class="btn sm"
             class:armed={armed === `snd-${soundKey}`}
@@ -813,39 +808,39 @@
             style:--btn-down={btn('button_down')}
             disabled={!status[soundKey]}
             onclick={() => danger(`snd-${soundKey}`, () => invoke('clear_sound', { rarity: soundKey }).catch(() => {}))}
-          >{armed === `snd-${soundKey}` ? 'Sure?' : 'Clear'}</button>
+          >{armed === `snd-${soundKey}` ? t('Sure?') : t('Clear')}</button>
         </div>
 
         <div class="box" style:border-image-source={css('chip_dark')}>
-          <div class="boxhead" data-tauri-drag-region>Add items</div>
+          <div class="boxhead" data-tauri-drag-region>{t("Add items")}</div>
           <!-- The Items tab's own toolbar, in its order, so that the two tabs
                are one app: search, then rarity, then kind. -->
           <div class="tools">
             <input
               class="find"
               style:border-image-source={css('chip_dark')}
-              placeholder="Search by name"
+              placeholder={t("Search by name")}
               bind:value={addQuery}
               onkeydown={(e) => e.key === 'Enter' && matches[0] && addItem(matches[0].name)}
             />
             <select class="picker" bind:value={addRarity}>
-              <option value="">Any rarity</option>
-              {#each RARITY_CHOICES as r}<option value={r.rarity}>{r.rarity} · {r.n}</option>{/each}
+              <option value="">{t("Any rarity")}</option>
+              {#each RARITY_CHOICES as r}<option value={r.rarity}>{t(r.rarity)} · {r.n}</option>{/each}
             </select>
             <select class="picker" bind:value={addType}>
-              <option value="">Any kind</option>
-              {#each TYPE_CHOICES as t}<option value={t.key}>{t.label} · {t.n}</option>{/each}
+              <option value="">{t("Any kind")}</option>
+              {#each kindChoices as kind}<option value={kind.key}>{kind.label} · {kind.n}</option>{/each}
             </select>
           </div>
 
           {#if draft}
             <button class="bulk" disabled={draftOwned} onclick={addRule}>
               {draftOwned
-                ? `${ruleName(draft)} is already a rule on this list`
-                : `+ Add ${ruleName(draft)}  (${draftCount})`}
+                ? say('{rule} is already a rule on this list', { rule: ruleName(draft) })
+                : `+ ${t('Add')} ${ruleName(draft)}  (${draftCount})`}
             </button>
             {#if !draftOwned}
-              <div class="note">as a rule — an item the game adds to it later joins it on its own</div>
+              <div class="note">{t("as a rule — an item the game adds to it later joins it on its own")}</div>
             {/if}
           {/if}
 
@@ -853,59 +848,61 @@
             <div class="results">
               {#each matches as it}
                 <button class="hit" onclick={() => addItem(it.name)}>
-                  <span class={rarityCls[it.rarity]}>{it.name}</span>
+                  <span class={rarityCls[it.rarity]}>{shownName(it)}</span>
                   {#if elsewhere.has(it.key)}
-                    <span class="already">in {elsewhere.get(it.key)}</span>
+                    <span class="already">{t('in')} {elsewhere.get(it.key)}</span>
                   {/if}
                   <span class="grade">
                     <span class="kind">{typeLabel(it.type, it.weapon)}</span>
                     <span class="letter">{tierLabel(it.tier)}</span>
-                    <span class="odds" title={it.rate ? '' : NO_ODDS}>{odds(it.rate)}</span>
+                    <span class="odds" title={it.rate ? '' : NO_ODDS()}>{odds(it.rate)}</span>
                   </span>
                 </button>
               {/each}
             </div>
           {:else if addQuery.trim() || draft}
             <div class="note">
-              {alreadyHere ? 'everything that matches is already on this list' : 'nothing matches'}
+              {alreadyHere ? t('everything that matches is already on this list') : t('nothing matches')}
             </div>
           {/if}
           {#if alreadyHere && matches.length}
             <button class="link" onclick={() => (listQuery = addQuery)}>
-              {alreadyHere} already on this list — show {alreadyHere === 1 ? 'it' : 'them'}
+              {alreadyHere === 1
+                ? say('{n} already on this list — show it', { n: alreadyHere })
+                : say('{n} already on this list — show them', { n: alreadyHere })}
             </button>
           {/if}
         </div>
 
         <div class="box grow" style:border-image-source={css('chip_dark')}>
-          <div class="boxhead" data-tauri-drag-region>In this list</div>
+          <div class="boxhead" data-tauri-drag-region>{t("In this list")}</div>
 
           {#if rules.length}
             <!-- Rules are a section of their own, above the names, because they
                  are not names: a rule has a count that moves when the game
                  changes, and a name does not. They are told apart on the screen
                  the way they are told apart in the settings file. -->
-            <div class="listhead"><span>Rules</span><span class="count">{rules.length}</span></div>
+            <div class="listhead"><span>{t("Rules")}</span><span class="count">{rules.length}</span></div>
             {#each rules as rule, i}
               <div class="rulerow">
                 <span class="chip {rarityCls[rule.rarity] ?? ''}">
-                  {rule.rarity ?? 'any rarity'} · {rule.item_type == null
-                    ? 'any kind'
+                  {rule.rarity ? t(rule.rarity) : t('any rarity')} · {rule.item_type == null
+                    ? t('any kind')
                     : typeLabel(rule.item_type, rule.weapon ?? 0)}
                 </span>
-                <span class="rcount">{ruleMatches(rule).length} items today</span>
-                <button class="link" onclick={() => (showing = showing === i ? null : i)}>{showing === i ? 'hide' : 'show'}</button>
+                <span class="rcount">{ruleMatches(rule).length} {t('items today')}</span>
+                <button class="link" onclick={() => (showing = showing === i ? null : i)}>{showing === i ? t('hide') : t('show')}</button>
                 <button
                   class="link"
                   onclick={() => unpackRule(i)}
-                  title="Turn it into the names it matches today. It stops being a rule, and stops growing with the game."
-                >unpack</button>
-                <button class="del" onclick={() => removeRule(i)} title="Remove this rule" aria-label="remove rule">×</button>
+                  title={t("Turn it into the names it matches today. It stops being a rule, and stops growing with the game.")}
+                >{t("unpack")}</button>
+                <button class="del" onclick={() => removeRule(i)} title={t("Remove this rule")} aria-label={t("remove rule")}>×</button>
               </div>
               {#if showing === i}
                 <div class="preview">
                   {#each ruleMatches(rule) as it}
-                    <span class="pname {rarityCls[it.rarity] ?? ''}">{it.name}</span>
+                    <span class="pname {rarityCls[it.rarity] ?? ''}">{shownName(it)}</span>
                   {/each}
                 </div>
               {/if}
@@ -913,63 +910,59 @@
           {/if}
 
           <div class="listhead">
-            <span>Items</span>
+            <span>{t("Items")}</span>
             {#if shown.length}
               <button class="link" class:armed={armed === clearKey} onclick={() => danger(clearKey, removeShown)}>
                 {#if armed === clearKey}
-                  {listQuery.trim() ? `remove ${shown.length}?` : 'clear the list?'}
+                  {listQuery.trim() ? say('remove {n}?', { n: shown.length }) : t('clear the list?')}
                 {:else}
-                  {listQuery.trim() ? `remove ${shown.length} shown` : 'clear'}
+                  {listQuery.trim() ? say('remove {n} shown', { n: shown.length }) : t('clear')}
                 {/if}
               </button>
             {/if}
-            <span class="count">{listQuery.trim() ? `${shown.length} of ${current.items.length}` : current.items.length}</span>
+            <span class="count">{listQuery.trim() ? say('{n} of {all}', { n: shown.length, all: current.items.length }) : current.items.length}</span>
           </div>
 
           {#if current.items.length > 8 || listQuery.trim()}
-            <input class="find" style:border-image-source={css('chip_dark')} placeholder="Narrow this list…" bind:value={listQuery} />
+            <input class="find" style:border-image-source={css('chip_dark')} placeholder={t("Narrow this list…")} bind:value={listQuery} />
           {/if}
 
           <div class="items">
             {#each shown as name}
               {@const it = facts(name)}
               <div class="row {rarityCls[it.rarity] ?? ''}">
-                <span class={rarityCls[it.rarity] ?? ''}>{name}</span>
+                <span class={rarityCls[it.rarity] ?? ''}>{shownName(name)}</span>
                 {#if clashWith(name)}
-                  <span class="clash" title="also in {clashWith(name)} — only the list that comes first will sound">?</span>
+                  <span class="clash" title={say('also in {list} — only the list that comes first will sound', { list: clashWith(name) })}>?</span>
                 {/if}
                 <span class="grade">
                   <span class="letter">{tierLabel(it.tier)}</span>
-                  <span class="odds" title={it.rate ? '' : NO_ODDS}>{odds(it.rate)}</span>
+                  <span class="odds" title={it.rate ? '' : NO_ODDS()}>{odds(it.rate)}</span>
                 </span>
-                <button class="del" onclick={() => removeItem(name)} title="Remove" aria-label="remove">×</button>
+                <button class="del" onclick={() => removeItem(name)} title={t("Remove")} aria-label={t("remove")}>×</button>
               </div>
             {:else}
               <div class="empty">
                 {#if listQuery.trim()}
-                  nothing in this list matches the search
+                  {t('nothing in this list matches the search')}
                 {:else if rules.length}
-                  no items by name — this list is the {rules.length === 1 ? 'rule' : 'rules'} above
+                  {rules.length === 1
+                    ? t('no items by name — this list is the rule above')
+                    : t('no items by name — this list is the rules above')}
                 {:else}
-                  nothing listed yet — search above and click an item, or pick a rarity and a
-                  kind to take a whole category at once
+                  {t('nothing listed yet — search above and click an item, or pick a rarity and a kind to take a whole category at once')}
                 {/if}
               </div>
             {/each}
           </div>
         </div>
       {:else}
-        <div class="empty">this watchlist has no lists yet — press “+ list”</div>
+        <div class="empty">{t("this watchlist has no lists yet — press “+ list”")}</div>
       {/if}
       </div>
     </div>
   {:else}
-    <div class="empty">
-      No watchlist yet. Press “+ New” for an empty one, or
-      <button class="prose" onclick={generate}>start from the drop rates</button>
-      — S and SS split into the items you see often, the ones you do not, and the chase
-      pieces, each ready for a sound of its own.
-    </div>
+    <div class="empty"> {t("No watchlist yet. Press “+ New” for an empty one, or")} <button class="prose" onclick={generate}>{t("start from the drop rates")}</button> {t("— S and SS split into the items you see often, the ones you do not, and the chase pieces, each ready for a sound of its own.")} </div>
   {/if}
 {/if}
 </div>
@@ -988,7 +981,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
     min-height: 0;
@@ -1079,7 +1072,7 @@
     min-width: 0;
     padding: 1px 3px;
   }
-  .lrow.sel { background: rgba(150, 37, 56, 0.35); }
+  .lrow.sel { background: rgba(var(--pick-rgb), 0.35); }
   .lrow.off .lname,
   .lrow.off .lpick,
   .lrow.off .count { opacity: 0.5; }
@@ -1148,7 +1141,12 @@
   .box.grow { flex: 1 1 auto; min-height: 0; }
 
   .tools { display: flex; gap: 5px; flex-wrap: wrap; }
+  /* `flex-basis` is read along the container's own axis. The search box above
+     sits in a row, where 150px is a width; the one narrowing the list below
+     sits in a column, where it was a *height* — a one-line field a hundred
+     pixels tall with the placeholder floating in the middle of it. */
   .find { flex: 1 1 150px; min-width: 0; height: 24px; font: inherit; font-size: 11px; color: var(--bone-13); background: none; outline: none; padding: 0 6px; }
+  .box > .find { flex: none; }
 
   /* The one control that adds a whole category, and it says exactly what it
      will add and how much of it. Wide, because it is the answer to the two
@@ -1159,13 +1157,13 @@
     font: inherit;
     font-size: 11px;
     color: var(--bone-15);
-    background: rgba(150, 37, 56, 0.45);
+    background: rgba(var(--pick-rgb), 0.45);
     border: 1px solid var(--edge-4);
     padding: 5px 8px;
     cursor: pointer;
     text-align: left;
   }
-  .bulk:hover:not(:disabled) { background: rgba(150, 37, 56, 0.7); }
+  .bulk:hover:not(:disabled) { background: rgba(var(--pick-rgb), 0.7); }
   .bulk:disabled { color: var(--dim-2); background: rgba(0, 0, 0, 0.25); border-color: var(--ground-10); cursor: default; }
 
   .results {
@@ -1191,7 +1189,7 @@
     padding: 3px 5px;
     cursor: pointer;
   }
-  .hit:hover { background: rgba(150, 37, 56, 0.45); }
+  .hit:hover { background: rgba(var(--pick-rgb), 0.45); }
   .hit > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .already { margin-left: auto; color: var(--edge-2b); font-size: 10px; white-space: nowrap; }
 
@@ -1269,7 +1267,7 @@
     border-left: 3px solid var(--ground-10);
   }
   .row:nth-child(even) { background: rgba(0, 0, 0, 0.12); }
-  .row:hover { background: rgba(150, 37, 56, 0.22); }
+  .row:hover { background: rgba(var(--pick-rgb), 0.22); }
   .row.c-sat { border-left-color: #d24b4b; }
   .row.c-set { border-left-color: #45c15a; }
   .row.c-her { border-left-color: #35d3c1; }

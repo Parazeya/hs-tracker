@@ -1,6 +1,7 @@
 <script>
   import { invoke, recall, remember } from './bridge.js';
   import { art, css } from './skin.svelte.js';
+  import { LANGUAGES, t } from './say.svelte.js';
   import { listen } from './bridge.js';
 
   let settings = $state(null);
@@ -84,7 +85,7 @@
   async function bundle(command) {
     if (command === 'import_settings' && !armedBundle) {
       armedBundle = true;
-      notice = 'Import replaces every setting — click again to confirm';
+      notice = t('Import replaces every setting — click again to confirm');
       clearTimeout(armTimer);
       armTimer = setTimeout(() => { armedBundle = false; notice = ''; }, 5000);
       return;
@@ -92,7 +93,7 @@
     armedBundle = false;
     try {
       const file = await invoke(command);
-      notice = file ? `${command === 'export_settings' ? 'Saved to' : 'Loaded'} ${file}` : '';
+      notice = file ? `${command === 'export_settings' ? t('Saved to') : t('Loaded')} ${file}` : '';
     } catch (e) {
       notice = String(e);
     }
@@ -144,7 +145,7 @@
     <div class="section" style:border-image-source={css('chip_dark')}>
       {#if overlay && advanced}
         <div class="line" data-tauri-drag-region>
-          <span class="name">Opacity</span>
+          <span class="name">{t("Opacity")}</span>
           <input
             type="range"
             min="30"
@@ -155,7 +156,7 @@
           <span class="pct">{Math.round((settings.opacity ?? 1) * 100)}%</span>
         </div>
         <div class="line" data-tauri-drag-region>
-          <span class="name">Scale</span>
+          <span class="name">{t("Scale")}</span>
           <input
             type="range"
             min="60"
@@ -166,27 +167,40 @@
           <span class="pct">{Math.round((settings.scale ?? 1) * 100)}%</span>
         </div>
         <div class="line" data-tauri-drag-region>
-          <button class="check" onclick={() => { settings.auto_show = !settings.auto_show; save(); }} aria-label="auto show">
+          <button class="check" onclick={() => { settings.auto_show = !settings.auto_show; save(); }} aria-label={t("auto show")}>
             <img src={settings.auto_show ? art('check_on') : art('check_off')} alt="" />
           </button>
-          <span class="opt">Show / hide the overlay with the game</span>
+          <span class="opt">{t("Show / hide the overlay with the game")}</span>
         </div>
         <div class="line" data-tauri-drag-region>
-          <button class="check" onclick={() => { settings.ghost = !settings.ghost; save(); }} aria-label="ghost">
+          <button class="check" onclick={() => { settings.ghost = !settings.ghost; save(); }} aria-label={t("ghost")}>
             <img src={settings.ghost ? art('check_on') : art('check_off')} alt="" />
           </button>
           <span
             class="opt"
             title={smears
-              ? 'The locked overlay drops its frame and the numbers float over the game. This desktop does not clear the overlay window between frames, so they can leave the last few of their frames behind — the frame is what hides that.'
-              : 'The locked overlay drops its frame, leaving the numbers over the game'}
+              ? t('The locked overlay drops its frame and the numbers float over the game. This desktop does not clear the overlay window between frames, so they can leave the last few of their frames behind — the frame is what hides that.')
+              : t('The locked overlay drops its frame, leaving the numbers over the game')}
           >
-            Enable transparent overlay while locked{smears ? ' (can create artifacts)' : ''}
+            {t('Enable transparent overlay while locked')}{smears ? t(' (can create artifacts)') : ''}
           </span>
         </div>
       {/if}
       <div class="line" data-tauri-drag-region>
-        <span class="name">Theme</span>
+        <span class="name">{t("Language")}</span>
+        <select
+          class="picker"
+          value={settings.language ?? 'en'}
+          onchange={(e) => { settings.language = e.target.value; save(); }}
+          title={t("What the game's own words are shown in — item names, types, stats and rooms. Your lists and sounds stay as you named them.")}
+        >
+          {#each LANGUAGES as [code, label]}
+            <option value={code}>{label}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="line" data-tauri-drag-region>
+        <span class="name">{t("Theme")}</span>
         <select
           class="picker"
           value={settings.theme ?? 'default'}
@@ -194,22 +208,22 @@
         >
           <option value="default">Hero Siege</option>
           <option value="ebontharn">Ebontharn</option>
-          <option value="modern">Modern</option>
+          <option value="modern">{t('Modern')}</option>
+          <option value="plain">{t('Plain dark')}</option>
+          <option value="plainlight">{t('Plain light')}</option>
         </select>
       </div>
       <div class="line" data-tauri-drag-region>
-        <button class="check" onclick={() => { settings.autostart = !settings.autostart; save(); }} aria-label="autostart">
+        <button class="check" onclick={() => { settings.autostart = !settings.autostart; save(); }} aria-label={t("autostart")}>
           <img src={settings.autostart ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="opt">Start on login</span>
+        <span class="opt">{t("Start on login")}</span>
       </div>
       <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.discord = !settings.discord; save(); }} aria-label="discord">
           <img src={settings.discord ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="opt" title="Zone, difficulty, the drops so far and how long the run has been going">
-          Show the run in Discord while the game is open
-        </span>
+        <span class="opt" title={t("Zone, difficulty, the drops so far and how long the run has been going")}> {t("Show the run in Discord while the game is open")} </span>
       </div>
       <!-- The announcement moved to the Alerts page: what is worth telling
            you about and how you are told are one decision, and asking them on
@@ -218,11 +232,11 @@
         <button
           class="check"
           onclick={() => { settings.sound_on_ground = !settings.sound_on_ground; save(); }}
-          aria-label="sound on ground"
+          aria-label={t("sound on ground")}
         >
           <img src={settings.sound_on_ground ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="opt">Alert when the item drops (off = when picked up)</span>
+        <span class="opt">{t("Alert when the item drops (off = when picked up)")}</span>
       </div>
       <!-- The OBS browser sources are gone: one route into OBS, and it is the
            one that needs no address, no port and no local server — capture the
@@ -237,28 +251,28 @@
           style:--btn-hover={css('button_hover')}
           style:--btn-down={css('button_down')}
           onclick={() => bundle('export_settings')}
-          title="Save every setting, filter and sound to one file"
-        >Export all settings…</button>
+          title={t("Save every setting, filter and sound to one file")}
+        >{t("Export all settings…")}</button>
         <button
           class="btn"
           style:--btn={css('button')}
           style:--btn-hover={css('button_hover')}
           style:--btn-down={css('button_down')}
           onclick={() => bundle('import_settings')}
-          title="Replace every setting with the ones in a file"
-        >Import…</button>
+          title={t("Replace every setting with the ones in a file")}
+        >{t("Import…")}</button>
       </div>
 
       <button class="more" onclick={() => (advanced = !advanced)}>
-        {advanced ? '▾' : '▸'} More settings
+        {advanced ? '▾' : '▸'} {t('More settings')}
       </button>
 
       {#if advanced && overlay}
         <div class="line" data-tauri-drag-region>
-          <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label="ticker">
+          <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label={t("ticker")}>
             <img src={settings.ticker ? art('check_on') : art('check_off')} alt="" />
           </button>
-          <span class="opt">Drop ticker under the overlay</span>
+          <span class="opt">{t("Drop ticker under the overlay")}</span>
         </div>
       {/if}
       {#if advanced}
@@ -266,39 +280,24 @@
         <button
           class="check"
           onclick={() => { settings.wide_capture = !settings.wide_capture; save(); }}
-          aria-label="read every connection"
+          aria-label={t("read every connection")}
         >
           <img src={settings.wide_capture ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="opt">Read every connection, not just the game's</span>
+        <span class="opt">{t("Read every connection, not just the game's")}</span>
       </div>
-      <div class="hint" data-tauri-drag-region>
-        Normally only the connections Windows says the game holds are read. A route
-        optimiser such as ExitLag redirects the game's packets underneath that, so those
-        connections are not the ones on the wire and nothing gets counted. This reads
-        everything instead — more work for the machine, and the only way to see the game
-        through one.
-      </div>
+      <div class="hint" data-tauri-drag-region> {t("Normally only the connections Windows says the game holds are read. A route optimiser such as ExitLag redirects the game's packets underneath that, so those connections are not the ones on the wire and nothing gets counted. This reads everything instead — more work for the machine, and the only way to see the game through one.")} </div>
       <div class="line" data-tauri-drag-region>
-        <button class="check" onclick={() => { settings.debug_log = !settings.debug_log; save(); }} aria-label="debug">
+        <button class="check" onclick={() => { settings.debug_log = !settings.debug_log; save(); }} aria-label={t("debug")}>
           <img src={settings.debug_log ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="opt">Log parsed packets to debug-capture.jsonl</span>
+        <span class="opt">{t("Log parsed packets to debug-capture.jsonl")}</span>
       </div>
       {/if}
       {#if overlay}
-        <div class="hotkeys" data-tauri-drag-region>
-          Ctrl+Shift+O — show/hide · Ctrl+Shift+L — lock · Ctrl+Shift+R — reset stats ·
-          Ctrl+Shift+P — pause
-        </div>
+        <div class="hotkeys" data-tauri-drag-region> {t("Ctrl+Shift+O — show/hide · Ctrl+Shift+L — lock · Ctrl+Shift+R — reset stats · Ctrl+Shift+P — pause")} </div>
       {:else}
-        <div class="hotkeys" data-tauri-drag-region>
-          Wayland session — the dashboard runs alone. An application there cannot
-          place a window above the game, read the pointer outside itself or take
-          global hotkeys. Running through XWayland brings all three back, and the
-          game does the same when it runs through Proton, so the two meet in one
-          X server.
-        </div>
+        <div class="hotkeys" data-tauri-drag-region> {t("Wayland session — the dashboard runs alone. An application there cannot place a window above the game, read the pointer outside itself or take global hotkeys. Running through XWayland brings all three back, and the game does the same when it runs through Proton, so the two meet in one X server.")} </div>
         {#if session.can_switch}
           <div class="line">
             <button
@@ -307,15 +306,10 @@
               style:--btn-hover={css('button_hover')}
               style:--btn-down={css('button_down')}
               onclick={() => restart(true)}
-            >
-              Enable the overlay — restart through XWayland
-            </button>
+            > {t("Enable the overlay — restart through XWayland")} </button>
           </div>
         {:else}
-          <div class="hotkeys" data-tauri-drag-region>
-            This session has no XWayland to switch to, so the overlay stays out
-            of reach here.
-          </div>
+          <div class="hotkeys" data-tauri-drag-region> {t("This session has no XWayland to switch to, so the overlay stays out of reach here.")} </div>
         {/if}
       {/if}
       {#if session.wayland && session.through_x11}
@@ -326,10 +320,8 @@
             style:--btn-hover={css('button_hover')}
             style:--btn-down={css('button_down')}
             onclick={() => restart(false)}
-            title="Native Wayland is sharper and scales better, but has no overlay"
-          >
-            Back to native Wayland
-          </button>
+            title={t("Native Wayland is sharper and scales better, but has no overlay")}
+          > {t("Back to native Wayland")} </button>
         </div>
       {/if}
       {#if notice}<div class="notice">{notice}</div>{/if}
@@ -337,12 +329,12 @@
 
     {#if overlay && advanced}
       <div class="section" style:border-image-source={css('chip_dark')}>
-        <div class="sechead" data-tauri-drag-region>Overlay sections</div>
+        <div class="sechead" data-tauri-drag-region>{t("Overlay sections")}</div>
         <div class="grid">
           {#each SECTIONS as [id, label]}
             <button class="secopt" onclick={() => toggleSection(id)}>
               <img src={(settings.hidden ?? []).includes(id) ? art('check_off') : art('check_on')} alt="" />
-              <span>{label}</span>
+              <span>{t(label)}</span>
             </button>
           {/each}
         </div>
@@ -383,7 +375,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 13px;
     color: var(--bone-6);
   }

@@ -2,7 +2,8 @@
   import { invoke } from './bridge.js';
   import { css } from './skin.svelte.js';
   import { listen } from './bridge.js';
-  import { itemName, rarityByName, tierLabel, typeLabel } from './items.js';
+  import { rarityByName, tierLabel } from './items.js';
+  import { itemName, nameOf, t, typeLabel } from './say.svelte.js';
 
   const TTL_MS = 8000;
   const FADE_MS = 600;
@@ -14,10 +15,16 @@
   // had switched off.
   let enabled = $state(false);
   let nowTick = $state(Date.now());
+  // Under the overlay the rows stack from the top of this window, which puts
+  // the first of them against the panel. Over the overlay that same stacking
+  // leaves the window's whole height between the row and the panel, so the
+  // list reads as having jumped to the top of the screen. The backend knows
+  // which way it hung the window and says so.
+  let above = $state(false);
   let nextKey = 0;
 
   function label(d) {
-    if (d.name) return d.name;
+    if (d.name) return nameOf(d.name, d.item_type, d.item_id, d.weapon_type);
     const known = itemName(d.item_type, d.item_id, d.weapon_type);
     if (known) return known;
     if (d.item_id > 0) return `${typeLabel(d.item_type, d.weapon_type)} #${d.item_id}`;
@@ -26,7 +33,7 @@
 
   function rarity(d) {
     if (d.rarity) return d.rarity;
-    return rarityByName(label(d)) ?? 'Drop';
+    return rarityByName(d.name || label(d)) ?? 'Drop';
   }
 
   // the list is empty most of the time; a timer running then would re-render
@@ -51,6 +58,7 @@
     invoke('get_settings').then((s) => (enabled = s?.ticker ?? true));
     const unsubs = [
       listen('settings-changed', (e) => (enabled = e.payload?.ticker ?? true)),
+      listen('ticker-above', (e) => (above = !!e.payload)),
       listen('drop-entry', (e) => {
         if (!enabled) return;
         const d = e.payload;
@@ -75,14 +83,14 @@
   };
 </script>
 
-<div class="stack">
+<div class="stack" class:above>
   {#each entries as it (it.key)}
     <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source={css('chip_dark')}>
-      <span class="rar {rarityCls[rarity(it)] ?? ''}">{rarity(it)}</span>
+      <span class="rar {rarityCls[rarity(it)] ?? ''}">{t(rarity(it))}</span>
       <span class="name {rarityCls[rarity(it)] ?? ''}">{label(it)}</span>
       {#if it.tier > 0}<span class="dim">{tierLabel(it.tier)}</span>{/if}
-      {#if it.mf}<span class="c-blue">MF</span>{/if}
-      {#if it.announced}<span class="dim">server</span>{/if}
+      {#if it.mf}<span class="c-blue">{t('MF')}</span>{/if}
+      {#if it.announced}<span class="dim">{t("server")}</span>{/if}
     </div>
   {/each}
 </div>
@@ -105,6 +113,9 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+    /* so the rows can be held against whichever edge the overlay is on */
+    height: 100vh;
+    justify-content: flex-start;
     /* The panel's own inset, not the gap between its chips. Both windows are
        444 CSS px on the same x, so the numbers line up directly: the overlay's
        chip columns run 20…424 (14px border-image + 6px padding), while 8px here
@@ -112,10 +123,14 @@
        worst in ghost mode, where the frame art is gone and those chips ARE the
        overlay's edge. See .panel in App.svelte. */
     padding: 0 20px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
   }
+
+  /* hanging over the overlay: the rows sit at the foot of the window, which is
+     the edge the panel is on */
+  .stack.above { justify-content: flex-end; }
 
   .entry {
     box-sizing: border-box;

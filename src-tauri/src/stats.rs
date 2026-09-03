@@ -44,16 +44,15 @@ const IDLE_AFTER: Duration = Duration::from_secs(300);
 // stack resources by item type
 const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "materials"), (15, "socketables")];
 
-/// What a character wears and carries: helmets through charms, vials, and orbs.
-/// The grade counters are about gear and nothing else — a key or a reagent has
-/// a grade of its own and would otherwise sit in the SS column beside a weapon,
-/// which is not the thing the column is counting.
+/// What a character wears and carries: helmets through charms, vials and orbs.
 ///
-/// Vials were missing and are equipped like charms. Being neither gear nor a
-/// stackable, one landed in its rarity column and in no grade column at all, so
-/// the panel showed twelve Heroic beside ten SS with nothing to explain the
-/// gap. Every Heroic item in the tables is graded SS, so a Heroic that is not
-/// an SS could never have been anything but this.
+/// The grade counters are about gear and nothing else. A key or a reagent has a
+/// grade of its own and would otherwise sit in the SS column beside a weapon,
+/// which is not what that column counts.
+///
+/// Vials belong here — they are equipped like charms. Left out, they land in a
+/// rarity column and in no grade column, and the two disagree by however many
+/// dropped.
 const GEAR: [i64; 11] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 18];
 
 /// The relic type. Relics are not gear and not a resource — they reach no
@@ -131,16 +130,26 @@ pub struct TallyCount {
 }
 
 /// Drops worth their own counter, matched by resolved item name. The rune
-/// groups follow the game's own grades — S is Qi through Zed, SS is the four
-/// level-100 runes. Override the whole list in settings.json if the game
-/// regrades anything.
+/// groups follow the game's own grades — S is Qi through Zed, SS is the seven
+/// the 2026-08-21 patch left at level 100. Override the whole list in
+/// settings.json if the game regrades anything.
+///
+/// A saved list that still matches one this app once shipped is brought up to
+/// this one on load; a list anybody has edited is left alone for good. See
+/// `migrate_notable` in lib.rs, and add the outgoing shape to its table
+/// whenever this list changes.
 pub fn default_notable() -> Vec<(String, Vec<String>)> {
     let group = |label: &str, names: &[&str]| {
         (label.to_string(), names.iter().map(|n| n.to_lowercase()).collect())
     };
     vec![
         group("Angelic Key", &["Angelic Key"]),
+        // The two materials sit together. The column counts units — whatever
+        // amount the packet carries is what is added — but no pickup of either
+        // in any capture has carried one, so in practice they arrive singly.
+        // Some materials do: a Satanic Crystal Fragment comes twenty at a time.
         group("Satanic Dice", &["Satanic Dice"]),
+        group("Prophet's Wisdom", &["Prophet's Wisdom"]),
         group("S runes", &["Qi", "Xo", "Sur", "Ber", "Jah", "Drax", "Zed"]),
         // Sus, Kek and Jord came with the 2026-08-21 patch. "Satanic Key" used
         // to sit above these and has been dropped: no item in the game carries
@@ -152,6 +161,15 @@ pub fn default_notable() -> Vec<(String, Vec<String>)> {
 #[derive(Clone, Serialize)]
 pub struct NotableCount {
     pub label: String,
+    pub total: i64,
+}
+
+/// One resource, named, and which of the four counters it belongs to.
+#[derive(Clone, Serialize)]
+pub struct ResourceCount {
+    pub name: String,
+    /// `keys`, `materials`, `socketables` or `collectibles`
+    pub kind: String,
     pub total: i64,
 }
 const JOURNAL_CAP: usize = 400;
@@ -229,7 +247,12 @@ pub struct DropEntry {
 
 /// How many of a run's finds are kept with it. A long farm can drop hundreds;
 /// the list is there to remember the run, not to replace the journal.
-const RUN_DROPS: usize = 40;
+///
+/// A hundred and twenty is what the run card's densest layout holds — six
+/// columns of twenty. It was forty, which is what the card's one-line strip
+/// could show; the ledger can show all of these. Costs about seven kilobytes a
+/// run on disk, and runs already filed keep whatever they were filed with.
+const RUN_DROPS: usize = 120;
 
 /// A finished session, as it goes into the history.
 #[derive(Clone, Serialize, Deserialize)]
@@ -319,6 +342,14 @@ pub struct GameStats {
     tally_base: HashMap<&'static str, i64>,
     tally_earned: HashMap<&'static str, i64>,
     resources: HashMap<&'static str, i64>,
+    /// The same drops named one by one: which key, which fragment, how
+    /// many. The four totals above answer "how much did this session
+    /// gather" and nothing else — a player farming forty Battle Fragments
+    /// reads "collectibles: 63" and is none the wiser.
+    resource_items: HashMap<String, (&'static str, i64)>,
+    /// A run the player closed by hand. Nothing is counted while it holds:
+    /// the walk to town and the hour in the stash belong to no run.
+    finished: bool,
     satanic: Option<SatanicZone>,
     /// When the server last named it, in unix milliseconds.
     ///
@@ -328,8 +359,8 @@ pub struct GameStats {
     /// Without the moment attached the panel states a zone from three hours ago
     /// as this hour's, next to a countdown that has run out twice since.
     satanic_at: Option<u64>,
-    /// the character's magic find as the client last reported it, and whether
-    /// the room it is standing in is the satanic one — both straight from the
+    /// the character's magic find as the client last stated it, and whether the
+    /// room it is standing in is the satanic one — both straight from the
     /// heartbeat rather than worked out from zone codes
     mf: i64,
     satanic_here: bool,
@@ -373,27 +404,23 @@ pub struct GameStats {
     /// The highest the bank has been this session, for the purse it is being
     /// read on.
     ///
-    /// A balance that falls and climbs back is not earnings, and there are two
-    /// ways it happens. The player withdraws and puts it back — nothing was
-    /// earned. Or a second character's purse is read in between: it arrives in
-    /// fields with the same names, so a visit to an alt with a hundred coins
-    /// and a return to a main with seventy-eight thousand looked like
-    /// seventy-five thousand earned, which is what it did in one capture.
+    /// A balance that falls and climbs back is not earnings. It happens two
+    /// ways: the player withdraws and puts it back, or a second character's
+    /// purse is read in between — an alt's balance arrives in fields with the
+    /// same names, so returning to the main reads as everything between them
+    /// being earned.
     ///
-    /// Only what the bank has never held before is credited. The deposits
-    /// themselves are counted where they are reported; this is the backstop for
-    /// when that packet is missed, and a backstop should not invent.
+    /// Only what the bank has never held before is credited. Deposits are
+    /// counted where they are reported; this is the backstop for a missed
+    /// deposit packet, and a backstop should not invent.
     gold_high: i64,
-    /// Which region the zone we are holding was answered for, and which region
-    /// asked the question still in flight.
+    /// Which region the zone being held was answered for, and which region the
+    /// question still in flight came from.
     ///
     /// The server answers the satanic zone per region, and one account moves
-    /// between them: in the capture on disk a single account asked under ten
-    /// different identifiers, and seven of the twenty-one times the zone code
-    /// changed, it changed because a different region was asking — not because
-    /// anything rotated. Announcing those is announcing another region's zone
-    /// as news, and under a filter that alerts on buffs it is another region's
-    /// buffs the player is being called away from a fight for.
+    /// between regions freely — so a zone code that changes has not necessarily
+    /// rotated; it may just have been answered for somewhere else. Announcing
+    /// those calls the player away from a fight for another region's buffs.
     zone_region: Option<String>,
     zone_asked_by: Option<String>,
     season_mode: Option<&'static str>,
@@ -458,18 +485,16 @@ pub struct Listed {
 
 /// A whole category on a list: every item of a rarity, of a type, or of both.
 ///
-/// It is matched against the drop itself rather than expanded into names, and
-/// that is the point of it. The item tables ship inside the binary, so a list
-/// of names written out today would go on meaning today's table after an
-/// update added items to the category — the player ticked "every Satanic
-/// helmet" and would get every Satanic helmet the app knew in August. Asking
-/// the question of the drop keeps the answer current, and it costs nothing:
-/// the rarity, the type and the weapon type are all in hand at the one place
-/// the decision is made.
+/// Matched against the drop rather than expanded into names, which is the point
+/// of it: the item tables ship inside the binary, so a list of names written
+/// out today would still mean today's table after an update added items to the
+/// category. Asking the drop keeps the answer current and costs nothing — the
+/// rarity, the type and the weapon type are all in hand where the decision is
+/// made.
 ///
-/// `None` is "any", on every field. A rule with all three None matches every
-/// named drop there is, which is not a category — `apply_stats_settings`
-/// refuses it rather than letting one silently swallow the whole game.
+/// `None` is "any" on every field. All three None matches every named drop
+/// there is, which is not a category; `apply_stats_settings` refuses it rather
+/// than let one silently swallow the whole game.
 #[derive(Clone, Default)]
 pub struct Rule {
     /// lowercased, against the rarity the TABLES give the item — not the one
@@ -577,6 +602,8 @@ impl Default for GameStats {
             tally_base: HashMap::new(),
             tally_earned: HashMap::new(),
             resources: RESOURCES.iter().map(|(_, name)| (*name, 0)).collect(),
+            resource_items: HashMap::new(),
+            finished: false,
             satanic: None,
             satanic_at: None,
             mf: 0,
@@ -756,19 +783,17 @@ impl GameStats {
         self.extra_rev = extra_rev + 1;
     }
 
-    /// A reset taken across a stretch we were not watching: the game starting,
-    /// which is also the app starting beside a game already running.
+    /// A reset taken across a stretch nothing was watching: the game starting,
+    /// or the app starting beside a game already running.
     ///
-    /// The zone travels with the character, but nothing says it is still the
-    /// zone — the game has been shut for an hour and the rotation does not wait
-    /// for us. So the next packet is this session catching up, not news, and it
-    /// is swallowed once.
+    /// The zone travels with the character, but the rotation does not wait for
+    /// the app to be running, so the next zone packet is this session catching
+    /// up rather than news. It is swallowed once.
     ///
-    /// A plain `reset` must not do this. The Reset button pressed mid-farm
-    /// leaves the game running and the zone exactly as it was; arming the guard
-    /// there swallowed the next zone packet instead — and since a zone packet
-    /// arrives only every few minutes, the one swallowed was often the rotation
-    /// the player was waiting for.
+    /// A plain `reset` must NOT arm this. The Reset button pressed mid-farm
+    /// leaves the game running and the zone as it was, and a zone packet
+    /// arrives only every few minutes — the one swallowed would often be the
+    /// rotation the player was waiting for.
     pub fn reset_after_blackout(&mut self) {
         self.reset();
         self.stale_zone = self.satanic.is_some();
@@ -814,14 +839,13 @@ impl GameStats {
     /// about. Taken rather than read, so one rotation is announced once however
     /// often the pusher looks.
     ///
-    /// The zone comes back with it: the snapshot only travels to windows that
-    /// are on screen, so a player who has hidden the overlay — the case the
-    /// chime exists for — would otherwise have the alert read from a stale one.
+    /// The zone travels back with it because the snapshot only reaches windows
+    /// that are on screen, and a hidden overlay is exactly the case the chime
+    /// exists for.
     ///
-    /// An empty pick is not "nothing", it is every rotation. The list narrows
-    /// the alert, and a player who has narrowed it to nothing has narrowed
-    /// nothing. Reading it the other way makes the picker's own "clear" button
-    /// a mute switch that nothing on the page admits to.
+    /// An empty pick means EVERY rotation, not none: the list narrows an alert,
+    /// so narrowing it to nothing has narrowed nothing. Reading it the other way
+    /// would make the picker's "clear" button a mute switch nothing admits to.
     pub fn take_zone_change(&mut self) -> Option<SatanicZone> {
         let zone = self.sz_changed.take().and_then(|_| self.satanic.clone())?;
         let wanted = &self.prefs.zone_buffs;
@@ -844,7 +868,8 @@ impl GameStats {
         };
         let secs = at.saturating_duration_since(since).as_secs();
         if secs > 0 {
-            *self.zone_time.entry(room).or_insert(0) += secs;
+            let banked = self.zone_time.entry(room).or_insert(0);
+            *banked = banked.saturating_add(secs);
         }
         self.room_since = Some(Instant::now());
     }
@@ -915,6 +940,21 @@ impl GameStats {
         self.paused_at.is_some()
     }
 
+    /// Close the run by hand, or open the next one.
+    ///
+    /// Closing holds the clock as well: a finished run is not a paused one —
+    /// a pause keeps counting and only stops the divisor — so both have to be
+    /// said, and `start` lifts both.
+    pub fn set_finished(&mut self, on: bool) {
+        self.finished = on;
+        if on {
+            self.hold(Instant::now(), true);
+        } else {
+            self.release();
+        }
+        self.revision += 1;
+    }
+
     /// Stop the clock as of `since`, which is now for a pause the player asked
     /// for and the last sign of life for one the app decided on.
     fn hold(&mut self, since: Instant, by_hand: bool) {
@@ -952,6 +992,12 @@ impl GameStats {
     /// The pause button and the hotkey. A hand-made pause outranks the idle
     /// watch: it lasts until the same hand lifts it.
     pub fn set_paused(&mut self, on: bool) {
+        // A finished run is not a paused one, and the pause button cannot lift
+        // it: releasing the clock there would leave it running over a run that
+        // counts nothing. The way out of finished is to start the next one.
+        if self.finished {
+            return;
+        }
         if on {
             self.hold(Instant::now(), true);
         } else {
@@ -1006,23 +1052,20 @@ impl GameStats {
 
     /// Which list this drop is on, if any.
     ///
-    /// A list holds the name the game prints, and for most items that is the
-    /// whole story. Eleven names belong to two items each, though, and the
-    /// seven Essence Vaults share one name between every rarity there is — so
-    /// a list naming a vault would fire for all seven and say nothing about
-    /// which had dropped. Where the identity answers for an item its name
-    /// cannot, the list may say so as `Essence Vault (Angelic)`, and both
-    /// spellings are matched: the bare name still means any of them.
+    /// A list holds the name the game prints. That is enough for most items,
+    /// but eleven names belong to two items each and the seven Essence Vaults
+    /// share one name across every rarity — a list naming a vault would fire
+    /// for all seven. Where the identity can say which, the list may spell it
+    /// `Essence Vault (Angelic)`; both spellings match, and the bare name still
+    /// means any of them.
     ///
-    /// A list may also hold a whole category as a `Rule`, and a drop is on the
-    /// list if either the names or a rule answers. The rarity a rule is asked
-    /// about is the one the TABLES give this item, identity first: the packet's
-    /// ten-value scale is a different vocabulary — it has no Runeword and its
-    /// `Common` is not the tables' — and a rule the player built from a list of
-    /// rarities on the screen must be answered in the vocabulary that screen
-    /// used. Identity before name because the name lies for eleven items:
-    /// `Shrunken Head` is a Satanic charm by name and a Common relic by
-    /// identity, and only one of them should answer to "every Satanic charm".
+    /// A list may also hold a category as a `Rule`, and a drop is on the list if
+    /// the names or a rule answers. A rule is asked about the rarity the TABLES
+    /// give the item, resolved by identity first: the packet's ten-value scale
+    /// is a different vocabulary — no Runeword, and its `Common` is not the
+    /// tables' — and a rule built from the rarities shown on screen has to be
+    /// answered in the vocabulary that screen used. Identity before name because
+    /// the name is ambiguous for those eleven.
     fn listed_sound(
         &self,
         name: &str,
@@ -1065,18 +1108,16 @@ impl GameStats {
 
     /// Whether this drop is a relic the player is hunting.
     ///
-    /// By identity, and it has to be by identity: all 156 relics are Common, so
-    /// the rarity a list can qualify a name with says nothing here, and three
-    /// relic names belong to another item as well — `Shrunken Head` to a
-    /// Satanic charm, `Death's Scythe` to a Set polearm, `Satan's Horn` to a
-    /// Common collectible. The last of those shares the rarity too, so no
-    /// spelling of the name, qualified or bare, could ever tell the two apart.
-    /// `resolve_rarity` records what picking by name cost the first of them.
+    /// By identity, and it has to be: every relic is Common, so a rarity
+    /// qualifier on a name says nothing here, and three relic names belong to
+    /// another item as well — `Shrunken Head`, `Death's Scythe`, `Satan's
+    /// Horn`. The last shares the rarity too, so no spelling of the name could
+    /// tell the two apart.
     ///
-    /// It answers into the same slot `listed_sound` does rather than beside it,
-    /// so a hunted relic travels the one path everything else travels — it is
-    /// wanted, it announces, it reaches the journal, and it takes the flourish
-    /// where a listed item would. Two questions, one decision point.
+    /// Answers into the same slot as `listed_sound` rather than beside it, so a
+    /// hunted relic travels the one path everything else does: it announces, it
+    /// reaches the journal, and it takes the flourish. Two questions, one
+    /// decision point.
     fn hunted_relic(&self, item_type: i64, item_id: i64) -> Option<String> {
         if item_type != RELIC || self.prefs.relics.is_empty() {
             return None;
@@ -1159,7 +1200,8 @@ impl GameStats {
             })
             .map(|(label, _)| label.clone());
         if let Some(label) = label {
-            *self.notable.entry(label).or_insert(0) += amount;
+            let seen = self.notable.entry(label).or_insert(0);
+            *seen = seen.saturating_add(amount);
         }
     }
 
@@ -1201,6 +1243,13 @@ impl GameStats {
 
     /// Returns the journal entry when this event produced a new tracked drop.
     pub fn apply(&mut self, event: &GameEvent) -> Option<DropEntry> {
+        // A run closed by hand stays closed until the next one is started.
+        // Nothing counts, nothing sounds, and the clock does not move — which
+        // is the whole point of the button: what happens between two runs is
+        // not part of either.
+        if self.finished {
+            return None;
+        }
         self.revision += 1;
         match event {
             // A find the server put in chat. Everyone on the shard reads that
@@ -1238,13 +1287,16 @@ impl GameStats {
                 });
             }
             GameEvent::Gold(c) => self.apply_currency(c),
-            // guild XP is 15% of character XP, so the reported gain scales back
-            // up; account totals later correct any drift (their diff goes 0)
+            // Character XP, already: the parser decides whether the number it
+            // read was a guild share to scale up or a quest reward to take as
+            // it stands. Account totals later correct any drift upwards.
             GameEvent::XpGain(xp) => {
-                let gained = (*xp as f64 / 0.15) as i64;
+                let gained = *xp;
                 if gained > 0 {
-                    self.total_xp += gained;
-                    self.xp_earned += gained;
+                    // Saturating, like every counter here: a wrapped total is a
+                    // negative one, and it stays negative for the session.
+                    self.total_xp = self.total_xp.saturating_add(gained);
+                    self.xp_earned = self.xp_earned.saturating_add(gained);
                     self.progressed();
                 }
             }
@@ -1308,7 +1360,21 @@ impl GameStats {
                     if self.xp_authoritative {
                         let diff = experience - self.total_xp;
                         if diff > 0 {
-                            self.xp_earned += diff;
+                            self.xp_earned = self.xp_earned.saturating_add(diff);
+                            self.progressed();
+                        } else if self.gained_a_hero_level(*herolevel) {
+                            // `experience` is the XP inside the current hero
+                            // level and starts again at each one, so a level-up
+                            // arrives as a large negative diff. Read as "no
+                            // progress" it discards the whole crossing, which
+                            // is why the figure ran low for anyone levelling
+                            // often.
+                            //
+                            // What can be recovered is what carried over. The
+                            // rest — from the last save up to the level's own
+                            // requirement — needs a table of requirements the
+                            // game never sends.
+                            self.xp_earned = self.xp_earned.saturating_add(*experience);
                             self.progressed();
                         }
                     }
@@ -1324,7 +1390,7 @@ impl GameStats {
                     if self.total_kills != 0 {
                         let diff = kills - self.total_kills;
                         if diff > 0 {
-                            self.kills_earned += diff;
+                            self.kills_earned = self.kills_earned.saturating_add(diff);
                             self.progressed();
                         }
                     }
@@ -1338,7 +1404,8 @@ impl GameStats {
                         std::collections::hash_map::Entry::Occupied(mut seen) => {
                             let diff = now - seen.get();
                             if diff > 0 {
-                                *self.tally_earned.entry(key).or_insert(0) += diff;
+                                let seen = self.tally_earned.entry(key).or_insert(0);
+                                *seen = seen.saturating_add(diff);
                             }
                             seen.insert(now);
                         }
@@ -1357,21 +1424,17 @@ impl GameStats {
                 }
                 // A room in another act is not where the character is.
                 //
-                // The room only ever arrives with the game's own state packet,
-                // and since the August 2026 patch that packet comes about
-                // twenty times less often than it used to — a couple of
-                // hundred lines of traffic apart at best, and thousands at
-                // worst. So the last room heard is often long out of date, and
-                // it was outranking the act, which the save states on every
-                // write: the panel sat on `Flooded Plains` through visits to
-                // three other acts.
+                // The room arrives only with the game's state packet, which
+                // since the August 2026 patch comes about twenty times less
+                // often, so the last room heard is often long
+                // out of date — while the act is stated on every save.
                 //
                 // The save cannot say which zone, so this does not replace the
-                // room with a better one — it retires a room that has been
-                // outlived, and the act stands alone until the game names a
-                // zone again. A room whose name says nothing about an act, the
-                // Shadow Realm and its like, is left where it is: there is
-                // nothing to contradict it with.
+                // room with a better one; it retires one that has been outlived,
+                // and the act stands alone until the game names a zone again. A
+                // room whose name says nothing about an act — the Shadow Realm
+                // and its like — is left alone, there being nothing to
+                // contradict it with.
                 if let (Some(room), true) = (self.room.as_deref(), *act > 0) {
                     if matches!(act_of_room(room), Some(was) if was != *act) {
                         self.bank_room_time();
@@ -1445,18 +1508,14 @@ impl GameStats {
             }
             GameEvent::Room(room) => {
                 if self.room.as_deref() != Some(room.as_str()) {
-                    // Close the books on the room being left: a run is worth
-                    // little without knowing where it happened.
+                    // Close the books on the room being left.
                     //
-                    // Never while the clock is stopped. A hand pause is a trip
-                    // to town, and a trip to town is a sequence of room
-                    // changes; `bank_room_time` re-arms the clock on its way
-                    // out, so the first change restarted the one the pause had
-                    // just stopped and every change after it banked paused
-                    // wall-clock seconds. A 600-second run reported 900 seconds
-                    // in one room, the wrong room sorted to the top of the
-                    // run's zones, and the run card's share bar drew past the
-                    // end of its track. The room itself still moves, so the
+                    // Never while the clock is stopped. A hand pause is usually
+                    // a trip to town, which is a sequence of room changes, and
+                    // `bank_room_time` re-arms the clock on its way out — so the
+                    // first change would restart the clock the pause had
+                    // stopped, and every change after it would bank paused
+                    // wall-clock seconds. The room itself still moves, so the
                     // panel keeps saying where the character is.
                     if !self.paused() {
                         self.bank_room_time();
@@ -1514,15 +1573,12 @@ impl GameStats {
                 // counts once — and the tier the roll reported is remembered
                 // for the pickup, which never carries one.
                 //
-                // Not every packet carries that hash, and the two sightings
-                // used to fall into identity spaces that could never meet when
-                // it was missing: the roll minted `g:seed:type:id` while the
-                // pickup used the inventory fingerprint, so `counted` admitted
-                // both and one item was added to its rarity twice. The
-                // fingerprint is what both sightings actually share — the
-                // server's generation answer keys the item by it and the bag
-                // reports the same string — so it is asked for first, and the
-                // seed key is left for a roll that arrives without one.
+                // Not every packet carries that hash. The fingerprint is what
+                // both sightings share — the generation answer keys the item by
+                // it and the bag reports the same string — so it is asked for
+                // first, and the `g:seed:type:id` key is left for a roll that
+                // arrives without one. Keying the two sightings differently
+                // puts the same item in its rarity column twice.
                 let identity = if !hash.is_empty() {
                     format!("h:{hash}")
                 } else if !fingerprint.is_empty() {
@@ -1547,17 +1603,12 @@ impl GameStats {
                 if !fingerprint.is_empty() && self.let_go.remove(fingerprint) {
                     return None;
                 }
-                // Somebody else's item is not a find, wherever you picked it up.
+                // Somebody else's item is not a find, wherever it was picked up.
                 //
-                // A fingerprint carries the account it was made for and keeps
-                // it for the life of the item, so a friend's Torch of Shadows
-                // dropped on the floor for you arrives named, flagged and
-                // shaped exactly like a drop — it was announced and journalled
-                // as one. Across four captures, 999 named things entered these
-                // bags: 985 were made for this account and 14 were not, and not
-                // one of the 14 had ever been seen falling. Five of them arrive
-                // in a row from one account, which is what being handed a set
-                // of gear looks like from the outside.
+                // A fingerprint carries the account it was made for and keeps it
+                // for the life of the item, so a friend's item dropped on the
+                // floor arrives named, flagged and shaped exactly like a drop.
+                // The account is the only thing that separates the two.
                 //
                 // Nothing is refused until the client has said who it is.
                 if let (Some(mine), Some(theirs)) =
@@ -1581,17 +1632,17 @@ impl GameStats {
                 }
                 let first = identity.is_empty() || self.counted.insert(identity.clone());
                 // A named item always drops at its own grade, which the packet
-                // never states — the wiki table does. Unnamed drops carry their
+                // never states — the item table does. Unnamed drops carry their
                 // grade themselves, and their pickup inherits it.
                 //
-                // Proven against two captures: over every named sighting in
-                // them the packet's grade field is zero, and no named identity
-                // ever carries two different grades. Ordinary bases do — they
-                // arrive at every grade from 1 to 6, and at 6666 — which is why
-                // this stays a fallback rather than becoming an override.
-                // The identity first, where the name alone cannot say: eleven
-                // names belong to two items each, and a grade read by name gave
-                // a Common relic the S of the weapon sharing its name.
+                // A fallback rather than an override: a named sighting's grade
+                // field is zero and a named identity never carries two different
+                // grades, but ordinary bases arrive at every grade there is and
+                // at 6666 besides.
+                //
+                // By identity first, where the name alone cannot say: eleven
+                // names belong to two items each, and reading the grade by name
+                // gives a Common relic the S of the weapon sharing its name.
                 let id = (*item_type, *item_id, *weapon_type);
                 let known = crate::parser::known_item(name, *unscaled, id);
                 let mut tier = *tier;
@@ -1628,47 +1679,52 @@ impl GameStats {
                     // socketables in the SS column — items the player never
                     // dropped as gear and would not call an SS find.
                     if tier > 0 && GEAR.contains(item_type) {
-                        *self.graded.entry(tier).or_insert(0) += n;
+                        let seen = self.graded.entry(tier).or_insert(0);
+                        *seen = seen.saturating_add(n);
                     }
                     if !is_resource {
                         if let Some(count) = self.items.get_mut(rarity_key.as_str()) {
-                            count.total += n;
+                            count.total = count.total.saturating_add(n);
                             if *mf {
-                                count.mf += n;
+                                count.mf = count.mf.saturating_add(n);
                             }
                         }
                     }
                     if let Some((_, res)) = RESOURCES.iter().find(|(t, _)| t == item_type) {
                         let dull = DULL_KEYS.contains(&name.to_lowercase().as_str());
                         if !dull {
-                            *self.resources.get_mut(res).unwrap() += n;
+                            let seen = self.resources.get_mut(res).expect("the table has every resource");
+                            *seen = seen.saturating_add(n);
+                            // and the same drop under its own name. A resource
+                            // always arrives named — its type is in
+                            // `parser::SELF_NUMBERED` for exactly that reason —
+                            // so there is nothing here to guess.
+                            if !name.is_empty() {
+                                let one = self
+                                    .resource_items
+                                    .entry(name.to_string())
+                                    .or_insert((*res, 0));
+                                one.1 = one.1.saturating_add(n);
+                            }
                         }
                     }
                     self.count_notable(name, n);
                     self.progressed();
                 }
                 // One notification per item: either when it hits the ground or
-                // when it lands in the bag, never both. That is what `told`
-                // below is for, and it is enough on its own — an item is
-                // announced by whichever sighting gets here first and passes.
+                // when it lands in the bag, never both. `told` below is what
+                // enforces that, and it is enough on its own — an item is
+                // announced by whichever sighting arrives first and passes.
                 //
                 // So preferring the drop moment means preferring it, not
-                // requiring it. Requiring it is what this used to do, and since
-                // the ground is the default it meant a pickup could never
-                // announce anything at all: in one capture, two hundred rolls
-                // announced and none of the thousand pickups did, and the two
-                // sets barely overlapped — a hundred and seventeen of the rolls
-                // were items left on the floor, and nine hundred of the pickups
-                // had no roll this app ever saw.
-                //
-                // It also cost the case the old comment promised: a roll on the
-                // ground carries no grade, so under a minimum grade it fails,
-                // and the pickup that could have proved the grade was refused a
-                // hearing. Now it gets one, because the roll never reached
-                // `told`.
+                // requiring it. Requiring it silences the pickup path entirely,
+                // and most pickups have no roll this app ever saw. It also
+                // costs the case the preference exists for: a roll on the ground
+                // carries no grade, so it fails a minimum-grade filter, and the
+                // pickup that could have proved the grade never gets a hearing.
                 //
                 // The other way round still means only the bag: an item nobody
-                // picks up is not something the player asked to be told about.
+                // picks up is not something the player asked to hear about.
                 // a list the user built outranks every switch below it
                 let listed = self
                     .listed_sound(name, known.as_ref(), *item_type, *weapon_type)
@@ -1758,18 +1814,17 @@ impl GameStats {
                 self.zone_asked_by = Some(id.clone());
             }
             GameEvent::SatanicZone { zone, buffs, debuffs } => {
-                // A roll different from the one we are holding is the
-                // rotation; a zone where there was none is this process finding
-                // out where the zone is, which is not news the player asked to
-                // hear. Nor is the first reply after a blackout — see
-                // `stale_zone`, and note that a plain reset is not one.
+                // A roll different from the one being held is the rotation. A
+                // zone where there was none is this process finding out where
+                // the zone is, which is not news; nor is the first reply after a
+                // blackout — see `stale_zone`, and note a plain reset is not
+                // one.
                 //
-                // The buffs decide it as much as the code does. There are forty
-                // rooms and the roll can land on the one it just left, with a
-                // different set on it — and under a filter that alerts on the
-                // buffs, that is exactly the rotation the player asked to hear
-                // about. The order the server lists them in is its own business,
-                // so they are compared as sets.
+                // The buffs are part of the comparison: the roll can land on the
+                // room it just left with a different set on it, and under a
+                // filter that alerts on buffs that is exactly the rotation the
+                // player asked about. The server's ordering is its own business,
+                // so the buffs are compared as sets.
                 let rerolled = |s: &SatanicZone| {
                     s.zone != *zone || !same_set(&s.buffs, buffs) || !same_set(&s.debuffs, debuffs)
                 };
@@ -1815,16 +1870,16 @@ impl GameStats {
             self.pending_since = None;
         }
         if c.delta > 0 {
-            // Whichever of the two arrived first, the coins count once. Only
-            // the forward direction used to cancel, so a balance that beat its
-            // own deposit was credited and then credited again.
+            // Whichever of the two arrives first, the coins count once. The
+            // cancellation has to work in both directions, or a balance that
+            // beats its own deposit is credited twice.
             let already = self.pending_step.min(c.delta);
             self.pending_step -= already;
             let fresh = c.delta - already;
             if fresh > 0 {
-                self.gold_earned += fresh;
+                self.gold_earned = self.gold_earned.saturating_add(fresh);
                 self.progressed();
-                self.banked += fresh;
+                self.banked = self.banked.saturating_add(fresh);
             }
             self.last_bank = Some(Instant::now());
         }
@@ -1856,27 +1911,24 @@ impl GameStats {
                 self.banked -= already;
                 if diff > already {
                     let fresh = diff - already;
-                    self.gold_earned += fresh;
+                    self.gold_earned = self.gold_earned.saturating_add(fresh);
                     // Remembered in case the deposit that caused it has not
                     // arrived yet; the branch above cancels against this.
-                    self.pending_step += fresh;
+                    self.pending_step = self.pending_step.saturating_add(fresh);
                     self.pending_since = Some(Instant::now());
                     self.progressed();
                 }
             }
         }
         self.total_gold = current;
-        // A different purse is a different balance, and the mark that stops a
-        // return being counted as income has nothing to say about it.
-        //
-        // Left standing it says the wrong thing for the whole session. A
-        // returning player's seasonal purse is empty while the blood-pact one
-        // still holds a million and a half, so the first save names the funded
-        // purse and the mark anchors there; the next save names the seasonal
-        // one and the balance drops to a few thousand. From then on every climb
-        // is measured against the abandoned peak, `diff` is always negative,
-        // and vendor income, mail and quest gold all register as exactly zero —
-        // silently, and persisted into runs.json as a run that earned nothing.
+        // A different purse is a different balance, and the high-water mark
+        // that stops a return being counted as income has nothing to say about
+        // it. Left standing it is wrong for the whole session: a returning
+        // player's seasonal purse is empty while the blood-pact one is funded,
+        // so the mark anchors on the funded one and every later climb is
+        // measured against a peak the current purse will never reach. `diff`
+        // stays negative and vendor income, mail and quest gold all register as
+        // zero.
         self.gold_high =
             if self.gold_mode == Some(mode) { self.gold_high.max(current) } else { current };
         self.gold_mode = Some(mode);
@@ -1898,6 +1950,14 @@ impl GameStats {
             gold: self.gold_earned,
             xp: self.xp_earned,
         });
+    }
+
+    /// Whether this save stands on a higher hero level than the last one did.
+    ///
+    /// `self.character` still holds the previous save's level here: it is
+    /// rewritten further down the same arm, after the counters have run.
+    fn gained_a_hero_level(&self, now: i64) -> bool {
+        self.character.as_ref().is_some_and(|c| c.herolevel > 0 && now > c.herolevel)
     }
 
     fn per_hour(&self, value: i64) -> i64 {
@@ -1963,6 +2023,24 @@ impl GameStats {
             carried_bank: self.stale_bank,
             carried_totals: self.stale_save,
             resources: self.resources.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+            resource_items: {
+                let mut got: Vec<ResourceCount> = self
+                    .resource_items
+                    .iter()
+                    .map(|(name, (kind, total))| ResourceCount {
+                        name: name.clone(),
+                        kind: kind.to_string(),
+                        total: *total,
+                    })
+                    .collect();
+                // most of a kind first, and the name to settle a tie so the
+                // list does not shuffle itself between two equal counts
+                got.sort_by(|a, b| {
+                    a.kind.cmp(&b.kind).then(b.total.cmp(&a.total)).then(a.name.cmp(&b.name))
+                });
+                got
+            },
+            finished: self.finished,
             notable: self
                 .prefs
                 .notable_defs
@@ -2018,12 +2096,6 @@ pub fn rarity_from_packet(rarity: &Value) -> Option<String> {
     RARITIES.iter().any(|(_, n)| *n == titled).then_some(titled)
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn rarity_name(rarity: &Value) -> String {
-    rarity_from_packet(rarity).unwrap_or_else(|| "Unknown".into())
-}
-
 /// The currency the account plays with, as the packets name it.
 fn currency_mode(mode: &str) -> Option<&'static str> {
     ["GSS", "GSH", "GNS", "GNH", "GBP"].iter().copied().find(|m| *m == mode)
@@ -2070,6 +2142,8 @@ pub struct Snapshot {
     pub xp: Line,
     pub kills: Line,
     pub resources: HashMap<String, i64>,
+    pub resource_items: Vec<ResourceCount>,
+    pub finished: bool,
     pub notable: Vec<NotableCount>,
     pub items: HashMap<String, ItemStats>,
     pub satanic_zone: Option<SatanicZone>,
@@ -2230,10 +2304,9 @@ mod tests {
 
     /// A room the save has outlived is not where the character is.
     ///
-    /// The game names the room about twenty times less often than it used to,
-    /// so the last one heard goes stale while the save keeps saying which act.
-    /// Left to outrank it, `Flooded Plains` sat in the panel through visits to
-    /// three other acts.
+    /// The game names the room rarely and the act on every save, so the last
+    /// room heard goes stale while the act stays current. Left to outrank the
+    /// act, one room name sits in the panel across visits to several others.
     #[test]
     fn a_room_from_another_act_is_retired() {
         let mut s = GameStats::default();
@@ -2260,6 +2333,26 @@ mod tests {
             Some("Shadow_Realm_rm"),
             "the Shadow Realm belongs to no act"
         );
+    }
+
+    /// A save that says which hero level it stands on, which is the only thing
+    /// that tells a level-up apart from a purse that belongs to somebody else.
+    fn account_at_level(experience: i64, herolevel: i64) -> GameEvent {
+        GameEvent::Account {
+            experience,
+            act: 0,
+            has_experience: experience > 0,
+            season: CURRENT_SEASON,
+            hardcore: 0,
+            blood_pact: 0,
+            name: "Test".into(),
+            level: 100,
+            herolevel,
+            difficulty: 2,
+            hell_sub: 0,
+            kills: 0,
+            tallies: HashMap::new(),
+        }
     }
 
     fn account_xp(season: i64, hardcore: i64, blood_pact: i64, experience: i64) -> GameEvent {
@@ -2407,14 +2500,18 @@ mod tests {
     fn notable_drops_are_counted_by_name() {
         let mut s = GameStats::default();
         s.apply(&notable_item("Angelic Key", 12, 2));
+        // a material, and the apostrophe in the default has to be the one the
+        // item tables spell it with — the names are compared whole
+        s.apply(&notable_item("Prophet's Wisdom", 14, 1));
         s.apply(&notable_item("Jol", 15, 1));
         s.apply(&notable_item("Zed", 15, 1));
         s.apply(&notable_item("Ol", 15, 1));
         let snap = s.snapshot(String::new());
         let by = |label: &str| snap.notable.iter().find(|n| n.label == label).unwrap().total;
         assert_eq!(by("Angelic Key"), 2);
-        assert_eq!(by("SS runes"), 1, "Jol is one of the four level-100 runes");
+        assert_eq!(by("SS runes"), 1, "Jol is one of the seven level-100 runes");
         assert_eq!(by("S runes"), 1, "Zed is graded S");
+        assert_eq!(by("Prophet's Wisdom"), 1, "a material counts under its own group");
     }
 
     #[test]
@@ -2493,12 +2590,11 @@ mod tests {
 
     /// A friend's item is not a find, even off the floor.
     ///
-    /// Both messages are out of the capture that reported this, verbatim: the
-    /// client naming itself, then the server confirming the pickup of a Torch
-    /// of Shadows. The two accounts in them are the whole of the difference —
-    /// the client is 4964607 and the fingerprint says 133690701 — and there is
-    /// nothing else in the packet to go on: it is named, it is flagged `c: 1`,
-    /// and it entered the bags exactly as a real find does.
+    /// Two real messages: the client naming itself, then the server confirming a
+    /// pickup. The accounts are the whole of the difference — the client is
+    /// 4964607 and the fingerprint says 133690701 — and there is nothing else to
+    /// go on. The item is named, flagged `c: 1`, and enters the bags exactly as a
+    /// real find does.
     #[test]
     fn an_item_made_for_somebody_else_is_not_a_find() {
         let mut s = GameStats::default();
@@ -2624,10 +2720,9 @@ mod tests {
     }
 
     /// The same pair with a reset between them: bank the loot at the vendor,
-    /// then start the next run clean. `banked` is the only thing that stops
-    /// the balance from being counted a second time, and the reset used to
-    /// leave it behind — so the coins the finished run was already credited
-    /// with turned up again as the new session's earnings.
+    /// then start the next run clean. `banked` is the only thing stopping the
+    /// balance from being counted a second time, so a reset that leaves it
+    /// behind credits the finished run's coins again as the new session's.
     #[test]
     fn a_reset_between_a_deposit_and_its_balance_earns_the_gold_once() {
         let mut s = GameStats::default();
@@ -2748,20 +2843,12 @@ mod tests {
         assert_eq!(group.total, 2, "both spellings land in the same group");
     }
 
-    /// A list is meant to add a voice, not to take the others away.
-    ///
-    /// "Target Items" with three names in it should give those three a sound of
-    /// their own and leave every other drop exactly as it was — the rarity
-    /// switches above the filter still deciding. The other test here arms no
-    /// rarity at all, so it cannot tell an additive filter from an exclusive
-    /// one; this is the case a player actually sits in.
     /// A vial is gear, and counts in both columns like the rest of it.
     ///
-    /// It is equipped, the same as a charm. Being on neither list it used to
-    /// reach its rarity column and no grade column at all, so the panel showed
-    /// twelve Heroic beside ten SS with nothing to explain the gap. Every
-    /// Heroic item in the tables is graded SS, so a Heroic that is not also an
-    /// SS could never have been anything but this.
+    /// It is equipped, the same as a charm. On neither list it reaches its
+    /// rarity column and no grade column, so the two disagree by however many
+    /// dropped. Every Heroic item in the tables is graded SS, so a Heroic that
+    /// is not also an SS can only be this.
     #[test]
     fn a_vial_is_gear_and_counts_in_both_columns() {
         let mut s = GameStats::default();
@@ -2787,6 +2874,13 @@ mod tests {
         assert_eq!(s.graded(6), 1, "and an SS one, which is what the columns disagreed about");
     }
 
+    /// A list is meant to add a voice, not to take the others away.
+    ///
+    /// A list with three names in it should give those three a sound of their
+    /// own and leave every other drop exactly as it was, with the rarity
+    /// switches above the filter still deciding. The neighbouring test arms no
+    /// rarity at all, so it cannot tell an additive filter from an exclusive
+    /// one; this is the case a player actually sits in.
     #[test]
     fn a_list_adds_a_voice_rather_than_taking_the_others_away() {
         let mut s = GameStats::default();
@@ -3109,8 +3203,9 @@ mod tests {
         s.set_flourish_filter(vec!["Satanic".into()], 1);
         s.set_prefer_ground(false);
 
-        // the game closing files the run and starts another; every preference
-        // used to be copied across by hand, and this one was being dropped
+        // the game closing files the run and starts another, and every
+        // preference has to survive that — one copied across by hand is one
+        // that can be forgotten
         s.reset();
 
         let drop = s.apply(&tiered_satanic(1, "a")).expect("the flourish is still armed");
@@ -3335,11 +3430,11 @@ mod tests {
     #[test]
     fn income_on_the_new_purse_survives_the_purse_changing() {
         // A returning player: the seasonal purse is empty and only the blood
-        // pact one is funded, so the first packet has to guess and guesses that
-        // one. The save then names the seasonal purse and the balance drops by
-        // a million and a half. Everything earned from there on was measured
-        // against the abandoned peak and came out negative, so gold earned read
-        // exactly zero for the rest of the session.
+        // pact one is funded, so the first packet guesses that one. The save
+        // then names the seasonal purse and the balance drops by whatever the
+        // other held. Without moving the high-water mark, every later climb is
+        // compared against a peak this purse will never reach and gold earned
+        // reads zero for the rest of the session.
         let mut s = GameStats::default();
         s.apply(&GameEvent::Gold(Currency { gbp: 1_706_231, ..Default::default() }));
         assert_eq!(s.gold_mode, Some("GBP"), "one funded purse names itself");
@@ -3431,7 +3526,7 @@ mod tests {
     #[test]
     fn guild_xp_before_the_first_account_total_does_not_inflate() {
         let mut s = GameStats::default();
-        s.apply(&GameEvent::XpGain(15)); // 100 character xp guessed
+        s.apply(&GameEvent::XpGain(100)); // the parser has already scaled the share
         s.apply(&account_xp(CURRENT_SEASON, 0, 0, 50_000_000));
         assert_eq!(s.snapshot(String::new()).xp.earned, 100);
         s.apply(&account_xp(CURRENT_SEASON, 0, 0, 50_000_500));
@@ -3563,12 +3658,100 @@ mod tests {
     }
 
     #[test]
-    fn xp_gain_uses_original_factor() {
+    fn an_xp_gain_is_credited_as_the_character_xp_it_is() {
+        // The 1/0.15 lives in the parser, the only place that knows whether the
+        // number it read was a guild share or a quest reward. See
+        // `a_quest_reward_is_not_a_guild_share`.
         let mut s = GameStats::default();
-        s.apply(&GameEvent::XpGain(15));
+        s.apply(&GameEvent::XpGain(100));
         let snap = s.snapshot(String::new());
         assert_eq!(snap.xp.total, 100);
         assert_eq!(snap.xp.earned, 100);
+    }
+
+    /// A counter may be wrong. It may not be negative.
+    ///
+    /// The capture filter takes every plaintext byte the machine sends or
+    /// receives, so a stray key normalising to one of these can carry any
+    /// number at all. Plain `+=` wraps in release and panics in debug, and a
+    /// wrapped total stays negative for the rest of the session.
+    #[test]
+    fn a_counter_saturates_rather_than_wrapping() {
+        let mut s = GameStats::default();
+        for _ in 0..3 {
+            s.apply(&GameEvent::XpGain(i64::MAX));
+        }
+        let snap = s.snapshot(String::new());
+        assert_eq!(snap.xp.earned, i64::MAX, "pinned at the top, not wrapped past it");
+        assert!(snap.xp.total >= 0, "and the lifetime total with it");
+
+        let mut s = GameStats::default();
+        for _ in 0..3 {
+            s.apply(&GameEvent::Gold(crate::parser::Currency {
+                delta: i64::MAX,
+                ..Default::default()
+            }));
+        }
+        assert!(s.snapshot(String::new()).gold.earned >= 0, "gold too");
+    }
+
+    /// A number that cannot be scaled is not a guild share.
+    ///
+    /// The share is a fifteenth of the character's experience, so scaling it up
+    /// nearly sevenfold overflows near the top of the range — and an `as i64`
+    /// cast saturates silently, handing the counters `i64::MAX` to add up.
+    #[test]
+    fn an_experience_number_too_large_to_scale_is_refused() {
+        let mut s = GameStats::default();
+        for e in crate::parser::events_from_messages(&[json!({
+            "message": "ok", "status": 1, "xp": i64::MAX
+        })]) {
+            s.apply(&e);
+        }
+        assert_eq!(s.snapshot(String::new()).xp.earned, 0, "nothing was earned");
+
+        // and the ordinary share still scales
+        let mut s = GameStats::default();
+        for e in crate::parser::events_from_messages(&[json!({
+            "message": "ok", "status": 1, "xp": 1_500
+        })]) {
+            s.apply(&e);
+        }
+        assert_eq!(s.snapshot(String::new()).xp.earned, 10_000, "a fifteenth, scaled back up");
+    }
+
+    /// A hero level-up resets the save's `experience` to what carried over.
+    ///
+    /// Read as a diff that is simply negative, the whole crossing is discarded —
+    /// about two percent of a session that levels once an hour, and far more for
+    /// anyone levelling faster.
+    #[test]
+    fn a_hero_level_up_credits_what_carried_over() {
+        let mut s = GameStats::default();
+        s.apply(&account_at_level(50_000_000, 91)); // calibrates
+        s.apply(&account_at_level(53_600_000, 91));
+        assert_eq!(s.snapshot(String::new()).xp.earned, 3_600_000);
+        // the level turns over and the counter starts again at the remainder
+        s.apply(&account_at_level(1_289, 92));
+        assert_eq!(
+            s.snapshot(String::new()).xp.earned,
+            3_601_289,
+            "the overflow past a level-up is xp this session earned"
+        );
+        // and the next climb is measured from the new floor, not the old peak
+        s.apply(&account_at_level(500_000, 92));
+        assert_eq!(s.snapshot(String::new()).xp.earned, 4_100_000);
+    }
+
+    /// A drop with no level-up behind it is still not income: a second
+    /// character's save, or the game rebasing, must not credit its whole total.
+    #[test]
+    fn a_drop_without_a_level_up_credits_nothing() {
+        let mut s = GameStats::default();
+        s.apply(&account_at_level(50_000_000, 91));
+        s.apply(&account_at_level(53_600_000, 91));
+        s.apply(&account_at_level(2_000_000, 91));
+        assert_eq!(s.snapshot(String::new()).xp.earned, 3_600_000);
     }
 
     /// A session that has been running for a while, without waiting for one.
@@ -3712,9 +3895,9 @@ mod tests {
             }
         }
 
-        // The default, and the case that was broken: preferring the drop moment
-        // used to mean refusing the bag outright, so an item whose roll this app
-        // never saw — or whose roll had no grade to pass the minimum — was never
+        // The default, and the case that matters: preferring the drop moment
+        // must not mean refusing the bag, or an item whose roll this app never
+        // saw — or whose roll had no grade to pass the minimum — is never
         // announced at all.
         let mut s = GameStats::default();
         assert!(s.prefs.prefer_ground);
@@ -3791,7 +3974,8 @@ mod tests {
         // A visit to another character. Its purse arrives in the very same
         // fields, and it holds a hundred coins.
         s.apply(&balance(107));
-        // And back. This used to read as seventy-eight thousand earned.
+        // And back. Without the high-water mark this reads as the whole balance
+        // being earned.
         s.apply(&balance(78_101));
         assert_eq!(s.snapshot(String::new()).gold.earned, 0, "nothing was earned by walking there and back");
 
@@ -3875,10 +4059,10 @@ mod tests {
         assert!(s.take_zone_change().is_some(), "the packet after it re-arms the guard");
 
         // The Reset button, pressed mid-farm. Nothing went dark: the game has
-        // been up all along and the zone is exactly where we last saw it. This
-        // used to arm the same guard, and because a zone packet arrives only
-        // every few minutes, the packet it swallowed was often the rotation the
-        // player pressed Reset to start counting.
+        // been up all along and the zone is where it was. Arming the blackout
+        // guard here swallows the next zone packet, and since one arrives only
+        // every few minutes that is often the rotation the player pressed Reset
+        // to start counting.
         s.reset();
         s.apply(&satanic_zone("Act_05_05"));
         assert!(s.take_zone_change().is_some(), "a session reset must not swallow a rotation");
@@ -4116,5 +4300,109 @@ mod tests {
         s.apply(&rolled_zone("Act_05_01", vec![21]));
         assert!(s.take_zone_change().is_none());
         assert!(s.take_zone_change().is_none(), "a filtered rotation is not left pending");
+    }
+
+    /// Run a real session through the counters and report what they made of it.
+    ///
+    /// `parser::replay_a_capture` reads the same file but only asks the parser
+    /// what an item was called; this drives `GameStats`, where the numbers
+    /// people read are made. "The XP is wrong" is not answerable by a packet
+    /// built by hand.
+    ///
+    /// The truth it measures against is reconstructed from the saves themselves:
+    /// `experience` is the XP inside the current hero level and resets at every
+    /// level-up, so a session's real gain is the sum of the climbs within each
+    /// level plus what carried over past each of them.
+    ///
+    /// Ignored: it wants a file the repository does not carry.
+    ///
+    ///     HS_CAPTURE=... cargo test replay_the_counters -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs a capture; see the doc comment"]
+    fn replay_the_counters() {
+        use std::io::{BufRead, BufReader};
+
+        let path = std::env::var("HS_CAPTURE").expect("set HS_CAPTURE to a capture file");
+        let file = std::fs::File::open(&path).expect("open the capture");
+        let mut s = GameStats::default();
+
+        let mut xp_gain_events = 0i64;
+        let mut xp_gain_raw = 0i64;
+        let mut levelups = 0i64;
+        let mut carried_over = 0i64;
+        let mut within = 0i64;
+        // Per character, because a capture can hold several and a switch is
+        // not a level-up: the first version keyed on one name, credited only
+        // that one, and reported the counter 3.86% high on a capture where a
+        // second character had done 45M of the session's XP.
+        let mut seen: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
+        // Gold has no total to check against — the purse is a balance, and a
+        // balance falls when it is spent. What can be said is how much it ever
+        // climbed, and how much the client announced it was banking.
+        let mut purse_climbs = 0i64;
+        let mut deposits = 0i64;
+        let mut last_purse: Option<i64> = None;
+
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else { break };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+            for event in crate::parser::events_from_messages(std::slice::from_ref(&value)) {
+                match &event {
+                    crate::parser::GameEvent::XpGain(x) => {
+                        xp_gain_events += 1;
+                        xp_gain_raw += x;
+                    }
+                    crate::parser::GameEvent::Account { experience, herolevel, name, .. }
+                        if *experience > 0 && !name.is_empty() =>
+                    {
+                        if let Some(&(prev, hl)) = seen.get(name) {
+                            if *herolevel > hl {
+                                levelups += 1;
+                                carried_over += *experience;
+                            } else if *experience > prev {
+                                within += experience - prev;
+                            }
+                        }
+                        seen.insert(name.clone(), (*experience, *herolevel));
+                    }
+                    crate::parser::GameEvent::Gold(c) => {
+                        deposits += c.delta.max(0);
+                        let now = [c.gss, c.gsh, c.gns, c.gnh, c.gbp].into_iter().max().unwrap_or(0);
+                        if now > 0 {
+                            if let Some(prev) = last_purse {
+                                if now > prev {
+                                    purse_climbs += now - prev;
+                                }
+                            }
+                            last_purse = Some(now);
+                        }
+                    }
+                    _ => {}
+                }
+                s.apply(&event);
+            }
+        }
+
+        let snap = s.snapshot(String::new());
+        let truth = within + carried_over;
+        eprintln!("--- what the counter made of it");
+        eprintln!("  xp earned      {:>16}", snap.xp.earned);
+        eprintln!("  gold earned    {:>16}", snap.gold.earned);
+        eprintln!("  kills earned   {:>16}", snap.kills.earned);
+        eprintln!("--- what the saves say");
+        eprintln!("  climbs within a level  {:>16}", within);
+        eprintln!("  carried past a level   {:>16}   over {} level-ups", carried_over, levelups);
+        eprintln!("  so at least            {:>16}", truth);
+        eprintln!("--- and the purse");
+        eprintln!("  every climb in the balance {:>16}", purse_climbs);
+        eprintln!("  deposits the client announced {:>13}", deposits);
+        eprintln!("--- what fed it");
+        eprintln!("  XpGain events {}, raw sum {}", xp_gain_events, xp_gain_raw);
+        eprintln!("  the same, scaled by 1/0.15: {}", (xp_gain_raw as f64 / 0.15) as i64);
+        let drift = snap.xp.earned - truth;
+        eprintln!("--- drift {} ({:+.2}%)", drift, drift as f64 * 100.0 / truth.max(1) as f64);
     }
 }

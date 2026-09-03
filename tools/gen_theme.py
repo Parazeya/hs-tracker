@@ -47,13 +47,12 @@ DEFAULT = {
 
 # Written into every block as they stand. A season moves hues; these two carry a
 # meaning rather than a mood, so they must not move — magic find is blue and a
-# Satanic drop is red whatever the skin is. They are outside DEFAULT because
-# `shift` is applied per family and neither has one.
+# Satanic drop is red whatever the skin is. Outside DEFAULT because `shift` is
+# applied per family and neither belongs to one.
 #
-# Both were lifted out of the dark: #5050ae measured 2.4:1 against the chip plate
-# and #ca1717 2.9:1, under the 3:1 floor for display text, on a plate that
-# composites to #2a1c1c. The red is the one the overlay already used to say "you
-# are standing in the Satanic zone", so no second near-identical red appears.
+# Both are lighter than the shades they replace, which fell under the 3:1
+# contrast floor for display text on a chip plate. The red is the one the overlay
+# already uses for the Satanic zone, so no second near-identical red appears.
 FIXED = {
     "--mf": "#7fb2ff",
     "--rar-satanic": "#ff6a6a",
@@ -146,6 +145,85 @@ MODERN_UI = {
     "--input": "#2e2e33",
     "--ring": "#d4d4d8",
     "--radius": "6px",
+}
+
+# The plain skin, for people who would rather the app did not look like the
+# game. Written out rather than shifted: `shift` only moves hues and carries
+# every lightness over, so a skin that is not the default palette in other
+# colours cannot be derived from it.
+#
+# shadcn's dark theme on a zinc base: #09090b under everything, #18181b for a
+# card, #27272a for anything you type into or press, #fafafa for what is being
+# read and #a1a1aa for what labels it.
+#
+# The colours are the smaller half. The rest is scale — 13px text where the game
+# skin has 10px capitals, 12px of inset where it has 6, a 14px radius, a hairline
+# of white at a tenth — and that lives in `plain.css`, with `skin.svelte.js`
+# stopping the art from arriving at all.
+LITERAL = {
+    "plain": {
+        # Text. shadcn works with two steps and no more: `foreground` for what
+        # is being read and `muted-foreground` for what labels it. --bone-6 is
+        # the body (29 uses) and --bone-13 the emphasis (35), so those are the
+        # two that matter; the rest fill in between them.
+        "--bone-3": "#a1a1aa", "--bone-4": "#a1a1aa", "--bone-5": "#b4b4bb",
+        "--bone-6": "#e4e4e7", "--bone-7": "#d4d4d8", "--bone-8": "#e4e4e7",
+        "--bone-9": "#f4f4f5", "--bone-10": "#f4f4f5", "--bone-11": "#fafafa",
+        "--bone-12": "#fafafa", "--bone-13": "#fafafa", "--bone-14": "#ffffff",
+        "--bone-15": "#ffffff",
+        # --dim-1 is only ever an inner scrollbar thumb; --dim-2 is a note
+        "--dim-1": "#3f3f46", "--dim-2": "#a1a1aa",
+        # Edges are borders, except --edge-8 and --edge-2b, which the components
+        # spend on secondary text far more often than on a line: both are the
+        # muted foreground and neither can be a hairline colour.
+        "--edge-1": "#27272a", "--edge-2": "#27272a", "--edge-3": "#2e2e33",
+        "--edge-4": "#3f3f46", "--edge-5": "#3f3f46", "--edge-6": "#52525b",
+        "--edge-7": "#52525b", "--edge-8": "#a1a1aa", "--edge-9": "#52525b",
+        "--edge-1b": "#71717a", "--edge-2b": "#a1a1aa",
+        # The accent, and the only hue on the window not carrying a meaning.
+        # Violet because it is the one wide gap left in the wheel: red is
+        # Satanic, green is Set, teal is Heroic, yellow is Angelic, rose is
+        # Unholy and light blue is magic find.
+        #
+        # These two tokens also carried the Angelic rarity and the gold counter,
+        # which the game palette could conflate because all three were the same
+        # gold. A violet accent cannot, so `plain.css` gives both their own.
+        "--gold-1": "#9b82f8", "--gold-2": "#a78bfa",
+        # The surfaces, darkest first. --ground-1 is only ever a text shadow.
+        "--ground-1": "#09090b", "--ground-2": "#09090b", "--ground-3": "#0d0d0f",
+        "--ground-4": "#111113", "--ground-5": "#18181b", "--ground-6": "#18181b",
+        "--ground-7": "#1c1c1f", "--ground-8": "#232326", "--ground-9": "#27272a",
+        "--ground-10": "#3f3f46", "--ground-11": "#3f3f46",
+    },
+    "plainlight": {
+        # The same skin with the light turned on. Not an inversion — the two
+        # scales are not mirror images of each other: a near-black ground wants
+        # its text near-white, while a white one wants ink, and the greys in
+        # between step at different distances because the eye does. These are
+        # shadcn's light theme on the same zinc base.
+        #
+        # The `bone` family means "how much this wants to be read", so on a light
+        # ground it runs the other way: --bone-3 stays the faintest and --bone-13
+        # the most present, but faint is now #71717a and present is #09090b.
+        "--bone-3": "#67676f", "--bone-4": "#52525b", "--bone-5": "#52525b",
+        "--bone-6": "#27272a", "--bone-7": "#3f3f46", "--bone-8": "#3f3f46",
+        "--bone-9": "#27272a", "--bone-10": "#27272a", "--bone-11": "#18181b",
+        "--bone-12": "#18181b", "--bone-13": "#09090b", "--bone-14": "#09090b",
+        "--bone-15": "#000000",
+        "--dim-1": "#d4d4d8", "--dim-2": "#67676f",
+        "--edge-1": "#e4e4e7", "--edge-2": "#e4e4e7", "--edge-3": "#dcdce0",
+        "--edge-4": "#d4d4d8", "--edge-5": "#d4d4d8", "--edge-6": "#c4c4ca",
+        "--edge-7": "#c4c4ca", "--edge-8": "#67676f", "--edge-9": "#a1a1aa",
+        "--edge-1b": "#a1a1aa", "--edge-2b": "#67676f",
+        # #a78bfa is chosen to carry on a near-black card and measures 1.9 on
+        # white, which is not a colour so much as a rumour of one. Two steps
+        # deeper is the same violet and reads at 5.7.
+        "--gold-1": "#6d28d9", "--gold-2": "#7c3aed",
+        "--ground-1": "#ffffff", "--ground-2": "#ffffff", "--ground-3": "#fafafa",
+        "--ground-4": "#f8f8f8", "--ground-5": "#ffffff", "--ground-6": "#fafafa",
+        "--ground-7": "#f4f4f5", "--ground-8": "#efeff1", "--ground-9": "#e4e4e7",
+        "--ground-10": "#d4d4d8", "--ground-11": "#d4d4d8",
+    },
 }
 
 
@@ -246,6 +324,11 @@ def main() -> None:
         lines += [f"  {n}: {c};" for n, c in FIXED.items()]
         lines.append("}")
 
+    # Modern is written out here rather than in the loop below because it
+    # carries a block the plain skins have no use for: the shadcn/ui names.
+    missing = set(DEFAULT) - set(MODERN)
+    if missing:
+        raise SystemExit(f"modern is missing {len(missing)} tokens: {sorted(missing)}")
     lines += [
         "",
         "/* Modern: the app without the game's art on it. Flat surfaces, hairline",
@@ -261,6 +344,20 @@ def main() -> None:
     lines.append("  /* the same colours under the names the design system uses */")
     lines += [f"  {n}: {c};" for n, c in MODERN_UI.items()]
     lines.append("}")
+
+    for skin, palette in LITERAL.items():
+        missing = set(DEFAULT) - set(palette)
+        if missing:
+            raise SystemExit(f"{skin} is missing {len(missing)} tokens: {sorted(missing)}")
+        lines += [
+            "",
+            f"/* {skin.title()}: not a season. Every value is its own, because this skin",
+            "   moves the lightnesses too — see LITERAL in tools/gen_theme.py. */",
+            f":root[data-theme='{skin}'] {{",
+        ]
+        lines += [f"  {name}: {palette[name]};" for name, _ in tokens()]
+        lines += [f"  {n}: {c};" for n, c in FIXED.items()]
+        lines.append("}")
 
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"{len(DEFAULT) + len(FIXED)} tokens -> {OUT}")

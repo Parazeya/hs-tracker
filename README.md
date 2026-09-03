@@ -11,16 +11,29 @@
   <a href="../../releases"><b>➡️ Download for Windows ⬅️</b></a>
 </p>
 
+<p align="center">
+  <a href="../../releases"><img alt="downloads" src="https://img.shields.io/github/downloads/th3conc3pt3ur/hs-tracker/total?style=for-the-badge&amp;label=downloads&amp;color=6f42c1"></a>
+</p>
+
+<!-- downloads -->
+<table align="center">
+  <tr>
+    <td><b>Windows</b></td>
+    <td><a href="../../releases/download/v1.1.2-tc.1/HS.Tracker_1.1.2-tc.1_x64-setup.exe">HS.Tracker_1.1.2-tc.1_x64-setup.exe</a></td>
+  </tr>
+</table>
+<!-- /downloads -->
+
 > [!NOTE]
 > **This is a fork** of [Parazeya/hs-tracker](https://github.com/Parazeya/hs-tracker),
 > which is where the app comes from and where to report anything that is not
-> about the additions below. It adds a third skin — *Modern*, flat and neutral
+> about the additions below. It adds a skin — *Modern*, flat and neutral
 > instead of the game's pixel art — and in-app updates, and it releases for
 > Windows only; the Linux packages are upstream's.
 >
-> Versions here carry a suffix: `1.0.6-tc.1` is this fork's first build on top of
-> upstream's `1.0.6`. Both projects reached 1.0.6, which is what the suffix is
-> for.
+> Versions here carry a suffix: `1.1.2-tc.1` is this fork's first build on top of
+> upstream's `1.1.2`. Both projects reached 1.0.6 on the same day, which is what
+> the suffix is for.
 
 > [!NOTE]
 > **How soon does it work when a new season starts?**
@@ -110,12 +123,17 @@ people change, with the rest a click away under **More settings**.
 ### Skins
 
 **Theme** in Settings changes what every window is wearing, without a restart.
+Five of them, in two families.
 
 *Hero Siege* is the game's own art — nine-sliced panels, painted buttons and the
 game's pixel face — and *Ebontharn* is the same art in the season's colours.
 
-*Modern* is neither. It takes the art off and draws the chrome in CSS instead:
-hairline borders, a radius, flat surfaces on Tailwind's zinc ramp — the neutrals
+The other three take the art off and let CSS draw the chrome, which is the same
+idea reached twice: *Plain dark* and *Plain light* are upstream's, on shadcn's
+zinc palette with a violet accent, and *Modern* is this fork's.
+
+*Modern* is the one with no game art anywhere in it. Hairline borders, a radius,
+flat surfaces on Tailwind's zinc ramp — the neutrals
 [shadcn/ui](https://ui.shadcn.com) is built from — and the system's own UI font
 in place of the pixel one. The sprites that are genuinely icons become line
 icons, the figures are set in tabular digits so a column of them stops jittering

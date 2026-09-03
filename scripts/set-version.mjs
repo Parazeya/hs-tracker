@@ -17,6 +17,39 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
+// The README lists the files a release carries, and a file's name carries the
+// version, so the list is written here rather than by hand. The names are the
+// bundlers' own — Tauri's NSIS installer, its .deb and its AppImage, and the
+// .rpm, whose name puts the packaging revision after the version.
+//
+// No count beside each file. Shields can only count an asset within one
+// release, so those four numbers were the current version's alone and read as
+// nought for the minutes between the tag going up and the release being cut.
+// The one badge above the table counts every download of every release, which
+// is the figure worth showing.
+// Windows alone, because that is what this fork releases. Upstream's table
+// lists four and upstream uploads four; a row here is a link to a file on this
+// fork's own release, so the three Linux ones would have been three 404s under
+// every tag. The Linux packages build \u2014 `npm run deb` does it in a container \u2014
+// but they are not published here, and the row comes back the day they are.
+const ASSETS = [
+  ['Windows', (v) => `HS.Tracker_${v}_x64-setup.exe`],
+];
+
+/** The table between the `downloads` markers, for one version. */
+function downloads(version, eol) {
+  const rows = ASSETS.map(([what, named]) => {
+    const file = named(version);
+    return [
+      '  <tr>',
+      `    <td><b>${what}</b></td>`,
+      `    <td><a href="../../releases/download/v${version}/${file}">${file}</a></td>`,
+      '  </tr>',
+    ].join(eol);
+  });
+  return ['<table align="center">', ...rows, '</table>'].join(eol);
+}
+
 const pkgPath = join(root, 'package.json');
 const current = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 
@@ -55,6 +88,18 @@ if (patch(join(root, 'src-tauri', 'tauri.conf.json'), /("version"\s*:\s*")[^"]+(
 // [package] version — the first `version = "…"` at the start of a line
 if (patch(join(root, 'src-tauri', 'Cargo.toml'), /(^version\s*=\s*")[^"]+(")/m, `$1${version}$2`))
   touched.push('src-tauri/Cargo.toml');
+// the download table, names, links and all
+if (
+  patch(
+    join(root, 'README.md'),
+    /(<!-- downloads -->\r?\n)[\s\S]*?(\r?\n<!-- \/downloads -->)/,
+    // the file is checked out with CRLF on Windows, and a block written with
+    // bare newlines inside one reads as a single line to anything that cares
+    (_, open, close) =>
+      open + downloads(version, open.includes('\r') ? '\r\n' : '\n') + close,
+  )
+)
+  touched.push('README.md');
 
 console.log(
   touched.length

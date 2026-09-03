@@ -6,21 +6,18 @@
   import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { buffInfo, debuffInfo, zoneAct, zoneName } from './buffs.js';
-  import {
-    ITEMS,
-    DROP_CHASE,
-    DROP_PLACES,
-    DROP_RATE,
-    DROP_ZONES,
-    RARITY_BY_NAME,
-    TIER_BY_NAME,
-    itemName,
-    rarityByName,
-    tierLabel,
-    typeLabel,
-    zoneCode,
-  } from './items.js';
+  import { ITEMS, DROP_CHASE, DROP_PLACES, DROP_RATE, DROP_ZONES, RARITY_BY_NAME, TIER_BY_NAME, rarityByName, tierLabel, zoneCode } from './items.js';
+  import { itemName, language, locale, nameOf, placeList, satanicZoneName, say, t, typeLabel } from './say.svelte.js';
   import { fmt, difficulty, RARITIES, RARITY_CLASS } from './format.js';
+
+  // The four counters the backend keeps, and what to call them. Every resource
+  // it names belongs to one of them; see `RESOURCES` in stats.rs.
+  const RESOURCES = [
+    ['keys', 'Keys'],
+    ['materials', 'Materials'],
+    ['socketables', 'Socketables'],
+    ['collectibles', 'Collectibles'],
+  ];
 
   let snap = $state(null);
   let extra = $state(null);
@@ -34,6 +31,14 @@
     snap = s;
     clock = { secs: s.session_secs, at: Date.now() };
   }
+
+  // A canvas is outside the template, so nothing repaints it when the words
+  // change: the two captions and the empty-state line would have kept the
+  // language they were painted in. Reading language() here is what subscribes.
+  $effect(() => {
+    language();
+    drawGraph();
+  });
 
   $effect(() => {
     invoke('snapshot').then(received).catch(() => {});
@@ -65,17 +70,23 @@
       : `${m}:${String(s).padStart(2, '0')}`;
   }
 
-  // One formatter, built once. `extra` arrives as a fresh object, so every one
-  // of the journal's 400 rows re-runs its template on every push, and building
-  // a Date and a fresh options literal per row costs 10.2ms of blocking main
-  // thread per push — for timestamps that never change. The same 400 rows
-  // through one hoisted Intl.DateTimeFormat: 0.23ms.
-  const TIME = new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-  const time = (ms) => TIME.format(ms);
+  // One formatter, hoisted. `extra` arrives as a fresh object, so all 400
+  // journal rows re-run their template on every push; a Date and a fresh
+  // options literal per row costs about 10ms of blocking main thread each time,
+  // against a fifth of a millisecond through one `Intl.DateTimeFormat`.
+  //
+  // Kept per language rather than built once, or it would go on reading the
+  // clock in whatever language the page loaded in.
+  let TIME = null;
+  let timeIn = '';
+  const time = (ms) => {
+    const want = locale();
+    if (want !== timeIn) {
+      TIME = new Intl.DateTimeFormat(want, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      timeIn = want;
+    }
+    return TIME.format(ms);
+  };
 
 
   const item = (name) => snap?.items?.[name] ?? { total: 0, mf: 0, per_hour: 0 };
@@ -84,40 +95,40 @@
   let bosses = $derived((snap?.tallies ?? []).filter((t) => t.group === 'boss'));
   let chests = $derived((snap?.tallies ?? []).filter((t) => t.group === 'chest'));
   // Neither killed nor opened: a Chaos Tower floor and a wormhole are counted
-  // when they are CLEARED. They used to sit under Bosses, which made walking
-  // up a staircase read as a kill.
+  // when they are CLEARED, so they are counted apart from bosses — under
+  // Bosses, walking up a staircase reads as a kill.
   let cleared = $derived((snap?.tallies ?? []).filter((t) => t.group === 'clear'));
 
   let charSub = $derived.by(() => {
     const c = extra?.character;
-    if (!c) return 'waiting for character…';
+    if (!c) return t('waiting for character…');
     const parts = [];
     if (c.name) parts.push(c.name);
-    parts.push(`Lv ${c.level}`, `HLv ${c.herolevel}`, difficulty(c.difficulty, c.hell_sub));
-    if (c.hardcore) parts.push('HC');
+    parts.push(`${t('Lv')} ${c.level}`, `${t('HLv')} ${c.herolevel}`, difficulty(c.difficulty, c.hell_sub));
+    if (c.hardcore) parts.push(t('HC'));
     return parts.join(' · ');
   });
 
   // gold, xp and kills only travel when the game saves the character or banks
   // gold; a stale number is the game being quiet, not the tracker being stuck
-  const ago = (secs) => (secs < 90 ? `${secs}s` : `${Math.floor(secs / 60)}m`);
+  const ago = (secs) => (secs < 90 ? `${secs}${t('s')}` : `${Math.floor(secs / 60)}${t('m')}`);
   let lag = $derived.by(() => {
     const save = snap?.save_age_secs;
     const bank = snap?.bank_age_secs;
     const parts = [];
-    if (save != null && save >= 45) parts.push(`character save ${ago(save)} ago`);
-    if (bank != null && bank >= 45) parts.push(`balance ${ago(bank)} ago`);
+    if (save != null && save >= 45) parts.push(`${t('character save')} ${ago(save)} ${t('ago')}`);
+    if (bank != null && bank >= 45) parts.push(`${t('balance')} ${ago(bank)} ${t('ago')}`);
     if (save == null && bank == null) {
       // the totals on screen are then last run's, marked with an asterisk
       return snap?.carried_bank || snap?.carried_totals
-        ? 'waiting for the first game save — gold, xp and kills arrive with it; * marks totals carried over from the last run'
-        : 'waiting for the first game save — gold, xp and kills arrive with it';
+        ? t('waiting for the first game save — gold, xp and kills arrive with it; * marks totals carried over from the last run')
+        : t('waiting for the first game save — gold, xp and kills arrive with it');
     }
-    return parts.length ? `last from the game · ${parts.join(' · ')}` : '';
+    return parts.length ? `${t('last from the game')} · ${parts.join(' · ')}` : '';
   });
 
-  // Four fit. A rotation can carry five, and the box used to cut the list
-  // there and say nothing — the two columns read as complete and were not.
+  // Four fit, and a rotation can carry five, so the count is shown: two columns
+  // cut silently at four read as complete when they are not.
   const SHOWN = 4;
 
   /// Relics. They reach this timeline only when one is being hunted, and they
@@ -151,23 +162,20 @@
     const next = new Date(d);
     next.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
     return {
-      at: next.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      at: next.toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }),
       in: dur(Math.max(0, Math.floor((next.getTime() - nowTick) / 1000))),
     };
   });
 
   // Whether the zone on screen is still the one the server is running.
   //
-  // The game asks the server only as part of saving, and it saves when it feels
-  // like it — measured at up to twenty-four minutes standing still. So the zone
-  // here is an answer that was true when it was given, and the rotation does not
-  // wait for the next save: stand still across :30 and this box goes on naming
-  // the previous half hour's zone, listing its buffs and its drops, next to a
-  // countdown that has already run out. Close the game and it repeats that
-  // answer for as long as the window is open.
+  // The game asks the server only as part of saving, and can go twenty minutes
+  // without doing so. The rotation does not wait: stand still across :30 and
+  // this box goes on naming the previous half hour's zone, with its buffs and
+  // its drops, beside a countdown that has already run out.
   //
-  // It cannot be fixed by asking — nothing here can ask the server, it only
-  // reads the replies the game gets. What it can do is stop stating it as fact.
+  // Nothing here can ask the server — it only reads the replies the game gets —
+  // so the answer is to stop stating a stale zone as fact.
   let zoneStale = $derived.by(() => {
     const at = snap?.satanic_at;
     if (!at) return false;
@@ -177,7 +185,7 @@
   });
   let zoneSeen = $derived(
     snap?.satanic_at
-      ? new Date(snap.satanic_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+      ? new Date(snap.satanic_at).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' })
       : ''
   );
 
@@ -188,9 +196,17 @@
     if (d.item_id > 0) return `${typeLabel(d.item_type, d.weapon_type)} #${d.item_id}`;
     const parts = [];
     if (d.item_type > 0) parts.push(typeLabel(d.item_type, d.weapon_type));
-    if (d.seed > 0) parts.push(`Seed ${String(d.seed).slice(-6)}`);
-    return parts.join(' · ') || 'Unknown item';
+    if (d.seed > 0) parts.push(`${t('Seed')} ${String(d.seed).slice(-6)}`);
+    return parts.join(' · ') || t('Unknown item');
   }
+
+  // Fixed, so the names beside it line up — but how wide it has to be is a fact
+  // about the language: "Satanic" is seven characters and "Сатанинский" eleven.
+  // Taken from the words rather than widened for the worst case, so English
+  // keeps the width it had.
+  let rarWidth = $derived(
+    Math.max(54, ...RARITIES.map((name) => Math.ceil(t(name).length * 6.2))),
+  );
 
   function dropRarity(d) {
     if (d.rarity) return d.rarity;
@@ -239,14 +255,21 @@
     // context, and a season remaps both tokens.
     const skin = getComputedStyle(canvas);
     const token = (name, fallback) => skin.getPropertyValue(name).trim() || fallback;
-    const GOLD = token('--gold-2', '#e8c860');
+    // Gold is the accent in the game skin and gold is what it means, so one
+    // token served both. Under a skin whose accent is violet it stopped
+    // meaning anything: the gold line and the xp line came out the same
+    // colour and the graph had one line in it as far as the eye went.
+    const GOLD = token('--graph-gold', token('--gold-2', '#e8c860'));
+    // the xp line was written out here, which is fine until a skin needs it
+    // darker: #a06ae0 measures 3.0 on paper and the line disappeared into it
+    const XP = token('--graph-xp', '#a06ae0');
     const FAINT = token('--edge-8', '#8a7a5a');
-    const FACE = "11px 'CookieRun Bold', sans-serif";
+    const FACE = `11px ${token('--face', "'CookieRun Bold', sans-serif")}`;
     const data = rates();
     if (data.length < 2) {
       ctx.fillStyle = FAINT;
       ctx.font = FACE;
-      ctx.fillText('the graph appears after a couple of minutes of farming', 10, H / 2 + 4);
+      ctx.fillText(t('the graph appears after a couple of minutes of farming'), 10, H / 2 + 4);
       return;
     }
     const t0 = data[0].t;
@@ -255,26 +278,43 @@
     const maxGold = Math.max(...data.map((d) => d.gold), 1);
     const maxXp = Math.max(...data.map((d) => d.xp), 1);
     const px = (t) => ((t - t0) / span) * (W - 8) + 4;
+    // A skin can ask for the area under the line to be filled. Only the plain
+    // one does: the game's panel is a lit painting already and a wash of colour
+    // on it reads as dirt, while on a flat near-black card the line alone is a
+    // scratch on a wall. Read as a token rather than passed in, because this is
+    // the same place the two colours come from.
+    const FILL = token('--graph-fill', '') === 'on';
     const line = (key, max, color) => {
+      const at = (d) => [px(d.t), H - 6 - (d[key] / max) * (H - 22)];
+      // an eight-digit hex is the cheapest way to an alpha of a colour we were
+      // handed, and the only shape either token ever takes
+      if (FILL && /^#[0-9a-f]{6}$/i.test(color)) {
+        const wash = ctx.createLinearGradient(0, 0, 0, H);
+        wash.addColorStop(0, color + '38');
+        wash.addColorStop(1, color + '00');
+        ctx.beginPath();
+        ctx.moveTo(px(data[0].t), H);
+        data.forEach((d) => ctx.lineTo(...at(d)));
+        ctx.lineTo(px(data[data.length - 1].t), H);
+        ctx.closePath();
+        ctx.fillStyle = wash;
+        ctx.fill();
+      }
       ctx.beginPath();
-      data.forEach((d, i) => {
-        const x = px(d.t);
-        const y = H - 6 - (d[key] / max) * (H - 22);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      });
+      data.forEach((d, i) => (i === 0 ? ctx.moveTo(...at(d)) : ctx.lineTo(...at(d))));
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
       ctx.stroke();
     };
     line('gold', maxGold, GOLD);
-    line('xp', maxXp, '#a06ae0');
+    line('xp', maxXp, XP);
     // the two captions sit side by side however wide the box gets
     ctx.font = FACE;
     ctx.textBaseline = 'top';
     ctx.fillStyle = GOLD;
-    ctx.fillText(`gold/h peak ${fmt(Math.round(maxGold))}`, 8, 4);
-    ctx.fillStyle = '#a06ae0';
-    const xp = `xp/h peak ${fmt(Math.round(maxXp))}`;
+    ctx.fillText(`${t('gold/h peak')} ${fmt(Math.round(maxGold))}`, 8, 4);
+    ctx.fillStyle = XP;
+    const xp = `${t('xp/h peak')} ${fmt(Math.round(maxXp))}`;
     ctx.fillText(xp, Math.max(W / 2, W - 8 - ctx.measureText(xp).width), 4);
   }
 
@@ -314,8 +354,8 @@
       rarity: RARITY_BY_NAME[key],
       tier: TIER_BY_NAME[key] ?? 0,
       rate: chase,
-      hint: `1 in ${chase.toLocaleString('en-US')} in the zone, 1 in ${base.toLocaleString('en-US')} anywhere${
-        DROP_PLACES[key] ? ` · ${DROP_PLACES[key].join(', ')}` : ''
+      hint: `${t('1 in')} ${chase.toLocaleString(locale())} ${t('in the zone')}, ${t('1 in')} ${base.toLocaleString(locale())} ${t('anywhere')}${
+        DROP_PLACES[key] ? ` · ${placeList(DROP_PLACES[key], ', ')}` : ''
       }`,
     };
   };
@@ -324,18 +364,16 @@
 
   // The satanic zone, not the room the player is standing in.
   //
-  // Where the player is standing is the one thing the game will not say. It
-  // names the room only in its own state packet, and since the August 2026
-  // patch that arrives about twenty times less often than it used to — 7.6
-  // packets per thousand against 163 — mostly while the map is open. Nothing
-  // else on the wire carries it: not the save's 131 fields, not the drop
-  // packets, not the market, not the chat. A list built on it sat for hours on
-  // a zone the player had left three acts ago.
+  // Where the player is standing is the one thing the game will not say. The
+  // room appears only in the game's own state packet — since the August 2026
+  // patch about twenty times rarer than it was, and mostly while the map is
+  // open — and nothing else on the wire carries it: not the save's fields, not
+  // the drop packets, not the market, not the chat. A list built on it sits for
+  // hours on a zone the player has left.
   //
-  // The satanic zone is the opposite: the server announces it by name, again
-  // and again, because every client has to agree on it. It is also the zone
-  // worth reading a drop list for, so this answers the question that can be
-  // answered exactly instead of guessing at the one that cannot.
+  // The satanic zone is the opposite: the server announces it by name, over and
+  // over, because every client has to agree on it. It is also the zone worth
+  // reading a drop list for.
   let szCode = $derived(zoneCode(snap?.satanic_zone?.zone));
   let here = $derived(szCode ? pick((c) => c === szCode) : []);
 
@@ -386,33 +424,39 @@
         class:held={snap?.paused}
         style:border-image-source={css('chip_dark')}
         onclick={() => invoke('set_paused', { paused: !snap?.paused }).catch(() => {})}
-        title="Stop the clock. The counters keep counting — what a pause changes is what they are divided by. Ctrl+Shift+P"
+        title={t("Stop the clock. The counters keep counting — what a pause changes is what they are divided by. Ctrl+Shift+P")}
       >
         <div class="value">
           {snap?.paused ? '' : ''}{snap ? dur(clock.secs + (snap.paused ? 0 : (nowTick - clock.at) / 1000)) : '0:00'}
           {#if snap?.paused}<img class="frost" src={art('frozen_icon')} alt="" />{/if}
         </div>
-        <div class="sub">{snap?.paused ? 'paused — click to carry on' : charSub}</div>
+        <div class="sub">
+          {snap?.finished
+            ? t('the run is over')
+            : snap?.paused
+              ? t('paused — click to carry on')
+              : charSub}
+        </div>
       </button>
       <div class="card" style:border-image-source={css('chip_dark')}>
-        <div class="label">Gold</div>
+        <div class="label">{t("Gold")}</div>
         <div class="value c-gold">{fmt(snap?.gold?.earned)}</div>
-        <div class="sub" title={snap?.carried_bank ? 'the balance the last run ended on — the game has not sent a new one yet' : 'bank balance as the game last reported it'}>
-          {fmt(snap?.gold?.per_hour)}/h · bank {fmt(snap?.gold?.total)}{snap?.carried_bank ? ' *' : ''}
+        <div class="sub" title={snap?.carried_bank ? t('the balance the last run ended on — the game has not sent a new one yet') : t('bank balance as the game last reported it')}>
+          {fmt(snap?.gold?.per_hour)}{t('/h')} · {t('bank')} {fmt(snap?.gold?.total)}{snap?.carried_bank ? ' *' : ''}
         </div>
       </div>
       <div class="card" style:border-image-source={css('chip_dark')}>
-        <div class="label">XP</div>
+        <div class="label">{t("XP")}</div>
         <div class="value c-xp">{fmt(snap?.xp?.earned)}</div>
-        <div class="sub" title="the big number is what this session earned; 'in level' is the game's own bar — the experience banked towards the next hero level">
-          {fmt(snap?.xp?.per_hour)}/h · in level {fmt(snap?.xp?.total)}
+        <div class="sub" title={t("the big number is what this session earned; 'in level' is the game's own bar — the experience banked towards the next hero level")}>
+          {fmt(snap?.xp?.per_hour)}{t('/h')} · {t('in level')} {fmt(snap?.xp?.total)}
         </div>
       </div>
       <div class="card" style:border-image-source={css('chip_dark')}>
-        <div class="label">Kills</div>
+        <div class="label">{t("Kills")}</div>
         <div class="value c-her">{fmt(snap?.kills?.earned)}</div>
-        <div class="sub" title={snap?.carried_totals ? 'the total the last run ended on — the game has not saved the character yet' : 'lifetime total as the game last saved it'}>
-          {fmt(snap?.kills?.per_hour)}/h · total {fmt(snap?.kills?.total)}{snap?.carried_totals ? ' *' : ''}
+        <div class="sub" title={snap?.carried_totals ? t('the total the last run ended on — the game has not saved the character yet') : t('lifetime total as the game last saved it')}>
+          {fmt(snap?.kills?.per_hour)}{t('/h')} · {t('total')} {fmt(snap?.kills?.total)}{snap?.carried_totals ? ' *' : ''}
         </div>
       </div>
     </div>
@@ -421,69 +465,90 @@
       <div class="lag" data-tauri-drag-region>{lag}</div>
     {/if}
 
+    <!-- Ending a run is a thing the player does, not a side effect of clearing
+         the counters. Reset files the run and the next second is already part
+         of the next one; this files it and then waits, so the walk to town and
+         the hour in the stash land in no run at all. -->
+    <div class="ends" data-tauri-drag-region>
+      {#if snap?.finished}
+        <button class="end open" onclick={() => invoke('start_run').catch(() => {})}>
+          {t('Start a new run')}
+        </button>
+        <span class="dim">{t('Nothing is counted until it does.')}</span>
+      {:else}
+        <button class="end" onclick={() => invoke('finish_run').catch(() => {})}>
+          {t('Finish the run')}
+        </button>
+        <span class="dim">{t('Files it in Runs and stops counting.')}</span>
+      {/if}
+    </div>
+
     <div class="cols">
       <!-- left: what dropped -->
       <div class="col">
         <div class="box" style:border-image-source={css('chip_dark')}>
-          <div class="box-head"><span class="accent">Loot</span><span class="right">this session</span></div>
+          <div class="box-head"><span class="accent">{t("Loot")}</span><span class="right">{t("this session")}</span></div>
           <div class="rows">
             <div class="row colhead">
               <span class="rowname"></span>
-              <span class="rowval">drops</span>
+              <span class="rowval">{t("drops")}</span>
               <!-- The game's own claim, not ours: it flags the drop as owed to
                    magic find and we only count what it flagged. -->
-              <span class="rowmf" title="Of those, the ones the game itself credited to Magic Find">mf</span>
-              <span class="rowrate">per hour</span>
+              <span class="rowmf" title={t("Of those, the ones the game itself credited to Magic Find")}>{t('mf')}</span>
+              <span class="rowrate">{t("per hour")}</span>
             </div>
             {#each RARITIES as name}
               {@const it = item(name)}
               <div class="row">
-                <span class="rowname {RARITY_CLASS[name]}">{name}</span>
+                <span class="rowname {RARITY_CLASS[name]}">{t(name)}</span>
                 <span class="rowval {RARITY_CLASS[name]}">{fmt(it.total)}</span>
-                <span class="rowmf c-blue" title="credited to Magic Find by the game">{it.mf ? fmt(it.mf) : '—'}</span>
+                <span class="rowmf c-blue" title={t("credited to Magic Find by the game")}>{it.mf ? fmt(it.mf) : '—'}</span>
                 <span class="dim rowrate">{fmt(it.per_hour)}/h</span>
               </div>
             {/each}
           </div>
-          <div class="subhead">Notable</div>
+          <div class="subhead">{t("Notable")}</div>
           <div class="tally">
             {#each snap?.notable ?? [] as n}
-              <div class="tallyrow"><span class="dim">{n.label}</span><b class="c-gold">{fmt(n.total)}</b></div>
+              <div class="tallyrow"><span class="dim">{t(nameOf(n.label))}</span><b class="c-gold">{fmt(n.total)}</b></div>
             {/each}
           </div>
 
-          <div class="subhead">Resources</div>
+          <div class="subhead">{t("Resources")}</div>
           <div class="tally">
-            {#each [['Keys', snap?.resources?.keys], ['Materials', snap?.resources?.materials], ['Socketables', snap?.resources?.socketables], ['Collectibles', snap?.resources?.collectibles]] as [label, value]}
-              <div class="tallyrow"><span class="dim">{label}</span><b>{fmt(value)}</b></div>
+            {#each RESOURCES as [kind, label]}
+              <div class="tallyrow"><span class="dim">{t(label)}</span><b>{fmt(snap?.resources?.[kind])}</b></div>
+              {#each (snap?.resource_items ?? []).filter((r) => r.kind === kind) as r (r.name)}
+                <div class="tallyrow named"><span class="dim">{t(nameOf(r.name))}</span><b>{fmt(r.total)}</b></div>
+              {/each}
             {/each}
           </div>
         </div>
 
         {#if bosses.length || chests.length || cleared.length}
           <div class="box" style:border-image-source={css('chip_dark')}>
-            <div class="box-head"><span class="accent">Killed &amp; opened</span><span class="right">this session</span></div>
+            <div class="box-head"><span class="accent">{t("Killed & opened")}</span><span class="right">{t("this session")}</span></div>
             {#if bosses.length}
-              <div class="subhead">Bosses</div>
+              <div class="subhead">{t("Bosses")}</div>
               <div class="tally">
                 {#each bosses as b}
-                  <div class="tallyrow"><span class="dim">{b.label}</span><b class="c-sat">{fmt(b.total)}</b></div>
+                  <div class="tallyrow"><span class="dim">{t(nameOf(b.label))}</span><b class="c-sat">{fmt(b.total)}</b></div>
                 {/each}
               </div>
             {/if}
             {#if chests.length}
-              <div class="subhead">Chests</div>
+              <div class="subhead">{t("Chests")}</div>
               <div class="tally">
                 {#each chests as c}
-                  <div class="tallyrow"><span class="dim">{c.label}</span><b class="c-gold">{fmt(c.total)}</b></div>
+                  <div class="tallyrow"><span class="dim">{t(nameOf(c.label))}</span><b class="c-gold">{fmt(c.total)}</b></div>
                 {/each}
               </div>
             {/if}
             {#if cleared.length}
-              <div class="subhead">Cleared</div>
+              <div class="subhead">{t("Cleared")}</div>
               <div class="tally">
                 {#each cleared as c}
-                  <div class="tallyrow"><span class="dim">{c.label}</span><b class="c-gold">{fmt(c.total)}</b></div>
+                  <div class="tallyrow"><span class="dim">{t(nameOf(c.label))}</span><b class="c-gold">{fmt(c.total)}</b></div>
                 {/each}
               </div>
             {/if}
@@ -492,19 +557,19 @@
 
     <div class="box grow" style:border-image-source={css('chip_dark')}>
       <div class="box-head">
-        <span class="accent">Item timeline</span>
+        <span class="accent">{t("Item timeline")}</span>
         {#if added}<span class="added">{added}</span>{/if}
-        <span class="right">{extra?.drops?.length ?? 0} drops</span>
+        <span class="right">{say('{n} drops', { n: extra?.drops?.length ?? 0 })}</span>
       </div>
-      <div class="list">
+      <div class="list" style:--rar-w="{rarWidth}px">
         {#each extra?.drops ?? [] as d}
           <div class="drop">
             <span class="ts">{time(d.ts_ms)}</span>
-            <span class="rar {rarityCls[dropRarity(d)] ?? ''}">{dropRarity(d)}</span>
-            <span class="name {rarityCls[dropRarity(d)] ?? ''}" title={dropLabel(d)}>{dropLabel(d)}</span>
+            <span class="rar {rarityCls[dropRarity(d)] ?? ''}">{t(dropRarity(d))}</span>
+            <span class="name {rarityCls[dropRarity(d)] ?? ''}" title={nameOf(dropLabel(d))}>{nameOf(dropLabel(d))}</span>
             <span class="dim tier">{tierLabel(d.tier)}</span>
-            <span class="c-blue mf">{d.mf ? 'MF' : ''}</span>
-            {#if d.announced}<span class="dim">server</span>{/if}
+            <span class="c-blue mf">{d.mf ? t('MF') : ''}</span>
+            {#if d.announced}<span class="dim">{t("server")}</span>{/if}
             <!-- Not for a relic, however well `dropLabel` names one. A relic
                  arrives on the wire with no name at all — every one of them is
                  Common, and three share a name with another item — so it is
@@ -513,7 +578,7 @@
                  would put "Jungle Vial" on a list that can never fire, which
                  reads as a broken filter rather than as the wrong door. -->
             {#if lists.length && dropLabel(d) && d.item_type !== RELIC}
-              <button class="tolist" title="Add to a sound list" onclick={() => (adding = adding === d.ts_ms ? null : d.ts_ms)}>+</button>
+              <button class="tolist" title={t("Add to a sound list")} onclick={() => (adding = adding === d.ts_ms ? null : d.ts_ms)}>+</button>
               {#if adding === d.ts_ms}
                 <!-- The timeline scrolls, and this opens inside it: on a drop
                      in the lower half the list was simply cut off by the
@@ -531,7 +596,7 @@
             {/if}
           </div>
         {:else}
-          <div class="dim empty">nothing yet — valuable drops land here</div>
+          <div class="dim empty">{t("nothing yet — valuable drops land here")}</div>
         {/each}
       </div>
     </div>
@@ -541,22 +606,20 @@
       <div class="col">
     <div class="box" style:border-image-source={css('chip_dark')}>
       <div class="box-head">
-        <span class="accent">Satanic Zone</span>
+        <span class="accent">{t("Satanic Zone")}</span>
         {#if zoneStale}
-          <span class="stale" title="the rotation has come round since the game last asked the server, and the game asks only when it saves">
-            unconfirmed
-          </span>
+          <span class="stale" title={t("the rotation has come round since the game last asked the server, and the game asks only when it saves")}> {t("unconfirmed")} </span>
         {/if}
-        <span class="right">resets in {zoneReset.in} · at {zoneReset.at}</span>
+        <span class="right">{t('resets in')} {zoneReset.in} · {t('at')} {zoneReset.at}</span>
       </div>
       {#if snap?.satanic_zone}
         <div class="szname" class:unsure={zoneStale}>
-          {zoneName(snap.satanic_zone.zone)}
-          {#if zoneStale}<span class="seen">last confirmed {zoneSeen}</span>{/if}
+          {satanicZoneName(snap.satanic_zone.zone, zoneName(snap.satanic_zone.zone))}
+          {#if zoneStale}<span class="seen">{t('last confirmed')} {zoneSeen}</span>{/if}
         </div>
         <div class="effects">
           <div class="effcol">
-            <div class="effhead pros">Pros</div>
+            <div class="effhead pros">{t("Pros")}</div>
             {#each buffs as b}
               <div class="buffrow">
                 <img src={b.icon} alt="" />
@@ -571,10 +634,10 @@
             <!-- said rather than left off: four fit and a rotation can carry
                  five, and a list that stops without saying so reads as the
                  whole of it -->
-            {#if moreBuffs}<div class="buffdesc more">+{moreBuffs} more</div>{/if}
+            {#if moreBuffs}<div class="buffdesc more">+{moreBuffs} {t('more')}</div>{/if}
           </div>
           <div class="effcol">
-            <div class="effhead cons">Cons</div>
+            <div class="effhead cons">{t("Cons")}</div>
             {#each debuffs as d}
               <div class="buffrow">
                 <div>
@@ -585,43 +648,41 @@
             {:else}
               <div class="buffdesc">—</div>
             {/each}
-            {#if moreDebuffs}<div class="buffdesc more">+{moreDebuffs} more</div>{/if}
+            {#if moreDebuffs}<div class="buffdesc more">+{moreDebuffs} {t('more')}</div>{/if}
           </div>
         </div>
       {:else}
-        <div class="sub center">no satanic zone data yet</div>
+        <div class="sub center">{t("no satanic zone data yet")}</div>
       {/if}
     </div>
 
     <div class="box" style:border-image-source={css('chip_dark')}>
       <div class="box-head">
-        <span class="accent">Drops in the Satanic Zone</span>
+        <span class="accent">{t("Drops in the Satanic Zone")}</span>
         {#if zoneStale}
-          <span class="stale" title="this list is for the zone last confirmed at {zoneSeen}; the rotation has come round since">
-            unconfirmed
-          </span>
+          <span class="stale" title="{t('this list is for the zone last confirmed at')} {zoneSeen}; {t('the rotation has come round since')}"> {t("unconfirmed")} </span>
         {/if}
         {#if szHere}
-          <span class="szhere" title="the game reports you as standing in it">you are here</span>
+          <span class="szhere" title={t("the game reports you as standing in it")}>{t("you are here")}</span>
         {/if}
-        <span class="right" title="the zone the server is running satanic this hour">
-          {#if snap?.satanic_zone}{zoneName(snap.satanic_zone.zone)}
-          {:else}waiting for the game{/if}
+        <span class="right" title={t("the zone the server is running satanic this hour")}>
+          {#if snap?.satanic_zone}{satanicZoneName(snap.satanic_zone.zone, zoneName(snap.satanic_zone.zone))}
+          {:else}{t('waiting for the game')}{/if}
         </span>
       </div>
       <div class="vitals">
-        <span class="dim">Level</span>
+        <span class="dim">{t("Level")}</span>
         <b>{snap?.character?.level || '—'}</b>
-        <span class="dim">Hero</span>
+        <span class="dim">{t("Hero")}</span>
         <b>{snap?.character?.herolevel || '—'}</b>
-        <span class="dim" title="the act the character save last stated — the game no longer names the zone often enough to show one">Act</span>
+        <span class="dim" title={t("the act the character save last stated — the game no longer names the zone often enough to show one")}>{t("Act")}</span>
         <b>{snap?.act || '—'}</b>
       </div>
       {#if here.length}
         <div class="tied">
           {#each here as it}
             <div class="drop">
-              <span class="name {rarityCls[it.rarity] ?? ''}" title={it.hint}>{it.name}</span>
+              <span class="name {rarityCls[it.rarity] ?? ''}" title={it.hint}>{nameOf(it.name)}</span>
               <span class="dim tier">{tierLabel(it.tier)}</span>
               <span class="dim odds" title={it.hint}>{odds(it.rate)}</span>
             </div>
@@ -630,14 +691,14 @@
       {:else}
         <div class="dim empty">
           {szCode
-            ? 'nothing rolls better there than it does anywhere else'
-            : 'the zone appears once the game announces it'}
+            ? t('nothing rolls better there than it does anywhere else')
+            : t('the zone appears once the game announces it')}
         </div>
       {/if}
     </div>
 
         <div class="box" style:border-image-source={css('chip_dark')}>
-          <div class="box-head"><span class="accent">Session rates</span></div>
+          <div class="box-head"><span class="accent">{t("Session rates")}</span></div>
           <canvas bind:this={canvas}></canvas>
         </div>
       </div>
@@ -672,7 +733,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
   }
@@ -791,7 +852,7 @@
     padding: 3px 8px;
     cursor: pointer;
   }
-  .picker button:hover { background: rgba(150, 37, 56, 0.55); color: var(--bone-13); }
+  .picker button:hover { background: rgba(var(--pick-rgb), 0.55); color: var(--bone-13); }
 
   .body {
     flex: 1 1 auto;
@@ -913,8 +974,31 @@
     padding: 2px 2px 2px 0;
     border-bottom: 1px solid rgba(58, 43, 43, 0.7);
   }
+  /* one resource under the count it belongs to */
+  .tallyrow.named { padding-left: 12px; border-bottom-color: rgba(58, 43, 43, 0.35); }
+  .tallyrow.named span, .tallyrow.named b { font-size: 10px; opacity: 0.78; }
   .tallyrow span { font-size: 11px; }
   .tallyrow b { font-size: 12px; color: var(--bone-6); }
+
+  .ends {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 2px 6px;
+  }
+  .ends .dim { font-size: 10px; }
+  .end {
+    padding: 3px 10px;
+    color: var(--bone-6);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(58, 43, 43, 0.9);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .end:hover { color: var(--bone-8); border-color: var(--bone-6); }
+  .end.open { color: var(--gold-2); border-color: rgba(120, 96, 40, 0.9); }
 
   .box-head {
     flex: none;
@@ -1003,7 +1087,9 @@
     flex: none;
   }
   .ts { color: var(--edge-6); font-size: 11px; width: 62px; flex: none; }
-  .rar { width: 54px; flex: none; font-size: 11px; }
+  /* Fixed, so the names beside it line up — but how wide it has to be is a
+     fact about the language, not about English. See `rarWidth`. */
+  .rar { width: var(--rar-w, 54px); flex: none; font-size: 11px; }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* fixed, right-aligned trailing columns — with an auto-width chance the
      grade drifted a few pixels on every row */

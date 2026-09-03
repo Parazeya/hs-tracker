@@ -1,10 +1,11 @@
 // One way in for everything the windows ask of the backend.
 //
-// There used to be two sides to this: the app's own windows, where Tauri is
-// there and every command works, and a page served to OBS as a Browser Source,
+// One implementation, not two. There were two sides to it: the app's own
+// windows, where Tauri is present and every command works, and a page served to
+// OBS as a Browser Source,
 // where none of it exists. The served page is gone — it went with the little
 // HTTP server that fed it — so what is left is the one door, and the guards
-// that used to choose between two.
+// which is why this no longer chooses between two.
 //
 // The guards stay. `native` is what tells a Tauri window from anything else,
 // and the panels are drawn by a webview either way: a component that calls a

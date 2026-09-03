@@ -1,4 +1,5 @@
 <script>
+  import { t } from './say.svelte.js';
   import { invoke } from './bridge.js';
   import { css } from './skin.svelte.js';
 
@@ -42,7 +43,7 @@
     <input
       class="field"
       style:border-image-source={css('chip_dark')}
-      placeholder="add item…"
+      placeholder={t("add item…")}
       bind:value={draft}
       onkeydown={(e) => e.key === 'Enter' && add()}
     />
@@ -51,20 +52,20 @@
       style:--btn={css('button')}
       style:--btn-hover={css('button_hover')}
       style:--btn-down={css('button_down')}
-      onclick={add}>Add</button
+      onclick={add}>{t("Add")}</button
     >
   </div>
 
   <div class="list">
     {#each items as it, i}
       <div class="row" style:border-image-source={css('chip_dark')}>
-        <button class="text" class:copied={copied === i} onclick={() => copy(i)} title="Click to copy">
-          {copied === i ? 'copied!' : it}
+        <button class="text" class:copied={copied === i} onclick={() => copy(i)} title={t("Click to copy")}>
+          {copied === i ? t('copied!') : it}
         </button>
-        <button class="del" onclick={() => remove(i)} title="Remove" aria-label="remove">×</button>
+        <button class="del" onclick={() => remove(i)} title={t("Remove")} aria-label={t("remove")}>×</button>
       </div>
     {:else}
-      <div class="empty">list is empty — add what you need to buy;<br />click an entry to copy it</div>
+      <div class="empty">{t("list is empty — add what you need to buy;")}<br />{t("click an entry to copy it")}</div>
     {/each}
   </div>
 </div>
@@ -96,7 +97,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
   }
@@ -131,8 +132,12 @@
     justify-content: center;
     line-height: 1;
     height: 28px;
-    width: 60px;
+    /* 60px is the sprite's own width and what "Add" needs; a language whose
+       word is longer gets the room rather than wrapping it onto two lines —
+       the art is a nine-slice and stretches. */
+    min-width: 60px;
     flex: none;
+    white-space: nowrap;
     font: inherit;
     font-size: 12px;
     color: var(--bone-12);
@@ -142,7 +147,7 @@
     image-rendering: pixelated;
     border: none;
     cursor: pointer;
-    padding: 0 0 2px;
+    padding: 0 10px 2px;
   }
   .btn:hover { background-image: var(--btn-hover); }
   .btn:active { background-image: var(--btn-down); }

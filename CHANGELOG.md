@@ -2,12 +2,110 @@
 
 Two numbering schemes live here, because this is a fork.
 
-A plain `1.0.6` is a release of the upstream project, and its entries are
-Parazeya's; `1.0.6-tc.1` is this fork's first release built on top of that one,
-and its entries are ours. The suffix counts up on its own — `1.0.6-tc.2` is the
-next set of changes here against the same upstream — and resets when upstream
-moves. It is what keeps the two projects' tags and installers from colliding,
-which they did on the day both reached 1.0.6.
+A plain `1.1.2` is a release of the upstream project, and its entries are
+Parazeya's; `1.1.2-tc.1` is this fork's first release built on top of that one,
+and its entries are ours. The suffix counts up on its own — `1.1.2-tc.2` would
+be the next set of changes here against the same upstream — and resets when
+upstream moves. It is what keeps the two projects' tags and installers from
+colliding, which they did on the day both reached 1.0.6.
+
+## 1.1.2-tc.1 — 2026-09-03
+
+Upstream's 1.1.0, 1.1.1 and 1.1.2 are below and their entries are Parazeya's.
+What follows is what taking them changed here.
+
+### Added
+
+- Five themes instead of three. Upstream shipped a flat skin of its own in
+  1.1.0 — Plain dark and Plain light — while this fork already had Modern, and
+  both are kept: the game's art, Ebontharn's colours, and three that take the
+  art off. Neither flat skin was folded into the other, because they reach the
+  same look by opposite means — Modern names no file at all and modern.css
+  draws the chrome, plain answers `none` for it and plain.css draws — and their
+  stylesheets cannot collide, one being scoped under `data-theme='modern'` and
+  the other under `data-skin='plain'`.
+- Modern is named through the translation layer with the rest of Settings, so a
+  language file can rename it; until one does it stays English, as anything
+  untranslated does.
+
+### Fixed
+
+- A sprite asked for in a `style:` goes through `css()` everywhere now, rather
+  than being interpolated into a `url(...)` by hand. Under Modern there is no
+  file to name, and the second way wrote `url(null)` — an invalid value the
+  webview drops, leaving whatever the stylesheet had said before it. It also
+  stops the plain skins asking the webview for a file named "none" on every
+  panel they draw, which is what `url(none)` is.
+- A run's **Copy card** keeps its guard for a skin with no coin sprite. Upstream
+  rewrote that function for the new PNG path and the guard is Modern's alone
+  now — plain has a coin, because it falls back to the game's own.
+
+## 1.1.2 — 2026-09-02
+
+### Added
+
+- Resources are counted one by one, under the four totals.
+- A run can be ended by hand, and the next one started when you say so.
+- A run says how far it stands from the middle of your others on the same
+  difficulty.
+
+### Fixed
+
+- A local game is named as one rather than reported as a fault.
+- None of the game's connections could be seen with IPv6 switched off.
+- The log names the game's process and how many connections it holds.
+- A slow start is no longer written down as a dead one.
+
+## 1.1.1 — 2026-09-01
+
+### Fixed
+
+- A white base no longer counts as an SS find: the packet grades a nameless
+  item at the top, and only an Odyssey run refused the claim.
+- The drop list keeps to the overlay's edge when it hangs above it, rather than
+  floating its own height clear of it.
+
+## 1.1.0 — 2026-09-01
+
+### Added
+
+- Ten languages besides English: German, Spanish, Finnish, French, Polish,
+  Portuguese, Russian, Chinese, Japanese and Korean. Pick one in Settings.
+- The tray menu, the file dialogs, the Discord card and the run card speak it
+  too. Anything a language does not name stays English.
+- Two skins that do not look like the game: Plain dark and Plain light.
+- A Full copy button on a run, drawing every find as a ledger — best grade
+  first, with the game's own odds beside each name.
+- Right-click an item on the Items tab to put it on the shopping list ([#10]),
+  under the name on the screen and never twice.
+- A counter for Prophet's Wisdom, beside Satanic Dice.
+- A run keeps 120 of its finds rather than 40. Runs already saved keep theirs.
+
+### Changed
+
+- A copied run card travels as a PNG rather than as raw pixels.
+
+### Removed
+
+- Where it happened, from the run card.
+- The Satanic Key counter
+
+### Fixed
+
+- Experience read low for anyone levelling often: a hero level-up threw the
+  crossing away.
+- A quest reward was credited at nearly seven times its value.
+- The panel came out squished again ([#3]).
+- On a client that is not English, the rarity, the grade and the chime fell back
+  to whatever the packet claimed.
+- Splitting a stack counted as a find.
+- A total saturates rather than overflowing, and an experience figure too large
+  to be a guild share is refused.
+- A counter name typed with a stray space in settings.json counts again.
+- An imported settings profile is brought up to date on the way in.
+
+[#3]: https://github.com/Parazeya/hs-tracker/issues/3
+[#10]: https://github.com/Parazeya/hs-tracker/issues/10
 
 ## 1.0.6-tc.2 — 2026-09-01
 

@@ -1,4 +1,5 @@
 <script>
+  import { locale, say, t } from './say.svelte.js';
   import { appWindow, invoke, recall, remember } from './bridge.js';
   import { art, css } from './skin.svelte.js';
   import { listen } from './bridge.js';
@@ -11,6 +12,11 @@
   import Settings from './Settings.svelte';
   import About from './About.svelte';
   import Codex from './Codex.svelte';
+
+  // Steam in a sandbox is a Linux problem and naming it on Windows sends a
+  // player looking for something that cannot be there.
+  const onLinux =
+    typeof document !== 'undefined' && document.documentElement.dataset.os === 'linux';
 
   const DIRECTIONS = {
     n: 'North',
@@ -105,39 +111,65 @@
     if (status === 'npcap-missing')
       return {
         bad: true,
-        title: 'Npcap is not installed',
+        title: t('Npcap is not installed'),
         detail:
-          'It is the driver that lets the app read the game’s traffic. Without it nothing can be counted. Get it from npcap.com — its defaults are right.',
+          t('It is the driver that lets the app read the game’s traffic. Without it nothing can be counted. Get it from npcap.com — its defaults are right.'),
       };
     if (status === 'no-access')
       return {
         bad: true,
-        title: 'Npcap is installed, but this app may not use it',
+        title: t('Npcap is installed, but this app may not use it'),
         detail:
-          'Npcap has an option called “Restrict Npcap driver’s access to Administrators only”. With it on, only an elevated program can read traffic. Either run HS Tracker as administrator, or reinstall Npcap from npcap.com with that box unticked.',
+          t('Npcap has an option called “Restrict Npcap driver’s access to Administrators only”. With it on, only an elevated program can read traffic. Either run HS Tracker as administrator, or reinstall Npcap from npcap.com with that box unticked.'),
       };
     if (status === 'no-capture' && appimage)
       return {
         bad: true,
-        title: 'An AppImage cannot be given the capture right',
+        title: t('An AppImage cannot be given the capture right'),
         detail:
-          'There is nothing to grant it to. Linux drops capabilities at every exec, so a right given to the .AppImage file is gone before the app starts; given to the binary inside instead, the loader stops trusting the library path the bundle needs and the app will not start at all. Install the .deb or the .rpm — either grants the right during installation. Running this AppImage with sudo also works, but then settings and runs are written to root’s home rather than yours.',
+          t('There is nothing to grant it to. Linux drops capabilities at every exec, so a right given to the .AppImage file is gone before the app starts; given to the binary inside instead, the loader stops trusting the library path the bundle needs and the app will not start at all. Install the .deb or the .rpm — either grants the right during installation. Running this AppImage with sudo also works, but then settings and runs are written to root’s home rather than yours.'),
       };
     if (status === 'no-capture')
       return {
         bad: true,
-        title: 'Not allowed to read network traffic',
+        title: t('Not allowed to read network traffic'),
         detail:
-          'The binary needs the capture right. A packaged install is meant to grant it — if this is a packaged install, the grant did not take. It can be given by hand:',
+          t('The binary needs the capture right. A packaged install is meant to grant it — if this is a packaged install, the grant did not take. It can be given by hand:'),
         fix: `sudo setcap cap_net_raw=ep ${binary || '<the hs-tracker binary>'}`,
       };
     if (status === 'no-interface')
-      return { bad: true, title: 'No network interface to listen on', detail: 'No adapter could be opened for capture.' };
+      return { bad: true, title: t('No network interface to listen on'), detail: t('No adapter could be opened for capture.') };
     if (status === 'waiting-for-game')
-      return { bad: false, title: 'Waiting for Hero Siege', detail: 'Counting starts a moment after the game is running.' };
+      return { bad: false, title: t('Waiting for Hero Siege'), detail: t('Counting starts a moment after the game is running.') };
     if (status.startsWith('capturing')) {
-      const [, iface, hosts, , packets, deaf] = status.split('|');
+      const [, iface, hosts, , packets, deaf, local] = status.split('|');
 
+      // The game is up, the adapters are open, and the game holds no connection
+      // to anywhere but this machine.
+      //
+      // Local Mode is exactly this and is the first thing to say: it plays
+      // without a server, everything it would otherwise send stays inside the
+      // process, and there is nothing on the wire for any capture to read. Not
+      // a fault, and no setting would change it — which is why this line is
+      // not red. The old wording called it a fault and named a Flatpak first,
+      // and a player in a local game was told to go hunting for a VPN.
+      if (Number(hosts) === 0 && snap.session_secs > 60)
+        return {
+          bad: false,
+          title: t('Nothing to count in a local game'),
+          detail:
+            Number(local) > 0
+              ? t(
+                  'The game is connected to this machine and to nowhere else, which is what Local Mode looks like from here. Gold, experience and finds are read out of what the game tells its server, and a local game tells one nothing. Join an online server and counting starts on its own.',
+                )
+              : say(
+                  'Capturing on {iface}. The game is running and holds no connection at all — Local Mode looks exactly like this, and there is nothing on the wire to read. If you are playing online, a VPN or a second network adapter can carry its traffic somewhere we are not listening.',
+                  { iface },
+                ) +
+                (onLinux
+                  ? ' ' + t('A Flatpak or Snap install of Steam hides the game from us as well.')
+                  : ''),
+        };
       // Ninety seconds with the game up and not one message decoded. The
       // backend decides when that is true, because it is the only side that
       // knows when each capture started; `deaf` is 1 while only the game's own
@@ -148,34 +180,33 @@
       if (deaf === '3')
         return {
           bad: false,
-          title: 'Waiting for the game to join a server',
+          title: t('Waiting for the game to join a server'),
           detail:
-            `Its traffic is being read on ${iface}, and all of it so far is encrypted — which is what a character screen or a menu looks like from here. Counting starts when the game connects to a game server.`,
+            say(
+              'Its traffic is being read on {iface}, and all of it so far is encrypted — which is what a character screen or a menu looks like from here. Counting starts when the game connects to a game server.',
+              { iface },
+            ),
         };
       if (deaf === '1')
         return {
           bad: true,
-          title: 'Nothing has been counted for 90 seconds',
+          title: t('Nothing has been counted for 90 seconds'),
           detail:
-            `Capturing on ${iface}: ${Number(packets).toLocaleString('en-GB')} packets read, none of them a game message. If you use a route optimiser — ExitLag and its kind — it redirects the game's packets, so the connections Windows reports are not the ones on the wire. Reading every connection is the way past that.`,
-          act: { label: 'Read every connection', on: true },
+            say(
+              "Capturing on {iface}: {n} packets read, none of them a game message. If you use a route optimiser — ExitLag and its kind — it redirects the game's packets, so the connections Windows reports are not the ones on the wire. Reading every connection is the way past that.",
+              { iface, n: Number(packets).toLocaleString(locale()) },
+            ),
+          act: { label: t('Read every connection'), on: true },
         };
       if (deaf === '2')
         return {
           bad: true,
-          title: 'Nothing has been counted for 90 seconds',
+          title: t('Nothing has been counted for 90 seconds'),
           detail:
-            `Every connection on this machine is already being read — ${Number(packets).toLocaleString('en-GB')} packets on ${iface} — and none of it decoded as Hero Siege. Whatever carries the game's traffic here is not something this app can read from outside. The packet log in Settings and hs-tracker.log are what to send.`,
-        };
-      // the game is up and adapters are open, but nothing of the game's own has
-      // been seen — the usual causes are a sandbox around the game or a tunnel
-      // its traffic takes that we are not on
-      if (Number(hosts) === 0 && snap.session_secs > 60)
-        return {
-          bad: true,
-          title: 'Listening, but the game’s traffic is not reaching us',
-          detail:
-            `Capturing on ${iface}. The game is running, yet none of its connections can be seen. A Flatpak or Snap install of Steam hides the game from us; a VPN or a second network adapter can carry its traffic somewhere we are not listening.`,
+            say(
+              "Every connection on this machine is already being read — {n} packets on {iface} — and none of it decoded as Hero Siege. Whatever carries the game's traffic here is not something this app can read from outside. The packet log in Settings and hs-tracker.log are what to send.",
+              { n: Number(packets).toLocaleString(locale()), iface },
+            ),
         };
       // The game's connections are known and not one frame of them is
       // arriving. This is the state that gets reported as "nothing works and
@@ -184,18 +215,29 @@
       if (Number(hosts) > 0 && Number(packets) === 0 && snap.session_secs > 90)
         return {
           bad: true,
-          title: 'The game’s connections are known, but nothing is arriving',
+          title: t('The game’s connections are known, but nothing is arriving'),
           detail:
-            `Capturing on ${iface}, and not one packet has come past the filter. The game’s traffic is taking a route this adapter cannot see — a VPN or split tunnel is the usual reason, and a second network adapter the next. Turning the VPN off for a minute is the quickest way to tell.`,
+            say(
+              'Capturing on {iface}, and not one packet has come past the filter. The game’s traffic is taking a route this adapter cannot see — a VPN or split tunnel is the usual reason, and a second network adapter the next. Turning the VPN off for a minute is the quickest way to tell.',
+              { iface },
+            ),
         };
       // hosts found, frames arriving, but the game has never once reported the
       // character
       if (snap.save_age_secs == null && snap.bank_age_secs == null && snap.session_secs > 240)
         return {
           bad: false,
-          title: 'Connected, still nothing from the game',
+          title: t('Connected, still nothing from the game'),
           detail:
-            `Its traffic is being read${Number(packets) > 0 ? ` — ${Number(packets).toLocaleString('en-GB')} packets so far` : ''}, but no character save has arrived yet. Gold, experience and kills travel only when the game saves; if this stays after a few minutes of fighting, the packet log in Settings is worth switching on.`,
+            say(
+              'Its traffic is being read{sofar}, but no character save has arrived yet. Gold, experience and kills travel only when the game saves; if this stays after a few minutes of fighting, the packet log in Settings is worth switching on.',
+              {
+                sofar:
+                  Number(packets) > 0
+                    ? say(' — {n} packets so far', { n: Number(packets).toLocaleString(locale()) })
+                    : '',
+              },
+            ),
         };
     }
     return null;
@@ -215,14 +257,14 @@
   <button
     class="min"
     onclick={() => appWindow().minimize()}
-    title="Minimize to the taskbar"
-    aria-label="minimize"
+    title={t("Minimize to the taskbar")}
+    aria-label={t("minimize")}
   >
     <img src={art('minimize')} alt="" class="min-normal" />
     <img src={art('minimize_hover')} alt="" class="min-hover" />
   </button>
 
-  <button class="close" onclick={() => invoke('hide_dashboard')} title="Close to tray" aria-label="close">
+  <button class="close" onclick={() => invoke('hide_dashboard')} title={t("Close to tray")} aria-label={t("close")}>
     <img src={art('close')} alt="" class="close-normal" />
     <img src={art('close_hover')} alt="" class="close-hover" />
   </button>
@@ -234,7 +276,7 @@
   <div class="body">
     <nav class="nav" data-tauri-drag-region>
       {#each SECTIONS as s}
-        <button class="tab" class:on={s.id === section} onclick={() => (section = s.id)}>{s.label}</button>
+        <button class="tab" class:on={s.id === section} onclick={() => (section = s.id)}>{t(s.label)}</button>
       {/each}
 
       <div class="spacer"></div>
@@ -243,10 +285,8 @@
         <button
           class="btn"
           onclick={() => invoke('compact_mode')}
-          title="Shrink to the overlay that sits on top of the game"
-        >
-          Compact mode
-        </button>
+          title={t("Shrink to the overlay that sits on top of the game")}
+        > {t("Compact mode")} </button>
       {/if}
     </nav>
 
@@ -300,9 +340,9 @@
           <Current />
           {#snippet failed(error, reset)}
             <div class="broke">
-              <div class="tt">This panel stopped working.</div>
+              <div class="tt">{t("This panel stopped working.")}</div>
               <div class="td">{error?.message ?? error}</div>
-              <button onclick={reset}>Try again</button>
+              <button onclick={reset}>{t("Try again")}</button>
             </div>
           {/snippet}
         </svelte:boundary>
@@ -371,7 +411,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
   }
@@ -553,8 +593,8 @@
     margin: 10px;
     padding: 8px 10px;
     border-left: 3px solid #ca1717;
-    background: rgba(150, 37, 56, 0.18);
-    font-family: 'CookieRun Bold', sans-serif;
+    background: rgba(var(--pick-rgb), 0.18);
+    font-family: var(--face);
   }
   .broke .tt { font-size: 13px; color: #ff7a7a; }
   .broke .td {
@@ -580,11 +620,11 @@
     padding: 6px 10px;
     border-left: 3px solid #8a7a4a;
     background: rgba(120, 96, 40, 0.16);
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
   }
   .trouble.bad {
     border-left-color: #ca1717;
-    background: rgba(150, 37, 56, 0.18);
+    background: rgba(var(--pick-rgb), 0.18);
   }
   .trouble .tt { font-size: 13px; color: var(--gold-2); }
   .trouble.bad .tt { color: #ff7a7a; }

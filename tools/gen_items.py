@@ -39,13 +39,9 @@ RENAMED = {"Satanic Set": "Set"}
 # gates the drop rates, zones and places below — those are for chase items, and
 # emitting them for every white base would be noise.
 #
-# It does NOT gate the rarity itself, and that distinction is the whole point of
-# splitting it out. The name table used to hold only these five, so any other
-# item — a relic, a rune, a potion — had no rarity there and `resolve_rarity`
-# fell back to the packet, whose rarity field is documented in parser.rs as
-# taking two values over 6,617 rolls, one of which reads as "Angelic". A Common
-# relic was announced as a Heroic one, and a pickup could be filed under a
-# rarity the item never had.
+# It does NOT gate the rarity itself. Every item needs one, or `resolve_rarity`
+# falls back to the packet for relics, runes and potions — and the packet's
+# rarity field reads as "Angelic" for nearly everything.
 NOTABLE = {"Satanic", "Set", "Heroic", "Angelic", "Unholy"}
 
 # The ordinary bases are left out of the tables entirely, and that is what keeps
@@ -69,11 +65,9 @@ NOTABLE = {"Satanic", "Set", "Heroic", "Angelic", "Unholy"}
 # nameless by the parser, never announced, and never counted by rarity.
 #
 # It is NOT "drop everything the game calls Common". Keys, gems, runes and
-# materials are Common too, and the tracker reads all of them BY NAME — the dull
-# keys are filtered by name, the notable list (Angelic Key, Satanic Dice, the
-# rune grades) is matched by name, and a resource's grade comes from the name
-# table. Dropping those broke all three when it was tried, which is how this
-# rule came to be written the narrow way instead.
+# materials are Common too, and the tracker reads all of them BY NAME: the dull
+# keys are filtered by name, the notable groups are matched by name, and a
+# resource's grade comes from the name table.
 #
 # So the rule is the smallest one that removes the ambiguity: a base is left out
 # only when a NAMED item already claims its triple. That drops exactly the 412
@@ -100,261 +94,74 @@ TIERS = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5, "SS": 6}
 # that are not in the file, and the codex, orb and vault affixes are named
 # after their codex rather than their effect. Those reach items.js as their raw
 # id and the page shows the id, which is the honest thing to show — a label
-# invented in this file would read like the game's own and not be.
-STAT_KEYS = {
-    "additive_arcane_dmg_flat": "stat_magic_damage",
-    "additive_cold_dmg_flat": "stat_cold_damage",
-    "additive_fire_dmg_flat": "stat_fire_damage",
-    "additive_lightning_dmg_flat": "stat_lightning_damage",
-    "additive_physical_dmg_flat": "stat_physical_damage",
-    "additive_poison_dmg_flat": "stat_poison_damage",
-    "ailment_critical_strike_chance_percent": "stat_ailment_crit_chance",
-    "ailment_critical_strike_dmg_percent": "stat_ailment_crit_damage",
-    "ailment_damage_percent": "stat_increased_ailment_damage",
-    "all_attributes_flat": "stat_all_stats",
-    "all_attributes_percent": "stat_all_stats_p",
-    "all_resist_percent": "stat_all_resistance",
-    "all_skills_flat": "stat_all_skills",
-    "all_skills_flat_class": "stat_all_skills",
-    "aoe_damage_percent": "stat_aoe_damage",
-    "aoe_size_percent": "stat_aoe_size",
-    "aoe_skills_flat": "stat_aoe_skills",
-    "arcane_resist_percent": "stat_magic_resistance",
-    "arcane_skill_dmg_flat": "stat_spell_magic_damage",
-    "arcane_skill_dmg_percent": "stat_magic_damage_p",
-    "arcane_skills_flat": "stat_magic_skills",
-    "armor_based_on_level_flat": "stat_armor_per_level",
-    "armor_converted_to_attack_dmg_percent": "stat_armor_attack_damage",
-    "armor_converted_to_magic_skill_dmg_percent": "stat_armor_skill_damage",
-    "armor_flat": "stat_armor",
-    "armor_increase_percent": "stat_armor_p",
-    "attack_dmg_base": "stat_base_damage",
-    "attack_dmg_based_on_level_flat": "stat_damage_per_level",
-    "attack_dmg_percent": "stat_physical_damage_p",
-    "attack_range_percent": "stat_attack_range",
-    "attack_rating_based_on_level_flat": "stat_attack_rating_per_level",
-    "attack_rating_flat": "stat_attack_rating",
-    "attack_rating_percent": "stat_attack_rating_p",
-    "attack_speed_percent": "stat_attack_speed_p",
-    "attacks_fire_additional_projectiles_flat": "stat_extra_projectile_02",
-    "attacks_per_second_base": "attacks_per_second",
-    "bleed_damage_percent": "stat_increased_bleed_damage",
-    "block_chance_base": "stat_block_chance",
-    "block_chance_percent": "stat_block_rating",
-    "buffing_aura_effectiveness_increased_percent": "stat_buff_aura_effectiveness",
-    "buffing_aura_range_increased_percent": "stat_buff_aura_range",
-    "burning_damage_percent": "stat_increased_burning_damage",
-    "cannot_be_frozen_none": "stat_cannot_be_frozen",
-    "chaining_projectile": "stat_chaining_projectile",
-    "chance_to_replenish_life_when_blocking_percent": "stat_life_after_block_chance",
-    "cold_dmg_absorbed_percent": "stat_cold_absorb",
-    "cold_resist_percent": "stat_cold_resistance",
-    "cold_skill_dmg_flat": "stat_spell_cold_damage",
-    "cold_skill_dmg_percent": "stat_cold_damage_p",
-    "cold_skills_flat": "stat_cold_skills",
-    "cooldown_recovery_percent": "stat_cooldown_reduction",
-    "critical_strike_chance_percent": "stat_critical_rate",
-    "critical_strike_dmg_percent": "stat_critical_damage",
-    "crushing_blow_chance_percent": "stat_crushing_blow",
-    "crushing_blow_stacks_flat": "stat_crushing_blow_stack",
-    "damage_from_resist": "stat_all_resistances_damage",
-    "damage_redirected_to_octa": "stat_octaReflect",
-    "deadly_blow_chance_percent": "stat_deadly_blow",
-    "deadly_blow_effect": "stat_deadly_blow_p",
-    "decreased_merchant_prices_percent": "stat_merchant_prices",
-    "defense_base": "stat_defense",
-    "defense_based_on_level_flat": "stat_defense_per_level",
-    "defense_percent": "stat_defense_p",
-    "defense_vs_missiles_percent": "stat_defense_vs_missile",
-    "dexterity_based_on_level_flat": "stat_dexterity_per_level",
-    "dexterity_flat": "stat_dexterity",
-    "dexterity_increase_percent": "stat_dexterity_p",
-    "dmg_returned_to_attacker_percent": "stat_damage_return",
-    "dmg_taken_to_life_percent": "stat_damage_taken_life",
-    "dmg_taken_to_mana_percent": "stat_damage_taken_mana",
-    "double_jump": "stat_double_jump",
-    "effectiveness_of_non_buff_proc_relics_percent": "stat_relic_proc_effectiveness",
-    "enemy_all_resist_percent": "stat_ignore_all_resist",
-    "enemy_arcane_resist_percent": "stat_ignore_magic_resist",
-    "enemy_cold_resist_percent": "stat_ignore_cold_resist",
-    "enemy_fire_resist_percent": "stat_ignore_fire_resist",
-    "enemy_lightning_resist_percent": "stat_ignore_lightning_resist",
-    "enemy_poison_resist_percent": "stat_ignore_poison_resist",
-    "energy_based_on_level_flat": "stat_energy_per_level",
-    "energy_converted_to_cold_skill_dmg_percent": "stat_energy_cold",
-    "energy_converted_to_lightning_skill_dmg_percent": "stat_energy_lightning",
-    "energy_converted_to_magic_skill_dmg_percent": "stat_energy_skill_damage",
-    "energy_flat": "stat_energy",
-    "energy_increase_percent": "stat_energy_p",
-    "enhanced_defense_based_on_level_percent": "stat_enhanced_defense_per_level",
-    "enhanced_defense_percent": "stat_enhanced_defense",
-    "enhanced_dmg_based_on_level_percent": "stat_enhanced_damage_per_level",
-    "enhanced_dmg_percent": "stat_enhanced_damage",
-    "explosion_area_of_effect_percent": "stat_explosion_aoe",
-    "explosion_damage_percent": "stat_explosion_damage",
-    "explosion_skills_flat": "stat_explosion_skills",
-    "extra_arcane_dmg_to_shadowburn_percent": "stat_extraArcaneSpellburn",
-    "extra_cold_dmg_to_frostbitten_percent": "stat_extraColdFrostburn",
-    "extra_dmg_to_bleeding_percent": "stat_extraDamageBleeding",
-    "extra_dmg_to_burning_percent": "stat_extraDamageBurning",
-    "extra_dmg_to_deep_frozen_percent": "stat_extraDamageFrozen",
-    "extra_dmg_to_monsters_afflicted_with_ailments_percent": "stat_extraDamageAilments",
-    "extra_dmg_to_poisoned_percent": "stat_extraDamagePoisoned",
-    "extra_dmg_to_shadowburn_percent": "stat_extraDamageSpellBurn",
-    "extra_dmg_to_stasis_percent": "stat_extraDamageStasis",
-    "extra_dmg_to_stunned_percent": "stat_extraDamageStunned",
-    "extra_fire_dmg_to_burning_percent": "stat_extraFireBurning",
-    "extra_gold_from_kills_percent": "stat_extra_gold",
-    "extra_lightning_dmg_to_stasis_percent": "stat_extraLightningStasis",
-    "extra_physical_dmg_to_bleeding_percent": "stat_extraPhysicalBleed",
-    "extra_poison_dmg_to_poisoned_percent": "stat_extraPoisonPoisoned",
-    "faster_cast_rate_percent": "stat_faster_cast_rate",
-    "faster_cast_rate_percent_converted_to_movement_speed_percent": "stat_fcr_movement_speed",
-    "faster_hit_recovery_percent": "stat_faster_hit_recovery",
-    "fire_dmg_absorbed_percent": "stat_fire_absorb",
-    "fire_resist_percent": "stat_fire_resistance",
-    "fire_skill_dmg_flat": "stat_spell_fire_damage",
-    "fire_skill_dmg_percent": "stat_fire_damage_p",
-    "fire_skills_flat": "stat_fire_skills",
-    "follower_relic_attack_speed_percent": "stat_relic_follower_attack_speed",
-    "follower_relic_damage_flat": "stat_relic_follower_damage_f",
-    "follower_relic_damage_percent": "stat_relic_follower_damage_p",
-    "follower_relic_projectiles_flat": "stat_relic_follower_projectiles",
-    "forking_projectiles": "stat_forking_projectile",
-    "frostbite_damage_percent": "stat_increased_frost_bite_damage",
-    "guardian_additional_attack_percent": "stat_guardian_burst",
-    "guardian_attack_range_percent": "stat_guardian_attack_range",
-    "guardian_attack_speed_percent": "stat_guardian_attack_speed",
-    "guardian_damage_percent": "stat_guardian_damage",
-    "guardian_duration_percent": "stat_guardian_duration",
-    "half_freeze_duration_none": "stat_half_freeze_duration",
-    "increased_experience_gain_below_100_percent": "stat_exp_gain_below",
-    "increased_experience_gain_percent": "stat_exp_gain",
-    "intelligence_based_on_level_flat": "stat_intelligence_per_level",
-    "intelligence_converted_to_arcane_skill_dmg_percent": "stat_intelligence_arcane",
-    "intelligence_converted_to_cold_skill_dmg_percent": "stat_intelligence_cold",
-    "intelligence_converted_to_fire_skill_dmg_percent": "stat_intelligence_fire",
-    "intelligence_converted_to_lightning_skill_dmg_percent": "stat_intelligence_lightning",
-    "intelligence_converted_to_magic_skill_dmg_percent": "stat_intelligence_skill_damage",
-    "intelligence_flat": "stat_intelligence",
-    "intelligence_increase_percent": "stat_intelligence_p",
-    "jumping_power_percent": "stat_jump_power",
-    "less_dmg_with_cd_skills_percent": "stat_cdr_damage",
-    "life_after_kill_flat": "stat_hp_kill",
-    "life_based_on_level_flat": "stat_life_per_level",
-    "life_flat": "stat_life",
-    "life_per_second_flat": "stat_life_per_second",
-    "life_percent": "stat_max_hp",
-    "life_replenish_when_blocking_percent": "stat_life_after_block_value",
-    "life_stolen_per_hit_percent": "stat_life_per_hit",
-    "light_radius_flat": "stat_light_radius",
-    "lightning_dmg_absorbed_percent": "stat_lightning_absorb",
-    "lightning_resist_percent": "stat_lightning_resistance",
-    "lightning_skill_dmg_flat": "stat_spell_lightning_damage",
-    "lightning_skill_dmg_percent": "stat_lightning_damage_p",
-    "lightning_skills_flat": "stat_lightning_skills",
-    "magic_dmg_absorbed_percent": "stat_magic_absorb",
-    "magic_find_based_on_level_percent": "stat_magic_find_per_level",
-    "magic_find_percent": "stat_magic_find",
-    "magic_skill_dmg_flat": "stat_spell_elemental_damage",
-    "magic_skill_dmg_percent": "stat_skill_damage",
-    "mana_after_kill_flat": "stat_mana_kill",
-    "mana_based_on_level_flat": "stat_mana_per_level",
-    "mana_costs_decreased_percent": "stat_mana_cost",
-    "mana_flat": "stat_mana",
-    "mana_per_second_flat": "stat_mana_per_second",
-    "mana_percent": "stat_max_mana",
-    "mana_stolen_per_hit_percent": "stat_mana_per_hit",
-    "max_all_resist_percent": "stat_max_all_resistance",
-    "max_arcane_resist_percent": "stat_max_magic_resistance",
-    "max_cold_resist_percent": "stat_max_cold_resistance",
-    "max_fire_resist_percent": "stat_max_fire_resistance",
-    "max_lightning_resist_percent": "stat_max_lightning_resistance",
-    "max_poison_resist_percent": "stat_max_poison_resistance",
-    "max_weapon_damage_flat": "stats_max_damage",
-    "max_weapon_damage_percent": "stats_max_damage_p",
-    "melee_skills_flat": "stat_melee_skills",
-    "min_weapon_damage_flat": "stats_min_damage",
-    "mirror_ring_none": "stat_copy_slot",
-    "monsters_rest_in_peace": "stat_monsters_rest_in_peace",
-    "movement_phasing_none": "stat_phasing",
-    "movement_speed_percent": "stat_increased_speed",
-    "open_wound_chance_percent": "stat_open_wounds",
-    "orbit_skills_flat": "stat_orbit_skills",
-    "orbital_projectile_duration_increased_percent": "stat_orbit_duration",
-    "orbiting_relic_amount_flat": "stat_relic_orbit_amount",
-    "orbiting_relic_damage_flat": "stat_relic_orbit_damage_f",
-    "orbiting_relic_execute_below_health_percent": "stat_relic_orbit_execute",
-    "orbiting_relic_radius_increase_percent": "stat_relic_orbit_radius",
-    "orbiting_relic_size_percent": "stat_relic_orbit_size",
-    "phys_dmg_taken_as_arcane_percent": "stat_phys_taken_magic",
-    "phys_dmg_taken_as_cold_percent": "stat_phys_taken_cold",
-    "physical_skills_flat": "stat_physical_skills",
-    "piercing_attack_none": "stat_piercing",
-    "poison_damage_percent": "stat_increased_poisoned_damage",
-    "poison_dmg_absorbed_percent": "stat_poison_absorb",
-    "poison_length_reduced_percent": "stat_poison_length_reduced",
-    "poison_resist_percent": "stat_poison_resistance",
-    "poison_skill_dmg_flat": "stat_spell_poison_damage",
-    "poison_skill_dmg_percent": "stat_poison_damage_p",
-    "poison_skills_flat": "stat_poison_skills",
-    "poison_tick_frequency_percent": "stat_poison_frequency",
-    "proc_non_buff_relic_chance_percent": "stat_relic_proc_rate",
-    "projectile_damage_increase": "stat_projectile_damage_p",
-    "projectile_random_direction": "stat_projectile_direction",
-    "projectile_return": "stat_projectile_return",
-    "projectile_size_increase": "stat_projectile_size",
-    "projectile_skills_flat": "stat_projectile_skills",
-    "projectile_speed_flat": "stat_projectileSpeed",
-    "random_skill_element_flat": "stat_random_skill",
-    "ranged_skills_flat": "stat_ranged_skills",
-    "reduced_all_dmg_taken_percent": "stat_all_damage_reduction",
-    "reduced_dmg_taken_flat": "stat_damage_reduced",
-    "reduced_magic_dmg_taken_percent": "stat_magic_damage_reduction",
-    "reduced_physical_dmg_taken_percent": "stat_damage_reduction",
-    "replenish_life_percent": "stat_hp_rep",
-    "replenish_mana_percent": "stat_mana_rep",
-    "self_inflicted_chance_when_attacking": "stat_self_strike_chance",
-    "self_inflicted_chance_when_casting_flat": "stat_self_strike_cast_chance",
-    "self_inflicted_damage_from_attacking_flat": "stat_self_strike_damage",
-    "self_inflicted_damage_from_casting_flat": "stat_self_strike_cast_damage",
-    "sentry_amount": "stat_sentry_amount",
-    "sentry_attack_speed_percent": "stat_sentry_attack_speed",
-    "sentry_damage_percent": "stat_sentry_damage",
-    "sentry_duration": "stat_sentry_duration",
-    "sentry_skills_flat": "stat_sentry_skills",
-    "shadowburn_damage_percent": "stat_increased_shadow_burn_damage",
-    "skill_movement_diminish_percent": "stat_movement_diminish",
-    "skill_relic_additional_casts": "stat_relic_skill_burst",
-    "skill_relic_cooldown_percent": "stat_relic_skill_cooldown_dec",
-    "skill_relic_damage_flat": "stat_relic_skill_damage_f",
-    "skill_relic_damage_percent": "stat_relic_skill_damage_p",
-    "skill_relic_projectile_size_percent": "stat_relic_skill_size",
-    "skill_relic_projectiles_flat": "stat_relic_skill_projectiles",
-    "slows_target_percent": "stat_slow_target",
-    "socketed_flat": "sockets",
-    "stasis_damage_percent": "stat_increased_stasis_damage",
-    "strength_based_on_level_flat": "stat_strength_per_level",
-    "strength_flat": "stat_strength",
-    "strength_increase_percent": "stat_strength_p",
-    "summon_all_resist_percent": "stat_summon_resistances",
-    "summon_amount_flat": "stat_summon_amount",
-    "summon_attack_speed_percent": "stat_summon_attack_speed",
-    "summon_dmg_percent": "stat_summon_damage",
-    "summon_life_percent": "stat_summon_life",
-    "summon_movement_speed_percent": "stat_summon_movement_speed",
-    "summon_reduced_dmg_taken_percent": "stat_summon_damage_reduction",
-    "summon_skills_flat": "stat_summon_skills",
-    "target_defense_ignored_percent": "stat_target_defense",
-    "to_subskills_flat": "stat_sub_skills",
-    "total_attack_speed_percent": "stat_attack_speed_t",
-    "total_faster_cast_rate_percent": "stat_faster_cast_rate_t",
-    "vitality_based_on_level_flat": "stat_vitality_per_level",
-    "vitality_converted_to_attack_dmg_percent": "stat_vitality_attack_damage",
-    "vitality_converted_to_magic_skill_dmg_percent": "stat_vitality_skill_damage",
-    "vitality_flat": "stat_vitality",
-    "vitality_increase_percent": "stat_vitality_p",
-}
+
+
+
+# ── the same files, in every language they carry ─────────────────────────────
+#
+# Each translations*.csv is `key|en|fi|pt|ru|zh|ja|ko|de|fr|sp|pl`, with the
+# language codes on the first line of every section. The three readers below
+# have always taken column one and thrown the rest away; these keep them, and
+# `gen_items.py` writes them out beside the English tables as one file per
+# language. See `LANG_OUT`.
+#
+# There is no Turkish. The community has a channel for it and the game ships no
+# column, so nothing here can invent one.
+LANGS: list[str] = []
+# tkey -> {lang: name}, for each of the three files that name something
+ITEM_TR: dict[str, dict[str, str]] = {}
+ROOM_TR: dict[str, dict[str, str]] = {}
+# translationsMain.csv, where the rarities and a few other words of the game's
+# own vocabulary live — `item_type_relic` is in the item file, `satanic` is not
+MAIN_TR: dict[str, dict[str, str]] = {}
+# translationsEnemy.csv, which names the bosses the tally counts. Keyed by the
+# ENGLISH name rather than by tkey, because that is what the Rust table stores
+# and what reaches the page — see TALLIES in stats.rs.
+ENEMY_TR: dict[str, dict[str, str]] = {}
+
+# The Satanic Zone buffs and curses, by the English name the app prints.
+BUFF_TR: dict[str, dict[str, str]] = {}
+
+# Where a chase item drops, by the English name the tables spell it with.
+PLACE_TR: dict[str, dict[str, str]] = {}
+
+
+def _langs_of(line: str) -> list[str]:
+    """The codes on a section heading, or nothing if this is not one."""
+    if not line.startswith("["):
+        return []
+    parts = [p.strip() for p in line.split("|")[1:]]
+    return parts if parts and all(re.fullmatch(r"[a-z]{2}", p) for p in parts) else []
+
+
+def read_translated(path: Path, into: dict[str, dict[str, str]], keep=lambda key: True) -> dict[str, str]:
+    """Fill `into` with every language, and hand back the English column.
+
+    The heading is read rather than assumed: a season that adds a language adds
+    a column, and a fixed list would silently drop it.
+    """
+    global LANGS
+    english: dict[str, str] = {}
+    langs: list[str] = LANGS
+    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        if (head := _langs_of(line)):
+            langs = head
+            if not LANGS:
+                LANGS = head
+            continue
+        key, _, rest = line.partition("|")
+        key = key.strip()
+        if not key or key.startswith("[") or not rest or not keep(key):
+            continue
+        values = [v.strip() for v in rest.split("|")]
+        if not values or not values[0]:
+            continue
+        english.setdefault(key, values[0])
+        said = into.setdefault(key, {})
+        for lang, value in zip(langs, values):
+            if value:
+                said.setdefault(lang, value)
+    return english
 
 
 def game_names() -> dict[str, str]:
@@ -363,24 +170,16 @@ def game_names() -> dict[str, str]:
     if not path.exists():
         print(f"note: {path} not found — falling back to the datamined names")
         return {}
-    names = {}
-    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
-        key, _, rest = line.partition("|")
-        key = key.strip()
-        if key and not key.startswith("[") and rest:
-            name = rest.split("|")[0].strip()
-            if name:
-                names[key] = name
-    return names
+    return read_translated(path, ITEM_TR)
 
 
 def room_names() -> dict[str, str]:
     """room -> the name the game shows for it.
 
     The client's heartbeat says where the character is by room: `Act_05_03`,
-    `Town_01_rm`, `Shadow_Realm_rm`. The tracker used to turn those into
-    "Act 5 . Zone 3" by arithmetic and anything else into the raw name with its
-    underscores swapped for spaces, which put "Shadow Realm rm" in front of the
+    `Town_01_rm`, `Shadow_Realm_rm`. Composing a label from the numbers gives
+    "Act 5 . Zone 3", and anything that is not an act falls back to the raw name
+    with its underscores swapped for spaces — "Shadow Realm rm" in front of the
     player, suffix and all.
 
     The game names every one of them itself, keyed by exactly the string the
@@ -397,42 +196,20 @@ def room_names() -> dict[str, str]:
         # which is a season behind. The run would print its usual success line
         # and the diff would look like a routine refresh.
         print(f"note: no translations*.csv under {GAME} — rooms and zones cannot be read")
+    is_room = lambda key: bool(
+        re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*_rm", key) or re.fullmatch(r"Act_\d+_\d+", key)
+    )
     for path in files:
-        for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
-            key, _, rest = line.partition("|")
-            key = key.strip()
-            if not key or not rest:
-                continue
-            if not (re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*_rm", key) or re.fullmatch(r"Act_\d+_\d+", key)):
-                continue
-            name = rest.split("|")[0].strip()
-            if name:
-                out.setdefault(key, name)
+        for key, name in read_translated(path, ROOM_TR, is_room).items():
+            out.setdefault(key, name)
     return out
 
-def attribute_names() -> dict[str, str]:
-    """key -> English label, as the game words the stat on a tooltip."""
-    path = GAME / "translationsAttributes.csv"
-    if not path.exists():
-        print(f"note: {path} not found — item stats will carry no labels")
-        return {}
-    # The file is in sections and the section headings are skipped: no key
-    # appears in two of them, and the game names two of the stats we want
-    # ("Attacks per Second", "Sockets") under [Global Stats] rather than
-    # [Item Stats].
-    names = {}
-    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
-        key, _, rest = line.partition("|")
-        key = key.strip()
-        if key and not key.startswith("[") and rest:
-            label = rest.split("|")[0].strip()
-            if label:
-                names[key] = label
-    return names
 
 
+# identity key -> the tkey its English name was read from, so the other ten
+# languages can be looked up for exactly the same item
+tkey_of: dict[str, str] = {}
 translations = game_names()
-attributes = attribute_names()
 rooms = room_names()
 
 # Which zones each act actually has, out of the rooms the game names: act 1 runs
@@ -512,7 +289,7 @@ def place_codes(place: str) -> list[str]:
             wanted.add(int(part.strip()))
     return [f"{act}-{zone}" for act in acts for zone in sorted(wanted)]
 
-items, rarities, tiers, drops, zones, places, chases, rolls = {}, {}, {}, {}, {}, {}, {}, {}
+items, rarities, tiers, drops, zones, places, chases = {}, {}, {}, {}, {}, {}, {}
 # What each identity says about itself, beside the name it goes by. See by_id.
 #
 # The rate is here as well as in `drops` because `drops` is keyed by NAME, and
@@ -543,6 +320,8 @@ for entry in ENTRIES:
             taken = items.get(key)
             if taken is None:
                 items[key] = name
+                if meta.get("tkey"):
+                    tkey_of[key] = meta["tkey"]
             elif meta.get("rarity") in ORDINARY:
                 dropped.append((key, name, taken))
             elif taken != name:
@@ -649,41 +428,6 @@ for entry in ENTRIES:
         facts.setdefault(
             f"{item_type}:{game_id}:{weapon_type}", (name, rarity, tier, int(own))
         )
-    if entry.get("stats"):
-        rolls.setdefault(name.lower(), entry["stats"])
-
-stat_ids: list[str] = []
-stat_index: dict[str, int] = {}
-
-
-def stat_row(roll: dict) -> list:
-    """One rolled stat as [id, min, max, min2, max2, spell or class]."""
-    sid = str(roll.get("sid"))
-    if sid not in stat_index:
-        stat_index[sid] = len(stat_ids)
-        stat_ids.append(sid)
-    # a proc line names the spell it casts; a class-only bonus names the class
-    named = roll.get("Spell Name") or roll.get("Class Name")
-    row = [stat_index[sid], roll.get("min1"), roll.get("max1"), roll.get("min2"), roll.get("max2"), named]
-    # Interning the ids and cutting the columns a roll does not use is most of
-    # what keeps this table near a hundred kilobytes rather than four hundred.
-    while len(row) > 2 and row[-1] is None:
-        row.pop()
-    return row
-
-
-# Stats are carried only for a name the item table knows, because the page that
-# shows them has no way to reach any other item.
-shown = {name.lower() for name in items.values()}
-stats = {key: [stat_row(r) for r in rs] for key, rs in rolls.items() if key in shown}
-stat_labels = [attributes.get(STAT_KEYS.get(sid, ""), "") for sid in stat_ids]
-
-for sid, key in sorted(STAT_KEYS.items()):
-    if attributes and key not in attributes:
-        # a season that renames a key would otherwise take the label away in
-        # silence, and the page would quietly fall back to the raw id
-        print(f"warning: {sid} is mapped to {key!r}, which the attribute table does not carry")
-
 header = """// Generated by tools/gen_items.py — do not edit by hand.
 // Identities, rarities and grades: datamined tables from hero-siege-helper.
 // Display names: the game's own translationsItem.csv."""
@@ -1011,6 +755,26 @@ rs_lines += [
     "}",
     "",
     "/// The identity triple as the tables key it, or None if it is not one.",
+    "/// Whether `said` is what this item is called, in any language the game has.",
+    "///",
+    "/// English first, because that is what the tables are keyed by and what a",
+    "/// client in English sends; the aliases only when it is not.",
+    "pub fn same_item(said: &str, english: &str, item_type: i64, id: i64, weapon_type: i64) -> bool {",
+    "    let said = said.trim();",
+    "    if said.eq_ignore_ascii_case(english) {",
+    "        return true;",
+    "    }",
+    "    let Some(key) = packed(item_type, id, weapon_type) else { return false };",
+    "    let lower = said.to_lowercase();",
+    "    // several items can share a name in a language the game was loose with,",
+    "    // so the whole run of that name is checked and not just the first",
+    "    let at = ALIASES.partition_point(|(n, _)| *n < lower.as_str());",
+    "    ALIASES[at..]",
+    "        .iter()",
+    "        .take_while(|(n, _)| *n == lower.as_str())",
+    "        .any(|(_, k)| *k == key || *k == key & 0xFFFF_FF00)",
+    "}",
+    "",
     "fn packed(item_type: i64, id: i64, weapon_type: i64) -> Option<u32> {",
     "    if !(0..256).contains(&item_type) || !(0..65536).contains(&id) || !(0..256).contains(&weapon_type) {",
     "        return None;",
@@ -1061,16 +825,352 @@ rs_lines += [
     "}",
     "",
 ]
+
+# ── the same items, under the names the other ten languages give them ────────
+#
+# The parser refuses an identity whose name does not match the table, and that
+# guard is load-bearing: a find announced in the chat line carries a triple of
+# zeroes, which is a real item ("Harlequinn's Crest"), so without it every chat
+# announcement would come back as that helmet.
+#
+# But the name it compares is the one the *game* printed, and a German client
+# prints German. So the guard rejected every drop for anyone not playing in
+# English, and the rarity, the grade and the chime fell back to whatever the
+# packet claimed. Here is the same item under its other names, so the guard can
+# ask "is this that item in any language" instead of "is this that item in
+# English". See `same_item`.
+rs_aliases = sorted(
+    {
+        (said.lower(), (int(t) << 24) | (int(i) << 8) | int(w))
+        for key, tkey in tkey_of.items()
+        for t, i, w in [key.split(":")]
+        for lang, said in ITEM_TR.get(tkey, {}).items()
+        if lang != "en" and said and 0 <= int(t) < 256 and 0 <= int(i) < 65536 and 0 <= int(w) < 256
+    }
+)
+rs_lines += [
+    "",
+    "/// Every other name the game has for an item, sorted by the name.",
+    f"static ALIASES: [(&str, u32); {len(rs_aliases)}] = [",
+]
+rs_lines += [f"    ({rs_str(n)}, {k})," for n, k in rs_aliases]
+rs_lines += ["];"]
+
 OUT_RS.write_text("\n".join(rs_lines), encoding="utf-8", newline="\n")
 
-unnamed = [sid for sid, label in zip(stat_ids, stat_labels) if not label]
 print(
     f"items: {len(items)}, rarities: {len(rarities)}, grades: {len(tiers)}, "
     f"drop rates: {len(drops)}, zones: {len(zones)}, chase rates: {len(chases)} -> {OUT.name}, {OUT_RS.name}"
 )
-print(
-    f"stats: {sum(len(v) for v in stats.values())} rolls on {len(stats)} items, "
-    f"{len(stat_ids) - len(unnamed)} of {len(stat_ids)} stat ids named by the game -> {OUT.name} only"
-)
-if unnamed:
-    print("  no label in the attribute table: " + ", ".join(sorted(unnamed)))
+
+
+# ── one file per language ────────────────────────────────────────────────────
+#
+# Everything above is English, and stays English: `items.js` is what the app
+# loads first and what every other language falls back to. The rest ride in
+# `src/lang/<code>.json`, fetched only when someone picks that language — ten
+# alphabets in one bundle is 1.4 MB nobody reading English needs.
+#
+# Only the names move. A rarity, a grade, a drop rate and a zone are the same
+# fact in any language and live in the base file alone.
+#
+# The type labels are the one place the game's own word is not taken for
+# English: it calls type 18 a "Vial" and weapon 15 a "Flask", and this app has
+# said "Flask" for the first since it was written — renaming it would rename 22
+# items in every list a user has already built. So English is ours and the other
+# ten are the game's, which is what a reader of those languages expects to see.
+LANG_OUT = OUT.parent / "lang"
+
+TYPE_TKEY = {
+    0: "item_type_helmet", 1: "item_type_bodyarmor", 2: "item_type_boots",
+    3: "item_type_weapon", 4: "item_type_gloves", 5: "item_type_amulet",
+    6: "item_type_shield", 7: "item_type_ring", 8: "item_type_belt",
+    10: "item_type_charm", 11: "item_type_consumable", 12: "item_type_key",
+    13: "item_type_collectible", 14: "item_type_material",
+    15: "item_type_socketable", 16: "item_type_relic", 18: "item_type_flasks",
+    19: "item_type_vault",
+}
+WEAPON_TKEY = {
+    1: "item_type_sword", 2: "item_type_dagger", 3: "item_type_mace",
+    4: "item_type_axe", 5: "item_type_claw", 6: "item_type_polearm",
+    7: "item_type_chainsaw", 8: "item_type_staff", 9: "item_type_cane",
+    10: "item_type_wand", 11: "item_type_book", 12: "item_type_spellblade",
+    13: "item_type_bow", 14: "item_type_gun", 15: "item_type_flasks",
+    16: "item_type_throwing", 17: "item_type_novelty",
+}
+
+
+def _said(table, key, lang):
+    said = table.get(key or "", {})
+    value = said.get(lang, "")
+    # A language the game left blank for one row falls back to English, and the
+    # page falls back to English again for a row that is missing entirely — so
+    # writing the English out here would only make the file bigger.
+    return value if value and value != said.get("en") else ""
+
+
+# The rarities and a few words beside them are named by the game, so they are
+# taken from it rather than written out again — except where it has no word
+# (there is no "Set" rarity key, only "Set item") or where its own is
+# machine-made: the Russian for `set_bonus` reads "install bonus". So the game
+# supplies the default and `said.py` overrides it, which is the opposite of the
+# rule hs-map uses, and for that reason.
+RARITY_TKEY = {
+    "Satanic": "satanic", "Heroic": "heroic", "Angelic": "angelic",
+    "Unholy": "unholy", "Mythic": "mythic", "Common": "common",
+    "Runeword": "runeword", "Relic": "item_type_relic", "Rarity": "rarity",
+}
+
+
+def main_words() -> None:
+    """Read translationsMain.csv for its side of the vocabulary."""
+    path = GAME / "translationsMain.csv"
+    if path.exists():
+        read_translated(path, MAIN_TR)
+    # The bosses, re-keyed by the English name. Only the ones the tracker
+    # actually counts: the file names eight hundred and twelve monsters and the
+    # tally table names about thirty, and shipping the other seven hundred and
+    # eighty would triple every language file to translate nothing anyone sees.
+    #
+    # Not every counted boss is in there — Gurag and Odin are not — and those
+    # stay English, which is what a missing entry does everywhere else.
+    path = GAME / "translationsEnemy.csv"
+    if not path.exists():
+        return
+    satanic_buffs()
+    drop_places()
+    counted = tallied_bosses()
+    by_tkey: dict[str, dict[str, str]] = {}
+    read_translated(path, by_tkey)
+    for said in by_tkey.values():
+        english = said.get("en")
+        if english and english in counted:
+            ENEMY_TR.setdefault(english, said)
+    tally_names()
+
+
+def drop_places() -> None:
+    """The bosses, chests and dungeons a chase item is tied to.
+
+    The place strings are built out of a small vocabulary — an act, a kind of
+    dungeon, a boss, a chest — and the game names most of the pieces somewhere
+    across its sixteen tables. What it does not name (Common Chest, Uber Damien,
+    Gabriel) is left to said.py, and what neither names stays English, which is
+    what a missing entry does everywhere else.
+
+    Only the piece is looked up, never the whole string: "Sheeponia (Inferno
+    Only)" is a place and a difficulty, and the two are joined on the screen.
+    """
+    wanted: set[str] = set()
+    for where in places.values():
+        for one in where:
+            bare = re.sub(r"\s*\((?:Inferno Only|Inferno Difficulty|Inferno)\)$", "", one)
+            act = re.fullmatch(r"Act [IVX]+(?: & [IVX]+)? (.+)", bare)
+            bare = act.group(1) if act else bare
+            bare = re.sub(r"^Zone .+$", "", bare)
+            if bare:
+                wanted.add(bare)
+    if not wanted:
+        return
+    for path in sorted(GAME.glob("translations*.csv")):
+        rows: dict[str, dict[str, str]] = {}
+        read_translated(path, rows)
+        for said in rows.values():
+            english = said.get("en")
+            if english in wanted:
+                PLACE_TR.setdefault(english, said)
+
+
+def satanic_buffs() -> None:
+    """The Satanic Zone buffs and curses, re-keyed by the English name.
+
+    The game names all fifty-eight of them in translationsAttributes.csv, so the
+    app has no business translating them itself. It writes a curly apostrophe
+    and this app writes a straight one, and the numeral on the two Loot Goblin
+    tiers is the app's own addition, so the key is folded before it is matched.
+    """
+    path = GAME / "translationsAttributes.csv"
+    if not path.exists():
+        return
+    rows: dict[str, dict[str, str]] = {}
+    read_translated(path, rows, keep=lambda k: k.startswith(("satanicBuff", "satanicDebuff")))
+    for said in rows.values():
+        english = (said.get("en") or "").replace("’", "'")
+        if not english:
+            continue
+        BUFF_TR.setdefault(english, said)
+        # Loot Goblin is one row in the game and two tiers in the app
+        if english == "Loot Goblin":
+            for numeral in ("I", "II"):
+                BUFF_TR.setdefault(
+                    f"{english} {numeral}",
+                    {k: f"{v} {numeral}" for k, v in said.items()},
+                )
+
+
+# What the tally calls a boss, against what the game calls it.
+#
+# The tracker counts the uber forms apart from the normal ones and says so in
+# the label; the game gives the uber form a proper name of its own and never
+# writes "Uber" at all — its `e_uberAnubis_1` is simply Amun Ra. So the word is
+# ours and the name is the game's, and they are joined here. Where the two
+# already agree the label is looked up as it stands and needs no row.
+TALLY_ALIAS = {
+    "Uber Amun Ra": "Amun Ra",
+    "Uber Architect": "Architect of Ruin",
+    "Uber Blood Maiden": "Blood Maiden",
+    "Uber Captain Grimtide": "Captain Grimtide",
+    "Uber Chaos Tower": "Rogue Chaos Tower",
+    "Uber Damien": "Damien",
+    "Uber Endrixia": "Endrixia",
+    "Uber King Rakhul": "King Rakhul",
+    "Uber Luna": "Possessed Luna",
+    "Uber Papa Legba": "Papa Legba",
+    "Uber Phantom Leviathan": "Phantom Leviathan",
+    "Uber Reaper": "Grim Reaper",
+    "Uber Sung Lee": "Sung Lee",
+    "Reaper": "Grim Reaper",
+}
+
+
+def tally_names() -> None:
+    """The counted bosses, under the name the tally prints them with."""
+    wanted = set(TALLY_ALIAS.values())
+    if not wanted:
+        return
+    found: dict[str, dict[str, str]] = {}
+    for path in sorted(GAME.glob("translations*.csv")):
+        rows: dict[str, dict[str, str]] = {}
+        read_translated(path, rows)
+        for said in rows.values():
+            english = said.get("en")
+            if english in wanted:
+                found.setdefault(english, said)
+    uber = MAIN_TR.get("uber", {})
+    for label, english in TALLY_ALIAS.items():
+        said = found.get(english)
+        if not said:
+            continue
+        if not label.startswith("Uber "):
+            ENEMY_TR.setdefault(label, said)
+            continue
+        # our word in front of the game's name
+        ENEMY_TR.setdefault(
+            label,
+            {
+                lang: f"{uber.get(lang, 'Uber')} {name}"
+                for lang, name in said.items()
+                if lang != "en"
+            }
+            | {"en": label},
+        )
+
+
+def tallied_bosses() -> set[str]:
+    """The boss and chest labels `stats.rs` sends to the page, read from it.
+
+    Read rather than listed, so a season that adds a boss to TALLIES gets its
+    name translated without anyone remembering to copy it here twice.
+    """
+    rs = OUT_RS.parent / "stats.rs"
+    if not rs.exists():
+        return set()
+    body = rs.read_text(encoding="utf-8", errors="replace")
+    start = body.find("TALLIES")
+    if start < 0:
+        return set()
+    chunk = body[start : body.find("];", start)]
+    return {m.group(1) for m in re.finditer(r'"([A-Z][^"]{2,40})"', chunk)}
+
+
+def app_words():
+    """What this app says itself, keyed by the English. See tools/said.py."""
+    try:
+        from said import SAID
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from said import SAID
+    return SAID
+
+
+def backend_words(written: dict[str, set[str]]) -> None:
+    """Say so when the Rust side asks for a word no language answers.
+
+    The page's words are found by reading its own call sites, and for a while
+    that was the whole check — which is how three tray entries shipped in
+    English. The backend asks by string too, and none of its strings appears
+    anywhere in `src/`: the tray menu, the file dialogs, the errors it hands
+    back and the Discord card. This is the only place that can see both halves.
+    """
+    src = OUT_RS.parent
+    if not src.is_dir():
+        return
+    asked: dict[str, set[str]] = {}
+    for path in sorted(src.glob("*.rs")):
+        body = path.read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(r'say::say\(\s*"((?:[^"\\]|\\.)*)"\s*\)', body):
+            asked.setdefault(m.group(1).replace('\\"', '"'), set()).add(path.name)
+    if not asked:
+        return
+    unanswered = sorted(k for k in asked if not any(k in words for words in written.values()))
+    if unanswered:
+        print(f"note: {len(unanswered)} words the backend says are in no language:")
+        for key in unanswered:
+            print(f"  {key!r} — {', '.join(sorted(asked[key]))}")
+
+
+def write_languages():
+    if not LANGS:
+        print("note: no language columns were read — no side files written")
+        return
+    LANG_OUT.mkdir(exist_ok=True)
+    main_words()
+    words = app_words()
+    written = []
+    shipped: dict[str, set[str]] = {}
+    for lang in LANGS:
+        if lang == "en":
+            continue
+        side = {
+            "items": {k: v for k, t in sorted(tkey_of.items()) if (v := _said(ITEM_TR, t, lang))},
+            "types": {str(n): v for n, t in TYPE_TKEY.items() if (v := _said(ITEM_TR, t, lang))},
+            "weapons": {str(n): v for n, t in WEAPON_TKEY.items() if (v := _said(ITEM_TR, t, lang))},
+            "rooms": {k: v for k in sorted(rooms) if (v := _said(ROOM_TR, k, lang))},
+            # The Satanic Zone places, by act and index — the game keys them
+            # Act_05_05, and an announcement says Satanic_5_5, so the numbers
+            # are the join and no English name has to survive the trip.
+            "acts": {
+                f"{int(m.group(1))}_{int(m.group(2))}": v
+                for k in sorted(ROOM_TR)
+                if (m := re.fullmatch(r"Act_(\d+)_(\d+)", k)) and (v := _said(ROOM_TR, k, lang))
+            },
+            # and the words this app writes itself, in the same file: a reader
+            # of another language is fetching it anyway
+            "ui": {
+                **{
+                    en: v
+                    for en, tk in RARITY_TKEY.items()
+                    if (v := _said(ITEM_TR, tk, lang) or _said(MAIN_TR, tk, lang))
+                },
+                # the bosses the tally counts, by the English name the Rust
+                # table stores and the page renders
+                **{en: v for en in sorted(ENEMY_TR) if (v := _said(ENEMY_TR, en, lang))},
+                # the Satanic Zone's buffs and curses, named by the game
+                **{en: v for en in sorted(BUFF_TR) if (v := _said(BUFF_TR, en, lang))},
+                # and the places a chase item is tied to
+                **{en: v for en in sorted(PLACE_TR) if (v := _said(PLACE_TR, en, lang))},
+                **{en: said[lang] for en, said in sorted(words.items()) if said.get(lang)},
+            },
+        }
+        path = LANG_OUT / f"{lang}.json"
+        path.write_text(
+            json.dumps(side, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        written.append(f"{lang}:{len(side['items'])}+{len(side['ui'])}")
+        shipped[lang] = set(side["ui"])
+    print(f"names+words in {len(written)} more languages -> src/lang/  ({', '.join(written)})")
+    backend_words(shipped)
+
+
+write_languages()

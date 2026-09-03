@@ -15,10 +15,18 @@
     TIER_BY_NAME,
     TYPE_NAMES,
     tierLabel,
-    typeLabel,
   } from './items.js';
+  import { itemName, locale, placeLabel, placeList, say, t, typeLabel } from './say.svelte.js';
   import { css } from './skin.svelte.js';
-  import { recall, remember } from './bridge.js';
+  import { invoke, recall, remember } from './bridge.js';
+
+  /// What this row is called where the reader can see it. The record keeps the
+  /// English name because that is what the tables are keyed by and what the
+  /// search box matches; only the printing moves.
+  const shown = (it) => itemName(it.type, it.id, it.weapon);
+  /// The same deferral for the kind: `typeLabel` inside the catalogue would
+  /// have been read once, before the language file arrived.
+  const kindOf = (it) => typeLabel(it.type, it.weapon);
 
   /// Built once: the tables are keyed by lowercase name, and one item can wear
   /// several ids, so the first sighting of a name wins.
@@ -26,14 +34,14 @@
     const seen = new Map();
     for (const [key, name] of Object.entries(ITEMS)) {
       if (seen.has(name)) continue;
-      const [type, , weapon] = key.split(':').map(Number);
+      const [type, id, weapon] = key.split(':').map(Number);
       const k = name.toLowerCase();
       seen.set(name, {
         name,
         key: k,
         type,
+        id,
         weapon,
-        kind: typeLabel(type, weapon),
         group: TYPE_NAMES[type] ?? `Type ${type}`,
         rarity: RARITY_BY_NAME[k] ?? '',
         tier: TIER_BY_NAME[k] ?? 0,
@@ -49,7 +57,14 @@
   // taken from the data, like the kinds below it: the tables carry five
   // rarities, and offering ones they do not would only ever find nothing
   const RARITIES = [...new Set(CATALOGUE.map((i) => i.rarity).filter(Boolean))].sort();
-  const GROUPS = [...new Set(CATALOGUE.map((i) => i.group))].sort();
+  // Paired with the numeric type, because the word for a kind is the game's
+  // and the English name is only the key the filter matches on.
+  const GROUPS = [...new Map(CATALOGUE.map((i) => [i.group, i.type])).entries()];
+  let groupChoices = $derived(
+    GROUPS.map(([name, type]) => ({ name, label: typeLabel(type) })).sort((a, b) =>
+      a.label.localeCompare(b.label, locale()),
+    ),
+  );
   const RARITY_CLASS = {
     Satanic: 'c-sat', Set: 'c-set', Heroic: 'c-her', Angelic: 'c-ang', Unholy: 'c-unh',
   };
@@ -60,9 +75,9 @@
   let rarity = $state('');
   let group = $state('');
   let sort = $state('rarest');
-  // Cards first: what the page is asked is "where do I farm this", and in the
-  // table that answer is the fifth column of a row. The choice outlives the
-  // window the way the dashboard's section does.
+  // Cards first: the question this page is opened with is where to farm an
+  // item, and in the table that answer is the fifth column of a row. The choice
+  // outlives the window the way the dashboard's section does.
   let view = $state(recall('codex-view') === 'table' ? 'table' : 'cards');
   $effect(() => {
     remember('codex-view', view);
@@ -94,38 +109,90 @@
     return list;
   });
 
+  // ── the shopping list, from here ──────────────────────────────────────────
+  //
+  // Reading the catalogue and wanting one of these on the list is the same
+  // moment, and until now it meant changing tab and typing the name out.
+  //
+  // The name that goes on the list is the one on the screen. The list is a
+  // note the player reads back and types into the game's own search, and the
+  // game is in the language they picked too.
+  let menu = $state(null);
+  let said = $state('');
+  let saidTimer;
+
+  const MENU_W = 210;
+  const MENU_H = 62;
+
+  function openMenu(e, it) {
+    e.preventDefault();
+    // clamped, so a right-click by the window's edge does not put the menu
+    // half off it
+    menu = {
+      name: shown(it),
+      x: Math.min(e.clientX, window.innerWidth - MENU_W - 8),
+      y: Math.min(e.clientY, window.innerHeight - MENU_H - 8),
+    };
+  }
+
+  const closeMenu = () => (menu = null);
+
+  /// Add what the menu is holding, and say which of the two things happened.
+  ///
+  /// The list is read back rather than kept here: the Shopping List tab writes
+  /// it too, and whichever of them last wrote is the one that counts.
+  async function addToShopping() {
+    const name = menu?.name;
+    closeMenu();
+    if (!name) return;
+    try {
+      const list = (await invoke('get_shopping')) ?? [];
+      const already = list.some((row) => row.trim().toLowerCase() === name.toLowerCase());
+      if (!already) {
+        await invoke('set_shopping', { items: [...list, name] });
+      }
+      said = already ? say('{name} is already on the shopping list', { name })
+                     : say('{name} added to the shopping list', { name });
+    } catch (e) {
+      said = String(e);
+    }
+    clearTimeout(saidTimer);
+    saidTimer = setTimeout(() => (said = ''), 2500);
+  }
 </script>
+
+<svelte:window onkeydown={(e) => e.key === 'Escape' && closeMenu()} onblur={closeMenu} />
 
 <div class="panel">
   <div class="body">
     <div class="tools" data-tauri-drag-region>
-      <input class="find" placeholder="Search by name" bind:value={query} />
+      <input class="find" placeholder={t("Search by name")} bind:value={query} />
       <select class="picker" bind:value={rarity}>
-        <option value="">Any rarity</option>
-        {#each RARITIES as r}<option value={r}>{r}</option>{/each}
+        <option value="">{t("Any rarity")}</option>
+        {#each RARITIES as r}<option value={r}>{t(r)}</option>{/each}
       </select>
       <select class="picker" bind:value={group}>
-        <option value="">Any kind</option>
-        {#each GROUPS as g}<option value={g}>{g}</option>{/each}
+        <option value="">{t("Any kind")}</option>
+        {#each groupChoices as g}<option value={g.name}>{g.label}</option>{/each}
       </select>
       <select class="picker narrow" bind:value={sort}>
-        <option value="rarest">Rarest first</option>
-        <option value="name">By name</option>
+        <option value="rarest">{t("Rarest first")}</option>
+        <option value="name">{t("By name")}</option>
       </select>
       <div class="views">
-        <button class="pick" class:on={view === 'cards'} onclick={() => (view = 'cards')}>Cards</button>
-        <button class="pick" class:on={view === 'table'} onclick={() => (view = 'table')}>Table</button>
+        <button class="pick" class:on={view === 'cards'} onclick={() => (view = 'cards')}>{t("Cards")}</button>
+        <button class="pick" class:on={view === 'table'} onclick={() => (view = 'table')}>{t("Table")}</button>
       </div>
     </div>
 
     <div class="box" style:border-image-source={css('chip_dark')}>
       {#if view === 'table'}
         <div class="head">
-          <span class="hname">Item</span>
-          <span class="hkind">Type</span>
-          <span class="hgrade">Tier</span>
-          <span class="hrate">Chance</span>
-          <span class="hchase">Drop location</span>
+          <span class="hname">{t("Item")}</span>
+          <span class="hkind">{t("Type")}</span>
+          <span class="hgrade">{t("Tier")}</span>
+          <span class="hrate">{t("Chance")}</span>
+          <span class="hchase">{t("Drop location")}</span>
         </div>
 
         <div class="rows" role="list">
@@ -133,24 +200,26 @@
             <div
               class="row"
               role="listitem"
+              oncontextmenu={(e) => openMenu(e, it)}
             >
-              <span class="name {RARITY_CLASS[it.rarity] ?? ''}" title={it.rarity || 'unlisted'}>{it.name}</span>
-              <span class="kind dim">{it.kind}</span>
+              <span class="name {RARITY_CLASS[it.rarity] ?? ''}" title={it.rarity ? t(it.rarity) : t('unlisted')}>{shown(it)}</span>
+              <span class="kind dim">{kindOf(it)}</span>
               <span class="grade dim">{tierLabel(it.tier) || '—'}</span>
               <span class="rate">{odds(it.rate)}</span>
               <span class="chase">
                 {#if it.chase}
                   <b>{odds(it.chase)}</b>
-                  <span class="where" title={it.places.join(' · ') || it.zones.join(', ')}>{it.places.join(' · ') || it.zones.join(', ')}</span>
+                  {@const where = placeList(it.places) || placeList(it.zones, ', ')}
+                  <span class="where" title={where}>{where}</span>
                 {:else if it.places.length}
-                  <span class="where" title={it.places.join(' · ')}>{it.places.join(' · ')}</span>
+                  <span class="where" title={placeList(it.places)}>{placeList(it.places)}</span>
                 {:else}
-                  <span class="dim">anywhere</span>
+                  <span class="dim">{t("anywhere")}</span>
                 {/if}
               </span>
             </div>
           {:else}
-            <div class="empty dim">nothing matches that</div>
+            <div class="empty dim">{t("nothing matches that")}</div>
           {/each}
         </div>
       {:else}
@@ -159,41 +228,64 @@
             <div
               class="card {RARITY_CLASS[it.rarity] ?? ''}"
               role="listitem"
+              oncontextmenu={(e) => openMenu(e, it)}
             >
-              <div class="cname" title={it.rarity || 'unlisted'}>{it.name}</div>
-              <div class="cline dim">{it.kind}{it.tier ? ` · ${tierLabel(it.tier)}` : ''}</div>
+              <div class="cname" title={it.rarity ? t(it.rarity) : t('unlisted')}>{shown(it)}</div>
+              <div class="cline dim">{kindOf(it)}{it.tier ? ` · ${tierLabel(it.tier)}` : ''}</div>
               <div class="odds">
-                <span class="dim">anywhere</span>
+                <span class="dim">{t("anywhere")}</span>
                 <span class="rate">{odds(it.rate)}</span>
                 {#if it.chase}
-                  <span class="dim">tied</span>
+                  <span class="dim">{t("tied")}</span>
                   <b class="tied">{odds(it.chase)}</b>
                 {/if}
               </div>
               <div class="places">
                 {#each it.places.length ? it.places : it.zones as w}
-                  <span class="place">{w}</span>
+                  <span class="place">{placeLabel(w)}</span>
                 {:else}
-                  <span class="dim">drops anywhere</span>
+                  <span class="dim">{t("drops anywhere")}</span>
                 {/each}
               </div>
             </div>
           {:else}
-            <div class="empty dim">nothing matches that</div>
+            <div class="empty dim">{t("nothing matches that")}</div>
           {/each}
         </div>
       {/if}
 
+      {#if said}
+        <div class="said">{said}</div>
+      {/if}
+
       <div class="foot dim">
         {#if found.length > SHOWN}
-          showing {SHOWN} of {found.length} — narrow the search to see the rest
+          {say('showing {n} of {total} — narrow the search to see the rest', { n: SHOWN, total: found.length })}
         {:else}
-          {found.length} of {CATALOGUE.length} items
+          {say('{n} of {total} items', { n: found.length, total: CATALOGUE.length })}
         {/if}
       </div>
     </div>
   </div>
 </div>
+
+{#if menu}
+  <!-- The backdrop is what closes it: a menu that outlives the click that
+       opened it is a menu that follows the reader down the page. -->
+  <div
+    class="scrim"
+    role="presentation"
+    onclick={closeMenu}
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      closeMenu();
+    }}
+  ></div>
+  <div class="menu" style:left="{menu.x}px" style:top="{menu.y}px" style:border-image-source={css('chip_dark')}>
+    <div class="mname">{menu.name}</div>
+    <button class="mitem" onclick={addToShopping}>{t('Add to the shopping list')}</button>
+  </div>
+{/if}
 
 <style>
   @font-face {
@@ -208,7 +300,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    font-family: 'CookieRun Bold', sans-serif;
+    font-family: var(--face);
     font-size: 12px;
     color: var(--bone-6);
   }
@@ -278,7 +370,7 @@
     position: relative;
     color: var(--bone-13);
     border-color: var(--edge-4);
-    background: rgba(150, 37, 56, 0.45);
+    background: rgba(var(--pick-rgb), 0.45);
   }
 
   .box {
@@ -377,6 +469,61 @@
   }
 
   .empty { padding: 12px 0; text-align: center; }
+  /* Above everything, and fixed to the viewport because the coordinates are
+     the cursor's. */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+  .menu {
+    position: fixed;
+    z-index: 41;
+    /* Under the art rather than instead of it: the game skin's nine-slice is
+       drawn with `fill` and covers this, and the plain skin has no art to
+       cover anything. A popup that is not opaque is unreadable over whatever
+       it was opened on. */
+    background: var(--ground-1);
+    width: 210px;
+    box-sizing: border-box;
+    border: 6px solid transparent;
+    border-image-slice: 6 fill;
+    border-image-width: 6px;
+    image-rendering: pixelated;
+    padding: 6px 4px;
+    font-family: var(--face);
+  }
+  .mname {
+    font-size: 11px;
+    color: var(--bone-3);
+    padding: 2px 8px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mitem {
+    display: block;
+    width: 100%;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    color: var(--bone-12);
+    background: none;
+    border: none;
+    padding: 5px 8px;
+    cursor: pointer;
+  }
+  .mitem:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--gold-2);
+  }
+
+  .said {
+    font-size: 11px;
+    color: var(--gold-2);
+    padding: 4px 2px 0;
+  }
+
   .foot { padding-top: 4px; font-size: 11px; }
   .dim { color: var(--bone-3); }
 

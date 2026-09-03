@@ -218,3 +218,95 @@ body {
   --ring: #d4d4d8;
   --radius: 6px;
 }
+
+/* Plain: not a season. Every value is its own, because this skin
+   moves the lightnesses too — see LITERAL in tools/gen_theme.py. */
+:root[data-theme='plain'] {
+  --bone-3: #a1a1aa;
+  --bone-4: #a1a1aa;
+  --bone-5: #b4b4bb;
+  --bone-6: #e4e4e7;
+  --bone-7: #d4d4d8;
+  --bone-8: #e4e4e7;
+  --bone-9: #f4f4f5;
+  --bone-10: #f4f4f5;
+  --bone-11: #fafafa;
+  --bone-12: #fafafa;
+  --bone-13: #fafafa;
+  --bone-14: #ffffff;
+  --bone-15: #ffffff;
+  --dim-1: #3f3f46;
+  --dim-2: #a1a1aa;
+  --edge-1: #27272a;
+  --edge-2: #27272a;
+  --edge-3: #2e2e33;
+  --edge-4: #3f3f46;
+  --edge-5: #3f3f46;
+  --edge-6: #52525b;
+  --edge-7: #52525b;
+  --edge-8: #a1a1aa;
+  --edge-9: #52525b;
+  --edge-1b: #71717a;
+  --edge-2b: #a1a1aa;
+  --gold-1: #9b82f8;
+  --gold-2: #a78bfa;
+  --ground-1: #09090b;
+  --ground-2: #09090b;
+  --ground-3: #0d0d0f;
+  --ground-4: #111113;
+  --ground-5: #18181b;
+  --ground-6: #18181b;
+  --ground-7: #1c1c1f;
+  --ground-8: #232326;
+  --ground-9: #27272a;
+  --ground-10: #3f3f46;
+  --ground-11: #3f3f46;
+  --mf: #7fb2ff;
+  --rar-satanic: #ff6a6a;
+}
+
+/* Plainlight: not a season. Every value is its own, because this skin
+   moves the lightnesses too — see LITERAL in tools/gen_theme.py. */
+:root[data-theme='plainlight'] {
+  --bone-3: #67676f;
+  --bone-4: #52525b;
+  --bone-5: #52525b;
+  --bone-6: #27272a;
+  --bone-7: #3f3f46;
+  --bone-8: #3f3f46;
+  --bone-9: #27272a;
+  --bone-10: #27272a;
+  --bone-11: #18181b;
+  --bone-12: #18181b;
+  --bone-13: #09090b;
+  --bone-14: #09090b;
+  --bone-15: #000000;
+  --dim-1: #d4d4d8;
+  --dim-2: #67676f;
+  --edge-1: #e4e4e7;
+  --edge-2: #e4e4e7;
+  --edge-3: #dcdce0;
+  --edge-4: #d4d4d8;
+  --edge-5: #d4d4d8;
+  --edge-6: #c4c4ca;
+  --edge-7: #c4c4ca;
+  --edge-8: #67676f;
+  --edge-9: #a1a1aa;
+  --edge-1b: #a1a1aa;
+  --edge-2b: #67676f;
+  --gold-1: #6d28d9;
+  --gold-2: #7c3aed;
+  --ground-1: #ffffff;
+  --ground-2: #ffffff;
+  --ground-3: #fafafa;
+  --ground-4: #f8f8f8;
+  --ground-5: #ffffff;
+  --ground-6: #fafafa;
+  --ground-7: #f4f4f5;
+  --ground-8: #efeff1;
+  --ground-9: #e4e4e7;
+  --ground-10: #d4d4d8;
+  --ground-11: #d4d4d8;
+  --mf: #7fb2ff;
+  --rar-satanic: #ff6a6a;
+}

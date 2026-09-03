@@ -2,6 +2,7 @@ const icons = import.meta.glob('./assets/icons/*.png', { eager: true, import: 'd
 const buffIcons = import.meta.glob('./assets/buffs/*.png', { eager: true, import: 'default' });
 import defaultBuffIcon from './assets/game/satanic_star.png';
 import { art } from './skin.svelte.js';
+import { t, actZone } from './say.svelte.js';
 
 /// One of the app's own icons — the clock on the session chip, the skull on the
 /// boss count — by name.
@@ -87,8 +88,8 @@ const DEBUFFS_LIST = [
 
 export function debuffInfo(id) {
   const d = DEBUFFS_LIST[id - 1];
-  if (!d) return { name: `Unknown Debuff ${id}`, desc: '' };
-  return { name: d[0], desc: d[1] };
+  if (!d) return { name: `${t('Unknown Debuff')} ${id}`, desc: '' };
+  return { name: t(d[0]), desc: t(d[1]) };
 }
 
 const ZONES = {
@@ -106,18 +107,31 @@ const ZONES = {
 export function buffInfo(id) {
   const b = BUFFS[id];
   const ic = buffIcons[`./assets/buffs/${id}.png`] ?? defaultBuffIcon;
-  if (!b) return { name: `Unknown Buff ${id}`, desc: '', icon: ic };
-  return { name: b[0], desc: b[1], icon: ic };
+  if (!b) return { name: `${t('Unknown Buff')} ${id}`, desc: '', icon: ic };
+  return { name: t(b[0]), desc: t(b[1]), icon: ic };
 }
 
 /// Every buff in the table, in id order, ready to draw — the picker on the
 /// Alerts page and nothing else. Derived rather than written out a second time:
 /// a hand-kept copy is a thing to forget when the game adds a buff, and what it
 /// would cost is an alert that never fires for a buff nobody deselected.
+/// The name and the description are read through getters rather than spelled
+/// into the object: this list is built once when the module loads, which is
+/// before the language file has arrived, and a plain string would have been
+/// the English for the life of the window.
 export const ALL_BUFFS = Object.keys(BUFFS)
   .map(Number)
   .sort((a, b) => a - b)
-  .map((id) => ({ id, ...buffInfo(id) }));
+  .map((id) => ({
+    id,
+    icon: buffIcons[`./assets/buffs/${id}.png`] ?? defaultBuffIcon,
+    get name() {
+      return t(BUFFS[id][0]);
+    },
+    get desc() {
+      return t(BUFFS[id][1]);
+    },
+  }));
 
 export { defaultBuffIcon };
 
@@ -128,7 +142,9 @@ export function zoneName(raw) {
     const act = +parts[1];
     const idx = +parts[2];
     const names = ZONES[act];
-    if (names && idx >= 1 && idx <= names.length) return `Act ${act} : ${names[idx - 1]}`;
+    if (names && idx >= 1 && idx <= names.length) {
+      return `${t('Act')} ${act} : ${actZone(act, idx) || names[idx - 1]}`;
+    }
   }
   return String(raw);
 }

@@ -1,0 +1,853 @@
+/* The plain skin's shape.
+ *
+ * theme.css gives it a palette; this gives it everything else — the surfaces,
+ * the scale, the radii, the rings. The two are separate because a season only
+ * needs the first: it is the same nine-slice PNGs in other colours. Plain is
+ * the absence of them, and `skin.svelte.js` is what stops them arriving.
+ *
+ * Written by hand rather than generated: a type scale and a border radius are
+ * not a hue shift, and there is nothing here for gen_theme.py to compute.
+ *
+ * Two things to know before editing.
+ *
+ * Class names are not unique across components. Svelte scopes a component's CSS
+ * to that component, so Runs can call a row `.find` while Codex calls a search
+ * box the same, and neither notices. This file is global and sees both, so
+ * anything ambiguous is qualified by its tag — `input.find`, `button.tier`,
+ * `span.place`.
+ *
+ * Svelte's scoping is not weightless. It stamps the scoping class onto the
+ * first compound selector and wraps the rest in `:where()`, so a component rule
+ * of two classes and a pseudo-class outranks `html[data-skin='plain'] .x y`.
+ * Where that matters it is called out at the rule.
+ *
+ * Everything is scoped under `html[data-skin='plain']`, so the game skin cannot
+ * see it. The two names on `:root` are the exception: both skins read them, and
+ * declaring the default here keeps it next to the answer that overrides it.
+ */
+
+:root {
+  /* The face every panel asks for by name. Declared here rather than in
+     theme.css because a season does not change it and gen_theme.py has nothing
+     to compute; only the plain skin answers differently. */
+  --face: 'CookieRun Bold', sans-serif;
+  /* The wash under anything picked or hovered, as channels so a component can
+     choose its own alpha. It was written out eleven times as the game's red;
+     one name is what let the plain skin answer differently. */
+  --pick-rgb: 150, 37, 56;
+}
+
+html[data-skin='plain'] {
+  /* One place for the shape, so a panel and a button cannot drift apart.
+     Three surfaces, which is the whole difference between this and the first
+     attempt: the window is darker than the boxes on it, and a control is
+     lighter than both. One near-black for all three is what read as flat. */
+  --plain-window: #09090b;
+  --plain-slab: #18181b;
+  --plain-slab-2: #27272a;
+  --plain-hover: #3f3f46;
+  /* A hairline of white rather than a grey: over any of the three surfaces it
+     lands one step above whatever is under it, which is why the same value can
+     edge a card and an input. */
+  --plain-line: rgb(255 255 255 / 0.10);
+  --plain-line-lit: rgb(255 255 255 / 0.16);
+  /* Under shadcn's own rounded-xl/rounded-md: 14px on a card read as a phone
+     app rather than as a tool. */
+  --plain-round: 8px;
+  --plain-round-sm: 5px;
+  --plain-ring: 0 0 0 3px rgb(167 139 250 / 0.45);
+  /* The inset a card gets. The art was 6px wide and that became the only
+     padding these boxes had, which is why the skin read as cramped; twelve was
+     the other extreme. Measured against the game skin on the same window with
+     the same session, twelve made every card a quarter taller and pushed the
+     Item timeline off the bottom of the Statistics tab entirely. Eight keeps
+     the card reading as a card and gives that back. */
+  --plain-inset: 8px;
+
+  /* The pixel font is the game's, and it is the loudest thing about the old
+     skin. The system's own is what a modern window uses, and it carries the
+     eleven languages the item names come in — which the pixel font never did.
+     Every panel reads --face, so this one line reaches all of them. */
+  --face: ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: 0;
+
+  /* A picked row was washed in the game's red, which on a grey window was the
+     one thing left of the old skin. It takes the accent instead — the same
+     colour the chosen tab is edged in. */
+  --pick-rgb: 124, 92, 255;
+
+  /* Read by the session-rates canvas, which cannot see a stylesheet. The fill
+     is asked for by name because only this skin wants it, and the gold line
+     needs a colour of its own now that the accent is not gold. */
+  --graph-fill: on;
+  /* Everything else this file decides in colour, so the light skin below is a
+     list of values rather than a second copy of the file. */
+  --plain-press: #1f1f23;
+  --plain-tab-press: #323238;
+  --plain-tab-on: rgb(167 139 250 / 0.16);
+  --plain-sep: rgb(255 255 255 / 0.08);
+  --plain-rowhover: rgb(255 255 255 / 0.04);
+  --plain-line-hover: rgb(255 255 255 / 0.24);
+  --plain-shadow: 0 1px 3px rgb(0 0 0 / 0.45);
+  --plain-card-bg: rgb(24 24 27 / 0.72);
+  --plain-chip-bg: rgb(0 0 0 / 0.42);
+  --plain-glow-a: rgb(167 139 250 / 0.09);
+  --plain-glow-b: rgb(96 130 255 / 0.065);
+  --plain-danger: #dc2626;
+  /* the faint text above, at the weakest a ground will still carry */
+  --plain-faint: #95959e;
+  /* `.note.warn` asks for `--gold`, which is not a token in any palette, so it
+     has always taken its own literal fallback. Answering by that name is the
+     smallest fix and leaves the component alone. */
+  --gold: #e8c860;
+  /* what is legible ON the accent, which is not the same answer on both grounds:
+     #a78bfa needs ink, #7c3aed needs paper */
+  --plain-on-accent: #18181b;
+  /* the two meanings the accent used to carry, and the stat-card icon tints */
+  --tint-ang: #f6f794;
+  --tint-gold: #e2c168;
+  --tint-xp: #a78bfa;
+  --tint-kills: #35d3c1;
+  --graph-gold: var(--tint-gold);
+  --graph-xp: #a06ae0;
+}
+
+/* Two colours the palette's `--gold-*` was also carrying, put back where they
+   belong. Under the game skin the accent, the Angelic rarity and the gold
+   counter were all the same gold, so one token served three jobs and nobody
+   had to tell them apart. A violet accent does: without this, an Angelic item
+   is yellow on the Statistics tab and the accent's colour on Alerts and the
+   Watchlist, which is the rarity saying two different things about itself. */
+html[data-skin='plain'] .c-ang,
+html[data-skin='plain'] .row.c-ang { color: var(--tint-ang); }
+html[data-skin='plain'] .row.c-ang { border-left-color: var(--tint-ang); }
+html[data-skin='plain'] .c-gold { color: var(--tint-gold); }
+
+/* The cards.
+
+   Matched on the inline style rather than on a list of class names. Every
+   element wearing nine-slice art asks for it there — `style:border-image-source
+   ="url({art(...)})"` — and nothing else does, so this reaches exactly the
+   boxes the art left empty and no others. The hand-written list did not: it
+   named `.head`, which is a heading and never wore anything, and drew a
+   full-width slab around two words on the About tab. */
+html[data-skin='plain'] [style*='border-image-source'] {
+  border: var(--plain-inset) solid transparent;
+  border-radius: var(--plain-round);
+  background: var(--plain-slab);
+  image-rendering: auto;
+}
+
+/* Most of them are not cards.
+   
+   A tab here is one panel cut into sections, not a board of independent
+   objects, and giving each section a plate said the opposite: on the Watchlist
+   the one-row sound strip was framed exactly as heavily as a list of sixteen
+   items, and four plates stacked down a column read as four things rather than
+   as one page. So a section is the page — a heading, a rule under it, and its
+   contents — and a surface is kept only by what is genuinely a card: the four
+   figures across the top of Statistics, the clock beside them, About's blocks,
+   and the overlay's chips, which have no page to sit on at all.
+   
+   `input` is excluded because a field is a control and has to look like one;
+   its own rule further down gives it the raised ground. `.menu` is excluded
+   because it floats over the page: a popup with no ground shows whatever it
+   was opened on top of straight through its own text. */
+html[data-skin='plain'] [style*='border-image-source']:not(.panel):not(.pane):not(.card):not(.clock):not(.chip):not(.menu):not(input) {
+  background: none;
+  box-shadow: none;
+  border-width: 6px;
+}
+
+/* With no plate under it, the heading is what says a section started, and the
+   rule under the heading is what says where. */
+html[data-skin='plain'] .box-head,
+html[data-skin='plain'] .boxhead,
+html[data-skin='plain'] .sechead,
+html[data-skin='plain'] .railhead,
+html[data-skin='plain'] .head {
+  border-bottom: 1px solid var(--plain-sep);
+  padding-bottom: 6px;
+}
+
+/* The window under them is darker, which is where the depth comes from: the
+   tab rail and the title bar are the window showing through, the cards stand
+   on it. #09090b and #18181b, as shadcn puts background under card. */
+html[data-skin='plain'] .panel {
+  background: var(--plain-window);
+  border-color: transparent;
+  outline: none;
+}
+
+/* The region a tab draws into is the window itself, the way a page is: the
+   cards on it are what carry a surface. */
+html[data-skin='plain'] .pane {
+  background: none;
+  border-width: 0;
+  outline: none;
+}
+
+/* The overlay's own chips sit over the game and want less weight than a card
+   in a window does — and its rows are a fixed 140 + 124 + 124, so the card's
+   inset would push the numbers out of them. Six pixels, as the art was. */
+html[data-skin='plain'] div.chip {
+  border-width: 6px;
+  border-radius: var(--plain-round-sm);
+  background: var(--plain-chip-bg);
+}
+
+/* The buttons. They carry their art in --btn/--btn-hover/--btn-down, which are
+   `none` here, so the three states become three grounds. */
+html[data-skin='plain'] .btn,
+html[data-skin='plain'] button.more {
+  border: 1px solid transparent;
+  border-radius: var(--plain-round-sm);
+  background: var(--plain-slab-2);
+  image-rendering: auto;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+html[data-skin='plain'] .btn:hover,
+html[data-skin='plain'] button.more:hover { background: var(--plain-hover); }
+html[data-skin='plain'] .btn:active { background: var(--plain-press); }
+
+/* The tab rail is a list, not a stack of buttons — eight bordered plates down
+   the side is the one place the window still read as a toolbar. Flat, with the
+   window showing through, and only the hover and the chosen one painted: which
+   is what the side bar it is standing in for does. */
+html[data-skin='plain'] .tab {
+  border: 1px solid transparent;
+  border-radius: var(--plain-round-sm);
+  background: none;
+  image-rendering: auto;
+  transition: background 0.12s, color 0.12s;
+  /* The 6px border it declared was its left inset, not a line; collapsing it
+     to 1px put the label against the edge of its own highlight. Padding says
+     the same thing without pretending to be a border. */
+  padding: 0 10px;
+}
+html[data-skin='plain'] .tab:hover { background: var(--plain-slab-2); }
+html[data-skin='plain'] .tab:active { background: var(--plain-tab-press); }
+/* The chosen tab, and anything armed to do something final, keep the accent
+   the palette already carries rather than a colour of their own. Three
+   different controls can be on — the tab rail, the tier floor and the
+   cards/table pair — and being on should look the same in all three. */
+html[data-skin='plain'] .tab.on {
+  background: var(--plain-tab-on);
+  color: var(--bone-13);
+  box-shadow: inset 3px 0 0 var(--gold-2);
+}
+/* A tier and a view are pressed, not navigated to, so they take the accent as
+   a fill the way shadcn's primary button does — with dark text on it, because
+   white on #a78bfa measures 2.4 and is unreadable. */
+html[data-skin='plain'] button.tier.on,
+html[data-skin='plain'] .pick.on {
+  border-color: transparent;
+  background: var(--gold-2);
+  color: var(--plain-on-accent);
+  font-weight: 600;
+}
+/* The row a list has landed on wears the same violet, and the bar down its
+   side is the accent rather than the grey `--edge-2b` is everywhere else. */
+html[data-skin='plain'] .row.on { border-left-color: var(--gold-2); }
+html[data-skin='plain'] .btn.armed,
+html[data-skin='plain'] .link.armed {
+  border-color: var(--rar-satanic);
+  color: var(--rar-satanic);
+}
+
+/* The dropdown draws its own chevron in two gradients, so only the colour
+   underneath can be set here — the shorthand would take the arrow with it. */
+html[data-skin='plain'] select.picker {
+  border: 1px solid var(--plain-line-lit);
+  border-radius: var(--plain-round-sm);
+  background-color: var(--plain-slab-2);
+  transition: box-shadow 0.15s;
+}
+
+/* Anything typed into is a control, not a box: it takes the light ground even
+   where it was wearing the art the boxes wore, so a field is never the same
+   colour as the panel it sits on.
+
+   `input.find`, not `.find`. Svelte scopes a component's CSS to that component,
+   so two components can spend the same class name on two different things and
+   never collide — Runs calls a row of its finds list `.find` and Codex calls
+   its search box the same. This file is global and sees both: unqualified, it
+   turned every row of a run's loot into a bordered card. The tag is what tells
+   them apart, and the same is true of `.tier`, `.more` and `.place` below. */
+html[data-skin='plain'] input.field,
+html[data-skin='plain'] input.find,
+html[data-skin='plain'] input[type='text'],
+html[data-skin='plain'] input[type='search'] {
+  background: var(--plain-slab-2);
+  border: 1px solid var(--plain-line-lit);
+  outline: none;
+  transition: box-shadow 0.15s;
+  /* same as the tab: the art's 6px was the inset the caret needs */
+  padding: 0 10px;
+}
+
+/* One ring, the accent's at a little under half, wherever the keyboard lands.
+   shadcn draws three pixels of it and moves the border to the ring's colour;
+   nothing else about the control changes. */
+html[data-skin='plain'] select.picker:focus,
+html[data-skin='plain'] input.field:focus,
+html[data-skin='plain'] input.find:focus,
+html[data-skin='plain'] input:focus-visible,
+html[data-skin='plain'] .btn:focus-visible,
+html[data-skin='plain'] .tab:focus-visible,
+html[data-skin='plain'] button.tier:focus-visible,
+html[data-skin='plain'] .pick:focus-visible {
+  outline: none;
+  border-color: var(--gold-2);
+  box-shadow: var(--plain-ring);
+}
+html[data-skin='plain'] select.picker:hover,
+html[data-skin='plain'] input.field:hover,
+html[data-skin='plain'] input.find:hover {
+  border-color: var(--plain-line-hover);
+}
+
+/* A heading is one label; under the art it was split in two colours because
+   the red was the only thing giving a bare box an edge. The box has an edge of
+   its own now. */
+html[data-skin='plain'] .accent { color: var(--bone-4); }
+
+/* `--edge-5`, `--edge-6` and `--edge-1b` are border greys, and half a dozen
+   components spend them on text: a list's rank and count, a drop's odds and
+   tier letter, a timestamp, the × that removes a row.
+   
+   Found by sweeping every text node in both themes against the ground it is
+   actually composited over, which is also how it turned out this was never a
+   light-theme problem: on the dark one the rank and the count measured 1.27,
+   and the timestamps in the Item timeline 2.57. They have been that faint since
+   the skin was written and I had looked straight past them. */
+html[data-skin='plain'] .odds,
+html[data-skin='plain'] .rank,
+html[data-skin='plain'] .count,
+html[data-skin='plain'] .letter,
+html[data-skin='plain'] .lpick,
+html[data-skin='plain'] .ts,
+html[data-skin='plain'] .del {
+  color: var(--plain-faint);
+}
+/* "Cons" is a section heading, not a rarity: the game's #ca4545 measures 4.2 on
+   this card and nothing about the word depends on that exact red. */
+html[data-skin='plain'] .effhead.cons { color: #e06a6a; }
+
+/* The window's own buttons are the last game art on the window: two pixel
+   plates in a corner where everything else is a hairline. The art goes and the
+   two glyphs are drawn, the close keeping the one warm colour a window is
+   allowed.
+
+   `!important`, and it has to be. Svelte 5 stamps the scoping class onto the
+   FIRST compound selector and wraps the rest in `:where()`, so the component's
+   own swap compiles to `.close.svelte-x:hover .close-hover:where(.svelte-x)` —
+   four classes. Nothing written here reaches that without either a made-up
+   third selector or repeating the attribute, and the intent is absolute
+   anyway: under this skin the window art never draws. On hover it did, and the
+   game's amber close plate came up over the red. */
+html[data-skin='plain'] .close img,
+html[data-skin='plain'] .min img {
+  display: none !important;
+}
+html[data-skin='plain'] .close,
+html[data-skin='plain'] .min {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--plain-round-sm);
+  color: var(--bone-6);
+  font-size: 12px;
+  line-height: 1;
+  transition: background 0.12s, color 0.12s;
+}
+html[data-skin='plain'] .close::after { content: '✕'; }
+html[data-skin='plain'] .min::after { content: '─'; }
+html[data-skin='plain'] .min:hover {
+  background: var(--plain-slab-2);
+  color: var(--bone-15);
+}
+html[data-skin='plain'] .close:hover {
+  background: var(--plain-danger);
+  color: #ffffff;
+}
+
+/* The rest of the bordered things: a search box, a zone tag, the row that adds
+   a whole category and the rows the search offers. Nothing on this window has
+   a square corner. */
+html[data-skin='plain'] input.find,
+html[data-skin='plain'] .bulk,
+html[data-skin='plain'] .hit {
+  border-radius: var(--plain-round-sm);
+}
+html[data-skin='plain'] span.place {
+  border-color: transparent;
+  border-radius: 4px;
+  background: var(--plain-slab-2);
+}
+
+/* Small buttons that are not `.btn`: the tier row and the cards/table pair. */
+html[data-skin='plain'] button.tier,
+html[data-skin='plain'] .pick,
+html[data-skin='plain'] button.tolist {
+  border: 1px solid transparent;
+  border-radius: var(--plain-round-sm);
+  background: var(--plain-slab-2);
+}
+
+/* The sliders. Square track, square handle: the last two corners on a window
+   made of rounded ones. */
+html[data-skin='plain'] input[type='range']::-webkit-slider-runnable-track {
+  border: none;
+  border-radius: 3px;
+  background: var(--ground-11);
+}
+html[data-skin='plain'] input[type='range']::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border: none;
+  border-radius: 50%;
+  background: var(--gold-2);
+}
+html[data-skin='plain'] input[type='range']:hover:not(:disabled)::-webkit-slider-thumb {
+  box-shadow: var(--plain-ring);
+}
+
+/* Nothing is pixel art any more, so nothing should be drawn as though it were.
+   The game's own icons are the exception and keep their hard edges. */
+html[data-skin='plain'] * {
+  image-rendering: auto;
+}
+html[data-skin='plain'] .ic,
+html[data-skin='plain'] .coin,
+html[data-skin='plain'] .pin,
+html[data-skin='plain'] .glow,
+html[data-skin='plain'] .icon {
+  image-rendering: pixelated;
+}
+
+/* The scale, which is what the two attempts before this one were missing. They
+   recoloured a game HUD and left it a game HUD: 10px capitals with letter
+   spacing over 11px rows is a dashboard idiom from about 2012, and no palette
+   fixes it.
+   
+   shadcn has two kinds of label and neither shouts. A card is titled in the
+   reading face at 13px semibold; what qualifies a number sits under it at 12px
+   in the muted foreground. Both in sentence case — the capitals and the
+   tracking go. */
+html[data-skin='plain'] .box-head,
+html[data-skin='plain'] .boxhead,
+html[data-skin='plain'] .sechead,
+html[data-skin='plain'] .listhead,
+html[data-skin='plain'] .railhead,
+html[data-skin='plain'] .head,
+html[data-skin='plain'] .effhead {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bone-13);
+  margin-bottom: 6px;
+}
+html[data-skin='plain'] .label,
+html[data-skin='plain'] .subhead,
+html[data-skin='plain'] .row.colhead,
+html[data-skin='plain'] .row.colhead * {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--bone-3);
+}
+/* `.right` is the qualifier a heading carries on its far side — "this session",
+   "0 drops" — and it is the description half of a card title. */
+html[data-skin='plain'] .box-head .right,
+html[data-skin='plain'] .boxhead .right {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--bone-3);
+}
+/* An action written in capitals reads as a heading rather than as something to
+   press. SHOW ALL 155 becomes Show all 155. */
+html[data-skin='plain'] .link {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: var(--bone-3);
+}
+html[data-skin='plain'] .link:hover { color: var(--bone-13); }
+
+/* The body. 13px is shadcn's `text-sm` a point down: the app has to fit a
+   hundred and fifty item rows, and the full 14 costs two of them a screen. */
+html[data-skin='plain'] .box,
+html[data-skin='plain'] .section,
+html[data-skin='plain'] .card,
+html[data-skin='plain'] .rail,
+html[data-skin='plain'] .pane {
+  font-size: 13px;
+  /* 1.5 is shadcn's, and on a card of fifteen rows it costs more than the inset
+     does. This app is a table of counts, not an article.
+
+     13 rather than 12, measured: dropping a point saved eight pixels a card,
+     because the row heights in these tables come from explicit sizes on the
+     spans inside them and not from here. It bought nothing and read smaller. */
+  line-height: 1.4;
+}
+
+/* The controls, at shadcn's own sizes: h-9 with a 8px radius, and the ring on
+   focus rather than a colour change. */
+html[data-skin='plain'] .btn,
+html[data-skin='plain'] button.more,
+html[data-skin='plain'] select.picker,
+html[data-skin='plain'] input.field,
+html[data-skin='plain'] input.find,
+html[data-skin='plain'] button.tier,
+html[data-skin='plain'] .pick {
+  font-size: 13px;
+  min-height: 30px;
+}
+html[data-skin='plain'] .btn,
+html[data-skin='plain'] button.more,
+html[data-skin='plain'] button.tier,
+html[data-skin='plain'] .pick {
+  padding: 5px 10px;
+  font-weight: 500;
+  /* Compact mode lives in a 120px rail, and at 13px with padding either side it
+     wrapped onto two lines and pushed the rail out of shape. It may wrap again
+     now — "Kompaktmodus" fits, "Компактный режим" does not — so the rail is
+     what has to give, not the word. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+/* What a card holds, rather than what it is.
+
+   A card here is a title and then a flat run of rows, and the groups inside it
+   — Notable, Resources, Bosses, Chests — had nothing marking where one ended
+   and the next began. shadcn puts a Separator there. Four pixels of margin
+   either side of a hairline is the whole cost, and it is what makes a card
+   read as structured rather than as a list that happens to have subheadings. */
+html[data-skin='plain'] .subhead {
+  border-top: 1px solid var(--plain-line);
+  margin-top: 6px;
+  padding-top: 4px;
+}
+/* except the first, which sits directly under the title and has the title's
+   own gap above it already */
+html[data-skin='plain'] .subhead:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+/* The tier a drop came in is a fact about it, not prose: shadcn would set it in
+   a Badge, and it reads as one here — muted plate, tight, never as tall as the
+   row it sits in. This is `span.tier`; `button.tier` above is the min-tier
+   control and a different thing entirely. */
+html[data-skin='plain'] span.tier {
+  display: inline-block;
+  /* the column it sits in stretches its cell, and a badge as wide as its
+     column stops reading as a badge and starts reading as a button */
+  width: fit-content;
+  justify-self: center;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--plain-slab-2);
+  color: var(--bone-6);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* A row under the cursor answers. Every list in this app is clickable or
+   informative and none of them said so. */
+html[data-skin='plain'] .drop:hover,
+html[data-skin='plain'] div.find:hover,
+html[data-skin='plain'] .rows .row:not(.colhead):hover {
+  background: var(--plain-rowhover);
+  border-radius: 4px;
+}
+
+/* Depth.
+ *
+ * Everything above makes the window correct: the greys step, the scale is
+ * shadcn's, nothing is a stretched pixel border. A flat fill on a flat ground
+ * still has no light in it, so every surface reads as a rectangle of colour
+ * rather than as something lying on something else — the game skin's art
+ * carried that light, and taking the art away took it too.
+ *
+ * The three rules below put it back.
+ */
+
+/* One. The ground is lit rather than painted: a wide, very soft wash of the
+   accent from the top left and a colder one from the far corner, both at a few
+   percent. Nothing in it is identifiable as a gradient at this strength — it
+   just stops #09090b being the same #09090b in all four corners. */
+html[data-skin='plain'] .panel {
+  background-image:
+    radial-gradient(1100px 620px at 8% -12%, var(--plain-glow-a), transparent 62%),
+    radial-gradient(820px 520px at 104% 108%, var(--plain-glow-b), transparent 60%);
+}
+
+/* and the cards let it through.
+   
+   Lighting the ground and leaving the cards opaque is what made them look
+   stuck on rather than lying there: the wash ran up to the edge of every block
+   and stopped dead. Light does not do that. At seven tenths the card is still
+   plainly a card — the step from the ground is what the colour is chosen for —
+   but the corner of the window it happens to be standing in now reaches it,
+   which is the whole point of lighting a ground at all.
+   
+   `.panel` and `.pane` are excluded by name, and that exclusion is load-bearing.
+   The window itself wears `style:border-image-source` exactly like a card does,
+   so this selector reaches it; written without the exclusion it weighs the same
+   as the `.panel` rule above and, being lower in the file, won. Every window in
+   this app is transparent underneath — that is how the overlay works — so a
+   window at seven tenths is a window you can read the desktop through, and that
+   is what it did.
+
+   `.menu` is excluded for the same reason at a smaller scale: a popup is opened
+   ON TOP of the row it is about, so seven tenths shows that row's own words
+   through its own. */
+html[data-skin='plain'] [style*='border-image-source']:not(.panel):not(.pane):not(.menu) {
+  background-color: var(--plain-card-bg);
+}
+
+/* Two. A card casts a shadow, and that is all it does.
+   
+   It had a highlight along its top edge as well, which was a mistake: the card
+   already carries an `outline` all the way round it, so the top edge was drawing
+   two hairlines one pixel apart. At that spacing they do not read as a lit edge,
+   they read as a strip laid across the top of every block — which is exactly
+   what it looked like. One line per edge. */
+html[data-skin='plain'] [style*='border-image-source'] {
+  box-shadow: var(--plain-shadow);
+}
+/* the overlay lies over the game rather than over a window of its own, and a
+   shadow with nothing under it to fall on is just a dark smudge */
+html[data-skin='plain'] div.chip {
+  box-shadow: none;
+}
+
+/* Three. The four numbers along the top are what the tab is for, and they were
+   set at the same weight as the labels under them. A number that is the answer
+   should look like the answer: heavier, tighter, and sitting on its own line
+   with room around it. */
+html[data-skin='plain'] .card .value {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+html[data-skin='plain'] .card .label {
+  font-size: 12px;
+  color: var(--bone-3);
+}
+html[data-skin='plain'] .card .sub {
+  color: var(--edge-8);
+}
+
+/* Four. An icon on each of the four numbers along the top.
+ *
+ * This is the one thing the window had none of, and the evidence was on the
+ * screen the whole time: the only place that looked alive was the buff list,
+ * because it is the only place with pictures in it. They are drawn here rather
+ * than added to the markup so the game skin, which has its own art and does not
+ * want these, is not touched at all.
+ *
+ * Positional, which is the price of doing it in CSS. `.run` is the row, and it
+ * holds a button for the session clock followed by Gold, XP and Kills; that
+ * order is what these three depend on — see `.run` in Stats.svelte. Lucide's
+ * coins,
+ * zap and swords, inlined because an artifact cannot fetch a stylesheet's
+ * images and a data URI is a colour we control.
+ */
+html[data-skin='plain'] .card { position: relative; }
+/* Painted through a mask rather than drawn in colour: the stroke inside the SVG
+   is thrown away and the tint comes from a variable, so one drawing serves both
+   grounds. A data URI cannot read a custom property, which is why the first
+   version had the colour baked into it and would have needed a second copy of
+   each icon for the light skin. */
+html[data-skin='plain'] .run > .card::after {
+  content: '';
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 17px;
+  height: 17px;
+  opacity: 0.55;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+}
+html[data-skin='plain'] .run > .card:nth-child(2)::after {
+  background: var(--tint-gold);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M18.09 10.37A6 6 0 1 1 10.34 18'/%3E%3Cpath d='M7 6h1v4'/%3E%3Cpath d='m16.71 13.88.7.71-2.82 2.82'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M18.09 10.37A6 6 0 1 1 10.34 18'/%3E%3Cpath d='M7 6h1v4'/%3E%3Cpath d='m16.71 13.88.7.71-2.82 2.82'/%3E%3C/svg%3E");
+}
+html[data-skin='plain'] .run > .card:nth-child(3)::after {
+  background: var(--tint-xp);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z'/%3E%3C/svg%3E");
+}
+html[data-skin='plain'] .run > .card:nth-child(4)::after {
+  background: var(--tint-kills);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='14.5 17.5 3 6 3 3 6 3 17.5 14.5'/%3E%3Cline x1='13' x2='19' y1='19' y2='13'/%3E%3Cline x1='16' x2='20' y1='16' y2='20'/%3E%3Cline x1='19' x2='21' y1='21' y2='19'/%3E%3Cpolyline points='14.5 6.5 18 3 21 3 21 6 17.5 9.5'/%3E%3Cline x1='5' x2='9' y1='14' y2='18'/%3E%3Cline x1='7' x2='4' y1='17' y2='20'/%3E%3Cline x1='3' x2='5' y1='19' y2='21'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='14.5 17.5 3 6 3 3 6 3 17.5 14.5'/%3E%3Cline x1='13' x2='19' y1='19' y2='13'/%3E%3Cline x1='16' x2='20' y1='16' y2='20'/%3E%3Cline x1='19' x2='21' y1='21' y2='19'/%3E%3Cpolyline points='14.5 6.5 18 3 21 3 21 6 17.5 9.5'/%3E%3Cline x1='5' x2='9' y1='14' y2='18'/%3E%3Cline x1='7' x2='4' y1='17' y2='20'/%3E%3Cline x1='3' x2='5' y1='19' y2='21'/%3E%3C/svg%3E");
+}
+
+/* ---------------------------------------------------------------------------
+ * The light one.
+ *
+ * The same skin, the same shape, the same scale: only the values below differ,
+ * which is what all the tokens above are for. The palette itself is a second
+ * LITERAL block in gen_theme.py.
+ *
+ * The colours that carry a meaning cannot simply be reused. Every rarity in
+ * this app was picked to sit on a near-black card, and on paper they stop being
+ * legible rather than merely looking wrong — Set at #45c15a measures 1.9 on
+ * white and Angelic at #f6f794 measures 1.1, which is to say invisible. So each
+ * one is restated here at the same hue and enough depth to be read, and each
+ * was measured rather than eyeballed: the whole set clears 4.5 against white.
+ * ------------------------------------------------------------------------- */
+
+html[data-skin='plain'][data-theme='plainlight'] {
+  --plain-window: #fafafa;
+  --plain-slab: #ffffff;
+  --plain-slab-2: #f4f4f5;
+  --plain-hover: #e4e4e7;
+  --plain-press: #e4e4e7;
+  --plain-tab-press: #e4e4e7;
+  --plain-tab-on: rgb(124 58 237 / 0.10);
+  /* ink at a tenth, where the dark skin used paper at a tenth */
+  --plain-line: rgb(0 0 0 / 0.10);
+  --plain-line-lit: rgb(0 0 0 / 0.14);
+  --plain-line-hover: rgb(0 0 0 / 0.22);
+  --plain-sep: rgb(0 0 0 / 0.09);
+  --plain-rowhover: rgb(0 0 0 / 0.04);
+  /* a shadow on paper is a fraction of what it is in the dark; at 0.45 it looks
+     like a smudge rather than a lift */
+  --plain-shadow: 0 1px 3px rgb(0 0 0 / 0.10);
+  --plain-card-bg: rgb(255 255 255 / 0.85);
+  --plain-chip-bg: rgb(255 255 255 / 0.78);
+  --plain-glow-a: rgb(124 58 237 / 0.07);
+  --plain-glow-b: rgb(96 130 255 / 0.055);
+  --plain-ring: 0 0 0 3px rgb(124 58 237 / 0.28);
+  --plain-danger: #dc2626;
+  /* #7c3aed takes paper, not ink */
+  --plain-on-accent: #ffffff;
+  --plain-faint: #67676f;
+  --gold: #a16207;
+
+  --pick-rgb: 124, 58, 237;
+
+  --tint-ang: #7d6209;
+  --tint-gold: #a16207;
+  --tint-xp: #7c3aed;
+  --tint-kills: #0f766e;
+  --graph-xp: #7c3aed;
+
+  /* the two the generator writes as FIXED, because they mean the same thing in
+     every season — but "the same thing" was only ever true of dark ones */
+  --mf: #1d4ed8;
+  --rar-satanic: #c22626;
+
+  /* The states, which a scan of every hard-coded colour in the components
+     turned up alongside the rarities. Same problem, same fix: #00c88a for "this
+     is good" measures 2.2 on white and #d09090 for "this is a debuff" 2.6.
+     Grouped by what they mean rather than by where they are used, because six
+     files spell the same three ideas differently. */
+  --tint-good: #15803d;
+  --tint-bad: #b91c1c;
+  --tint-warn: #a16207;
+  --tint-cold: #0369a1;
+}
+
+/* The states. */
+html[data-skin='plain'][data-theme='plainlight'] .effhead.pros,
+html[data-skin='plain'][data-theme='plainlight'] .text.copied,
+html[data-skin='plain'][data-theme='plainlight'] .added,
+html[data-skin='plain'][data-theme='plainlight'] .notice { color: var(--tint-good); }
+
+html[data-skin='plain'][data-theme='plainlight'] .effhead.cons,
+html[data-skin='plain'][data-theme='plainlight'] .bad,
+html[data-skin='plain'][data-theme='plainlight'] .del:hover,
+html[data-skin='plain'][data-theme='plainlight'] .trouble.bad .tt,
+html[data-skin='plain'][data-theme='plainlight'] .broke .tt { color: var(--tint-bad); }
+/* Settings says "this could not be saved" in the same class Watchlist says
+   "added" in, so the one that means trouble is named after its own file. */
+html[data-skin='plain'][data-theme='plainlight'] .line .notice { color: var(--tint-bad); }
+html[data-skin='plain'][data-theme='plainlight'] .buffname.cons { color: #be123c; }
+
+html[data-skin='plain'][data-theme='plainlight'] .stale { color: var(--tint-warn); }
+
+/* The clock, stopped. Icy blue is the one state colour that is not a rarity and
+   not a verdict; on paper it wants to be the same idea two shades down. */
+html[data-skin='plain'][data-theme='plainlight'] .val.frozen,
+html[data-skin='plain'][data-theme='plainlight'] .clock.held .value,
+html[data-skin='plain'][data-theme='plainlight'] .panel.held .val { color: var(--tint-cold); }
+html[data-skin='plain'][data-theme='plainlight'] .clock.held .sub { color: #0c4a6e; }
+
+/* Every list surface in this app is black at some alpha — twenty-two of them
+   across eight files, from a tenth for a zebra stripe up to a third for a
+   control. On a near-black card that is a shade; on paper it is a grey slab,
+   and the Watchlist turned into sixteen of them stacked.
+   
+   Restated by role rather than by file, and each one qualified by the container
+   it actually lives in. `.row` alone would have been wrong: About, the overlay
+   and the Shopping List all have rows that never had a background, and giving
+   them one would have striped a list of two facts about the program. */
+html[data-skin='plain'][data-theme='plainlight'] {
+  --sink-1: rgb(0 0 0 / 0.03);
+  --sink-2: rgb(0 0 0 / 0.05);
+  --sink-3: rgb(0 0 0 / 0.07);
+}
+html[data-skin='plain'][data-theme='plainlight'] .rows .row,
+html[data-skin='plain'][data-theme='plainlight'] .items > .row,
+html[data-skin='plain'][data-theme='plainlight'] .scroll > .row,
+html[data-skin='plain'][data-theme='plainlight'] .lrow,
+html[data-skin='plain'][data-theme='plainlight'] .results,
+html[data-skin='plain'][data-theme='plainlight'] .preview {
+  background: var(--sink-1);
+}
+html[data-skin='plain'][data-theme='plainlight'] .rows .row:nth-child(even),
+html[data-skin='plain'][data-theme='plainlight'] .items > .row:nth-child(even) {
+  background: var(--sink-2);
+}
+html[data-skin='plain'][data-theme='plainlight'] .scroll > .row:hover {
+  background: var(--sink-3);
+}
+html[data-skin='plain'][data-theme='plainlight'] .tolist,
+html[data-skin='plain'][data-theme='plainlight'] span.chip,
+html[data-skin='plain'][data-theme='plainlight'] .bulk:disabled,
+html[data-skin='plain'][data-theme='plainlight'] .trouble .tf {
+  background: var(--sink-3);
+}
+/* the dark skin's own hover is white at four percent, which paper swallows */
+html[data-skin='plain'][data-theme='plainlight'] {
+  --plain-rowhover: rgb(0 0 0 / 0.06);
+}
+
+
+
+/* The rarities, restated. Contrast against white in brackets. */
+html[data-skin='plain'][data-theme='plainlight'] .c-sat { color: #b91c1c; }        /* 6.47 */
+html[data-skin='plain'][data-theme='plainlight'] .row.c-sat { border-left-color: #b91c1c; }
+html[data-skin='plain'][data-theme='plainlight'] .c-set { color: #15803d; }        /* 5.02 */
+html[data-skin='plain'][data-theme='plainlight'] .row.c-set { border-left-color: #15803d; }
+html[data-skin='plain'][data-theme='plainlight'] .c-her { color: #0f766e; }        /* 5.47 */
+html[data-skin='plain'][data-theme='plainlight'] .row.c-her { border-left-color: #0f766e; }
+html[data-skin='plain'][data-theme='plainlight'] .c-unh { color: #be185d; }        /* 6.04 */
+html[data-skin='plain'][data-theme='plainlight'] .row.c-unh { border-left-color: #be185d; }
+html[data-skin='plain'][data-theme='plainlight'] .c-myt { color: #9333ea; }        /* 5.38 */
+html[data-skin='plain'][data-theme='plainlight'] .c-relic { color: #0e7490; }      /* 5.31 */
+html[data-skin='plain'][data-theme='plainlight'] .c-xp { color: #7c3aed; }         /* 5.70 */
+html[data-skin='plain'][data-theme='plainlight'] .c-zone { color: #c2410c; }       /* 5.18 */
+
+/* The game's own sprites are drawn for a dark ground and several of them are
+   nearly black; on paper the buff icons and the coin lose their outline. A
+   plate under them gives it back without touching the art. */
+html[data-skin='plain'][data-theme='plainlight'] .ic,
+html[data-skin='plain'][data-theme='plainlight'] .coin,
+html[data-skin='plain'][data-theme='plainlight'] .icon {
+  background: rgb(0 0 0 / 0.06);
+  border-radius: 4px;
+}
