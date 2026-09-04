@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.5 — 2026-09-04
+
+### Added
+
+- Automatic updates — a new version is found on launch and installed from About.
+- A new version's changelog is shown before it installs.
+
+### Fixed
+
+- Each resource is listed under the counter it belongs to.
+
 ## 1.1.4 — 2026-09-04
 
 ### Added

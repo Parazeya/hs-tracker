@@ -10,6 +10,7 @@
   import Watchlist from './Watchlist.svelte';
   import Settings from './Settings.svelte';
   import About from './About.svelte';
+  import { update, lookForUpdate } from './update.svelte.js';
   import Codex from './Codex.svelte';
 
   // Steam in a sandbox is a Linux problem and naming it on Windows sends a
@@ -49,6 +50,13 @@
   // its timeline and its graph never moved and no tab looked selected — which
   // reads exactly like the window being broken, until the next click on a tab
   // quietly repairs it.
+  // Once a launch, and from here because this window is the one that is always
+  // open. What it finds puts a dot on the About tab; nothing else happens
+  // without a click.
+  $effect(() => {
+    lookForUpdate();
+  });
+
   const remembered = recall('section');
   let section = $state(
     SECTIONS.some((s) => s.id === remembered) ? remembered : 'stats'
@@ -265,7 +273,10 @@
   <div class="body">
     <nav class="nav" data-tauri-drag-region>
       {#each SECTIONS as s}
-        <button class="tab" class:on={s.id === section} onclick={() => (section = s.id)}>{t(s.label)}</button>
+        <button class="tab" class:on={s.id === section} onclick={() => (section = s.id)}>
+          {t(s.label)}
+          {#if s.id === 'about' && update.found}<i class="dot" title={update.found.version}></i>{/if}
+        </button>
       {/each}
 
       <div class="spacer"></div>
@@ -469,6 +480,16 @@
     padding: 0 3px;
     cursor: pointer;
     text-shadow: 0 1px 0 var(--ground-1);
+  }
+  /* a new version is waiting behind this tab */
+  .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 5px;
+    vertical-align: middle;
+    border-radius: 50%;
+    background: var(--gold-2);
   }
   .tab:hover {
     color: var(--bone-10);

@@ -22,6 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadSigningKey } from './paths.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -103,6 +104,12 @@ function ensureImage(image) {
 
 mkdirSync(OUT, { recursive: true });
 
+// An unsigned AppImage still installs by hand; it just cannot be offered as an
+// update. `npm run all` insists on the key, this one only says so.
+if (!loadSigningKey()) {
+  console.log('\n  no signing key, so the AppImage will carry no .sig\n');
+}
+
 function bundle(image, bundles) {
   ensureImage(image);
   console.log(`\n▸ ${image.tag}: ${bundles.join(', ')}\n`);
@@ -113,6 +120,11 @@ function bundle(image, bundles) {
     '-v', `${image.cargo}:/cargo`,
     '-v', `${image.target}:/target`,
     '-e', `BUNDLES=${bundles.join(',')}`,
+    // By name, not by value: the key reaches the container through the
+    // environment instead of sitting in a command line every process on the
+    // host can read.
+    '-e', 'TAURI_SIGNING_PRIVATE_KEY',
+    '-e', 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
     image.tag,
   ]);
 }

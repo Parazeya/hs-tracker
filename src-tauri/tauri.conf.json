@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HS Tracker",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "identifier": "com.hstracker.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -121,6 +121,15 @@
         "sidebarImage": "installer/sidebar.bmp",
         "installerHooks": "installer/hooks.nsh"
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Parazeya/hs-tracker/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ2QTMyRjE2MzY0OUZGMzcKUldRMy8wazJGaStqMXJDNHJvWHRKeHdjTXp2MWtWcTFWRllERGZHL1ZEV05xTGg4T3U5aG5EY2QK"
     }
   }
 }

@@ -24,19 +24,19 @@
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.4/HS.Tracker_1.1.4_x64-setup.exe">HS.Tracker_1.1.4_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.5/HS.Tracker_1.1.5_x64-setup.exe">HS.Tracker_1.1.5_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.4/HS.Tracker_1.1.4_amd64.AppImage">HS.Tracker_1.1.4_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.5/HS.Tracker_1.1.5_amd64.AppImage">HS.Tracker_1.1.5_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.4/HS.Tracker_1.1.4_amd64.deb">HS.Tracker_1.1.4_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.5/HS.Tracker_1.1.5_amd64.deb">HS.Tracker_1.1.5_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.4/HS.Tracker-1.1.4-1.x86_64.rpm">HS.Tracker-1.1.4-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.5/HS.Tracker-1.1.5-1.x86_64.rpm">HS.Tracker-1.1.5-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
@@ -203,6 +203,14 @@ chmod +x ./HS\ Tracker_*.AppImage               # a fresh download has no execut
 ./HS\ Tracker_*.AppImage --appimage-extract     # gives ./squashfs-root
 sudo ./squashfs-root/AppRun
 ```
+
+### Updates
+
+HS Tracker looks for a newer version when it starts and puts a dot on the
+**About** tab when it finds one. The tab shows what that version changes and
+installs it on a click; nothing is downloaded before that. The Windows installer
+and the AppImage update themselves — a `.deb` or `.rpm` is replaced the way the
+package manager replaced it in the first place.
 
 ## Using it
 

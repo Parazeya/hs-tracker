@@ -66,6 +66,11 @@ if [[ ",${BUNDLES}," == *",appimage,"* ]]; then
   while IFS= read -r -d '' img; do
     echo "    $(basename "$img")"
     /usr/local/bin/trim-appimage.sh "$img"
+    # The bundler signed the AppImage it wrote, and trimming wrote a different
+    # one. Sign what actually leaves here, or the updater refuses it.
+    if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+      tauri signer sign "$img" >/dev/null
+    fi
   done < <(find "${CARGO_TARGET_DIR}/release/bundle" -type f -name '*.AppImage' -print0)
 fi
 
@@ -76,7 +81,7 @@ while IFS= read -r -d '' f; do
   cp -f "$f" /out/
   echo "    $(basename "$f")"
   found=1
-done < <(find "${CARGO_TARGET_DIR}/release/bundle" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -print0)
+done < <(find "${CARGO_TARGET_DIR}/release/bundle" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.sig' \) -print0)
 [ "$found" = 1 ] || { echo "nothing was produced" >&2; exit 1; }
 
 # The mount is root-owned inside; hand the files back to whoever owns /out.
