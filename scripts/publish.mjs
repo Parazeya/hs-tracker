@@ -9,6 +9,10 @@
 // cut from the top of CHANGELOG.md exactly as the workflow cut them, and the
 // artifacts from release/ attached in one call.
 //
+// It also writes latest.json — the manifest the app's updater reads: the new
+// version, this release's changelog section, and for each platform the artifact
+// to fetch and the signature to check it against.
+//
 //   npm run publish              # the version in package.json
 //   npm run publish -- --draft   # create it unpublished, to look at first
 //   npm run publish -- --dry     # say what would happen and stop
@@ -122,9 +126,48 @@ if (!notes.includes(version)) {
   die(`CHANGELOG.md opens with "${changelog[first].trim()}", which is not ${version}`);
 }
 
+// ── the manifest the updater reads ───────────────────────────────────────────
+//
+// One entry per platform that can install over itself: the Windows installer
+// and the AppImage. A .deb or .rpm is the package manager's to replace, so
+// neither is listed and neither machine is offered an update it cannot apply.
+//
+// The signature is the .sig the bundler wrote beside each artifact, carried
+// inline; the app refuses anything the private half of the key did not sign.
+// The URL has to be the one GitHub serves from, and GitHub writes a space in an
+// asset name as a dot.
+const TARGETS = [
+  ['windows-x86_64', (n) => n.endsWith('-setup.exe')],
+  ['linux-x86_64', (n) => n.endsWith('.AppImage')],
+];
+const slug = run('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
+const platforms = {};
+const unsigned = [];
+for (const [target, wanted] of TARGETS) {
+  const name = files.find((n) => wanted(n));
+  if (!name) continue;
+  const sig = join(dir, name + '.sig');
+  if (!existsSync(sig)) {
+    unsigned.push(name);
+    continue;
+  }
+  platforms[target] = {
+    signature: readFileSync(sig, 'utf8').trim(),
+    url: `https://github.com/${slug}/releases/download/${tag}/${name.replace(/ /g, '.')}`,
+  };
+}
+const manifest = { version, notes, pub_date: new Date().toISOString(), platforms };
+const manifestPath = join(dir, 'latest.json');
+
 console.log(`\n  ${tag}\n`);
 for (const name of files.sort()) console.log(`    ${name}`);
 if (missing.length) console.log(`\n    missing: ${missing.join(', ')}`);
+console.log(`\n    updates  ${Object.keys(platforms).join(', ') || 'nothing was signed'}`);
+if (unsigned.length) {
+  // Not fatal: the release is still worth cutting. But everyone on that
+  // platform stays where they are until a signed build replaces it.
+  console.log(`    unsigned ${unsigned.join(', ')}`);
+}
 console.log(`\n    notes    ${changelog[first].trim()}`);
 console.log(`    release  ${has('--draft') ? 'draft' : 'published'}\n`);
 
@@ -150,7 +193,11 @@ const exists = (() => {
   }
 })();
 
-const paths = files.map((n) => join(dir, n));
+writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+
+// The signatures are already inside latest.json; on the release page they would
+// be four more files nobody downloads.
+const paths = files.filter((n) => !n.endsWith('.sig')).map((n) => join(dir, n));
 if (exists) {
   console.log(`  the release is already there; ${has('--replace') ? 'replacing' : 'adding what is missing'}\n`);
   const upload = ['release', 'upload', tag, ...paths];
@@ -172,6 +219,13 @@ if (exists) {
     ],
     { stdio: 'inherit' },
   );
+}
+
+// Always replaced, and uploaded after the artifacts it points at: it is one
+// file per release rather than a new one each time, and a rerun that fills in a
+// missing package has to leave the manifest describing what is actually there.
+if (Object.keys(platforms).length) {
+  run('gh', ['release', 'upload', tag, manifestPath, '--clobber'], { stdio: 'inherit' });
 }
 
 console.log(`\n  ${run('gh', ['release', 'view', tag, '--json', 'url', '-q', '.url']).trim()}\n`);

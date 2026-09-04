@@ -1,6 +1,6 @@
 [package]
 name = "hs-tracker"
-version = "1.1.4"
+version = "1.1.5"
 description = "HS Tracker — Hero Siege session tracker overlay"
 # What the packages print. Without it the RPM header says "License: Unspecified"
 # for a repository that has carried a LICENSE file all along, and a distribution
@@ -28,6 +28,12 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-dialog = "2"
 # Refuses to be started twice; see the plugin registration in `run`.
 tauri-plugin-single-instance = "2"
+# Fetches the next release, checks its signature and runs the installer. The
+# public half of the key that signs them is in tauri.conf.json; the private half
+# never leaves the machine that builds a release.
+tauri-plugin-updater = "2"
+# and restarts the app once the installer has finished with it
+tauri-plugin-process = "2"
 # wayland-data-control lets the clipboard work in a Wayland session that has no
 # XWayland; on Windows the feature is inert
 arboard = { version = "3", features = ["wayland-data-control"] }

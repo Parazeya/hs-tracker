@@ -23,7 +23,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { VCVARS } from './paths.mjs';
+import { SIGNING_KEY, VCVARS, loadSigningKey } from './paths.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // only this build's artifacts are collected; older ones stay where they are
@@ -33,6 +33,19 @@ const has = (f) => args.includes(f);
 const only = has('--linux') || has('--windows');
 const wantWindows = !only || has('--windows');
 const wantLinux = !only || has('--linux');
+
+// Every bundle is signed, because every bundle is one the app may be asked to
+// install over itself. Without the key `tauri build` stops on its own; stopping
+// here instead says which file is missing.
+if (!loadSigningKey()) {
+  console.error(
+    `\n  No signing key at ${SIGNING_KEY}.\n\n` +
+      '    npx tauri signer generate -w ' + SIGNING_KEY + '\n\n' +
+      '    The public half goes in src-tauri/tauri.conf.json under plugins.updater.\n' +
+      '    Changing it strands everyone already running a build signed by the old one.\n',
+  );
+  process.exit(1);
+}
 
 const run = (file, argv) => {
   console.log(`\n  $ ${file} ${argv.join(' ')}\n`);
@@ -107,13 +120,15 @@ if (wantLinux) {
   collect(join(root, 'dist-linux'), ['.deb', '.rpm']);
   try {
     run('node', ['scripts/build-linux.mjs', '--appimage']);
-    collect(join(root, 'dist-linux'), ['.AppImage']);
+    collect(join(root, 'dist-linux'), ['.AppImage', '.AppImage.sig']);
   } catch {
     console.log('\n  no AppImage this time; the .deb and .rpm above are unaffected.');
   }
 }
 
-if (wantWindows) collect(join(root, 'src-tauri', 'target', 'release', 'bundle'), ['.exe', '.msi']);
+if (wantWindows) {
+  collect(join(root, 'src-tauri', 'target', 'release', 'bundle'), ['.exe', '.msi', '.exe.sig']);
+}
 
 console.log(`\n  release/  —  everything for ${version}, in one place:`);
 show(RELEASE, ['.exe', '.msi', '.deb', '.rpm', '.AppImage']);

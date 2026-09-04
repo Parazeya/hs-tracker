@@ -70,6 +70,29 @@ export const VCVARS =
     'C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build/vcvars64.bat',
   );
 
+/// The private half of the key an update is signed with. It lives outside the
+/// checkout on purpose: the app installs nothing this key did not sign, so a
+/// copy in the repository would hand that power to everyone who clones it.
+///
+/// `tauri signer generate -w ~/.tauri/hs-tracker.key` writes it, and the public
+/// half beside it belongs in tauri.conf.json.
+export const SIGNING_KEY =
+  read('TAURI_SIGNING_PRIVATE_KEY_PATH') ||
+  join(process.env.USERPROFILE || process.env.HOME || '.', '.tauri', 'hs-tracker.key');
+
+/// tauri reads the key from the environment rather than from a path, so put it
+/// there. False if there is no key to load — the caller decides what that
+/// means, and for a release build it means stopping.
+export function loadSigningKey() {
+  if (process.env.TAURI_SIGNING_PRIVATE_KEY) return true;
+  if (!existsSync(SIGNING_KEY)) return false;
+  process.env.TAURI_SIGNING_PRIVATE_KEY = readFileSync(SIGNING_KEY, 'utf8').trim();
+  // Empty is a password, and one tauri accepts; unset is a prompt nobody is
+  // there to answer.
+  process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = read('TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
+  return true;
+}
+
 /// Say which one is missing and what to set, rather than failing on a path the
 /// reader has never heard of.
 export function require(name, value, what) {

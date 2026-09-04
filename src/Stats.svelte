@@ -515,14 +515,25 @@
           </div>
 
           <div class="subhead">{t("Resources")}</div>
-          <div class="tally">
-            {#each RESOURCES as [kind, label]}
-              <div class="tallyrow"><span class="dim">{t(label)}</span><b>{fmt(snap?.resources?.[kind])}</b></div>
-              {#each (snap?.resource_items ?? []).filter((r) => r.kind === kind) as r (r.name)}
-                <div class="tallyrow named"><span class="dim">{t(nameOf(r.name))}</span><b>{fmt(r.total)}</b></div>
-              {/each}
-            {/each}
-          </div>
+          <!-- One block per counter, and the names inside it.
+               Header and names used to share a single grid, which fills left to
+               right: "Keys" landed in the first cell of a row and the twelve
+               keys under it carried on across the other three columns and into
+               whatever came next, so a rune sat under the word Materials. Each
+               counter now owns its own grid and nothing reads across. -->
+          {#each RESOURCES as [kind, label]}
+            {@const names = (snap?.resource_items ?? []).filter((r) => r.kind === kind)}
+            <div class="group">
+              <div class="grouphead"><span>{t(label)}</span><b>{fmt(snap?.resources?.[kind])}</b></div>
+              {#if names.length}
+                <div class="tally">
+                  {#each names as r (r.name)}
+                    <div class="tallyrow named"><span class="dim">{t(nameOf(r.name))}</span><b>{fmt(r.total)}</b></div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
         </div>
 
         {#if bosses.length || chests.length || cleared.length}
@@ -974,6 +985,24 @@
     padding: 2px 2px 2px 0;
     border-bottom: 1px solid rgba(58, 43, 43, 0.7);
   }
+  /* a counter and the names it is made of, kept together */
+  .group { padding-top: 4px; }
+  .grouphead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 2px 3px 0;
+    border-bottom: 1px solid var(--edge-2b);
+  }
+  .grouphead span {
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--bone-6);
+  }
+  .grouphead b { font-size: 12px; color: var(--gold-2); }
+
   /* one resource under the count it belongs to */
   .tallyrow.named { padding-left: 12px; border-bottom-color: rgba(58, 43, 43, 0.35); }
   .tallyrow.named span, .tallyrow.named b { font-size: 10px; opacity: 0.78; }

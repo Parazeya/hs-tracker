@@ -1,16 +1,28 @@
 <script>
+  import { relaunch } from '@tauri-apps/plugin-process';
   import { t, locale } from './say.svelte.js';
   import { invoke } from './bridge.js';
+  import { update, lookForUpdate } from './update.svelte.js';
   import { art } from './skin.svelte.js';
   import appIcon from '../src-tauri/icons/128x128.png';
 
   let info = $state(null);
-  /// null before anyone asks — the check is a button, never something the app
-  /// does on its own. This is the only request the app ever makes, and it is
-  /// worth keeping that true.
+  /// What GitHub says the newest release is. Null until asked, and asked only
+  /// by the button: this is the fallback for a release with no manifest, and
+  /// the manifest is what the launch check reads. See update.svelte.js.
   let latest = $state(null);
   let checking = $state(false);
   let failed = $state('');
+
+  /// The release found at launch, or by the button: it carries the version, the
+  /// date and the notes — which are this release's own section of the
+  /// changelog, put there by `npm run publish`.
+  const ready = $derived(update.found);
+  /// Downloading. `got` and `total` are bytes, and `total` is what the server
+  /// said the download would be — nothing is drawn from it until it arrives.
+  let installing = $state(false);
+  let got = $state(0);
+  let total = $state(0);
 
   $effect(() => {
     invoke('about').then((a) => (info = a)).catch(() => {});
@@ -33,6 +45,15 @@
     checking = true;
     failed = '';
     latest = null;
+    // The manifest first: it says both that there is a newer release and how to
+    // install it. GitHub is asked only when that comes back with nothing — a
+    // release cut before the manifest existed still has a version worth naming,
+    // and a download page to send someone to.
+    if (await lookForUpdate(true)) {
+      checking = false;
+      return;
+    }
+    failed = update.why;
     try {
       const owner = info.repo.replace('https://github.com/', '');
       const r = await fetch(`https://api.github.com/repos/${owner}/releases/latest`, {
@@ -47,10 +68,37 @@
         newer: newer(tag, info.version),
         when: release.published_at ? new Date(release.published_at).toLocaleDateString(locale()) : '',
       };
+      // GitHub answered, so whatever the updater said on the way here is no
+      // longer the news.
+      failed = '';
     } catch (e) {
       failed = String(e.message ?? e);
     }
     checking = false;
+  }
+
+  /// Fetch it, check its signature, run the installer, come back up.
+  ///
+  /// The signature is the plugin's own doing: an artifact this key did not sign
+  /// is refused before a byte of it is run. What is left here is telling the
+  /// player how far along it is, because the download is the slow part and a
+  /// button that goes quiet reads as one that did nothing.
+  async function install() {
+    if (!ready || installing) return;
+    installing = true;
+    failed = '';
+    got = 0;
+    total = 0;
+    try {
+      await ready.downloadAndInstall((e) => {
+        if (e.event === 'Started') total = e.data.contentLength ?? 0;
+        else if (e.event === 'Progress') got += e.data.chunkLength ?? 0;
+      });
+      await relaunch();
+    } catch (e) {
+      failed = String(e?.message ?? e);
+      installing = false;
+    }
   }
 
   const open = (url) => invoke('open_url', { url }).catch((e) => (failed = String(e)));
@@ -118,7 +166,25 @@
         </button>
       </div>
 
-      {#if failed}
+      {#if ready}
+        <div class="good">
+          <b>{ready.version}</b> {t('is out')}{ready.date ? ` — ${String(ready.date).slice(0, 10)}` : ''}.
+          {t('You have')} {info.version}.
+        </div>
+        <!-- What changed, before anything is downloaded. It is the release's own
+             section of the changelog, carried in the manifest. -->
+        {#if ready.body}<pre class="notes">{ready.body}</pre>{/if}
+        <div class="line">
+          <button class="btn wide" disabled={installing} onclick={install}>
+            {installing
+              ? total
+                ? `${t('Downloading')} ${Math.min(100, Math.round((got / total) * 100))}%`
+                : t('Downloading…')
+              : t('Update now')}
+          </button>
+        </div>
+        {#if failed}<div class="bad">{failed}</div>{/if}
+      {:else if failed}
         <div class="bad">{t('Could not check:')} {failed}</div>
       {:else if latest?.newer}
         <div class="good">
@@ -214,5 +280,20 @@
   .good, .ok, .bad { margin-top: 8px; font-size: 11px; line-height: 1.5; }
   .good { color: var(--gold-2); }
   .ok { color: var(--bone-3); }
+  /* the release notes, as they were written */
+  .notes {
+    max-height: 180px;
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--edge-4);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+  }
+
   .bad { color: #e06a6a; }
 </style>
