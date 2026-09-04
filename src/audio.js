@@ -34,10 +34,15 @@ const DEFAULTS = {
   relic: relicWav,
 };
 
-// A custom file beside the exe wins over the built-in chime. It is streamed
-// through the asset protocol; only if that is unavailable do we fall back to
-// hauling the whole file over IPC as a data URL.
-export async function soundUrl(rarity) {
+/// Every chime the app ships, as something to choose from rather than only as
+/// a fallback. The eight are the eight above; a key can borrow any of them.
+export const BUILT_IN = RARITIES;
+
+// A custom file beside the exe wins over everything. It is streamed through the
+// asset protocol; only if that is unavailable do we fall back to hauling the
+// whole file over IPC as a data URL. `borrowed` is the built-in a key was told
+// to use where it has no file of its own — see `chimes` in Settings.
+export async function soundUrl(rarity, borrowed) {
   // there are no files beside the executable when there is no executable
   if (!native) return null;
   try {
@@ -53,7 +58,7 @@ export async function soundUrl(rarity) {
       if (inlined && (await loadable(inlined))) return inlined;
     }
   } catch {}
-  return DEFAULTS[rarity];
+  return DEFAULTS[borrowed] ?? DEFAULTS[rarity];
 }
 
 function loadable(url) {

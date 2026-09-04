@@ -154,6 +154,26 @@ export function typeLabel(type, weaponType) {
 }
 
 
+/**
+ * What to call a drop on screen where its rarity is no answer.
+ *
+ * "Unknown" is honest inside the engine and useless in front of a player. It is
+ * what a relic resolves to — deliberately, since it is the one thing keeping
+ * relics out of every counter and every chime — and what an item off a scale
+ * these tables do not read comes back as. Both then said "Unknown" beside a
+ * name the app had just worked out.
+ *
+ * The type is the fact that survives: a relic is a Relic, an Odyssey ring is a
+ * Ring, whatever scale the packet was speaking. A drop with no type either —
+ * a find announced in chat carries a name and nothing else — has nothing left
+ * to say, so it says what it is.
+ */
+export function rarityLabel(rarity, type, weaponType) {
+  if (rarity && rarity !== 'Unknown') return t(rarity);
+  if (typeof type === 'number' && type >= 0) return typeLabel(type, weaponType);
+  return t('Drop');
+}
+
 export function zoneLabel(room) {
   return said?.rooms?.[room] || englishZone(room);
 }

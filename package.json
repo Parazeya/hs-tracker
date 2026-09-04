@@ -1,6 +1,6 @@
 {
   "name": "hs-tracker",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "HS Tracker — Hero Siege session tracker with a pinned on-screen overlay.",
   "private": true,
   "type": "module",

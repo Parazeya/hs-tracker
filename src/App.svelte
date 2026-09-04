@@ -42,7 +42,7 @@
     const now = Date.now();
     if (now - (lastPlayed[key] ?? 0) < 200) return;
     lastPlayed[key] = now;
-    urls[key] ??= await soundUrl(key);
+    urls[key] ??= await soundUrl(key, cfg?.chimes?.[key]);
     // a list without a sound of its own borrows the one for its rarity
     const url = urls[key] ?? urls[String(rarity ?? '').toLowerCase()];
     play(url, c?.volume ?? 0.7);
@@ -117,7 +117,15 @@
         // still holding a click nobody remembers giving it.
         if (!nearStrip) disarm();
       }),
-      listen('sounds-changed', async (e) => (urls[e.payload] = await soundUrl(e.payload))),
+      listen('sounds-changed', async (e) => (urls[e.payload] = await soundUrl(e.payload, cfg?.chimes?.[e.payload]))),
+      // A key that borrows a chime changes what it plays without any file
+      // moving, so the settings say when to look again. The whole cache goes
+      // rather than the keys that differ: `cfg` is updated by the listener
+      // above this one, so by the time this runs there is nothing left to
+      // compare against — and eight URLs cost one await each to find again.
+      listen('settings-changed', () => {
+        for (const key of Object.keys(urls)) delete urls[key];
+      }),
     ];
     const timer = setInterval(() => (tick = Date.now()), 1000);
     return () => {

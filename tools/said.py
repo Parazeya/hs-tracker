@@ -19,6 +19,119 @@ the community has a channel for it and the game ships no column.
 """
 
 SAID = {
+    # ── what this session added: the run controls, the accent, the chime
+    #    picker, and the two things the app now says when it cannot work ──
+    'Finish the run': {
+        'de': 'Lauf beenden', 'sp': 'Terminar la partida', 'fi': 'Päätä ajo',
+        'fr': 'Terminer la session', 'pl': 'Zakończ bieg', 'pt': 'Encerrar a run',
+        'ru': 'Завершить забег', 'zh': '结束本轮', 'ja': '走行を終える', 'ko': '런 마치기',
+    },
+    'Files it in Runs and stops counting.': {
+        'de': 'Legt ihn unter Läufe ab und hört auf zu zählen.',
+        'sp': 'La guarda en Partidas y deja de contar.',
+        'fi': 'Tallentaa sen Ajoihin ja lopettaa laskemisen.',
+        'fr': 'La range dans Sessions et arrête de compter.',
+        'pl': 'Zapisuje go w Biegach i przestaje liczyć.',
+        'pt': 'Arquiva na aba Runs e para de contar.',
+        'ru': 'Занесёт в «Забеги» и перестанет считать.', 'zh': '记入「轮次」并停止统计。',
+        'ja': '「走行」に記録し、計測を止めます。', 'ko': '런 목록에 기록하고 집계를 멈춥니다.',
+    },
+    'Start a new run': {
+        'de': 'Neuen Lauf beginnen', 'sp': 'Empezar una nueva', 'fi': 'Aloita uusi ajo',
+        'fr': 'Commencer une session', 'pl': 'Zacznij nowy bieg', 'pt': 'Começar uma nova run',
+        'ru': 'Начать новый забег', 'zh': '开始新的一轮', 'ja': '新しい走行を始める', 'ko': '새 런 시작',
+    },
+    'Nothing is counted until it does.': {
+        'de': 'Bis dahin wird nichts gezählt.', 'sp': 'Hasta entonces no se cuenta nada.',
+        'fi': 'Siihen asti mitään ei lasketa.', 'fr': 'Rien n’est compté d’ici là.',
+        'pl': 'Do tego czasu nic nie jest liczone.', 'pt': 'Até lá nada é contado.',
+        'ru': 'До этого ничего не считается.', 'zh': '在那之前什么都不统计。', 'ja': 'それまで何も数えません。',
+        'ko': '그때까지는 아무것도 세지 않습니다.',
+    },
+    'the run is over': {
+        'de': 'der Lauf ist beendet', 'sp': 'la partida terminó', 'fi': 'ajo on päättynyt',
+        'fr': 'la session est terminée', 'pl': 'bieg zakończony', 'pt': 'a run terminou',
+        'ru': 'забег окончен', 'zh': '本轮已结束', 'ja': '走行は終了しました', 'ko': '런이 끝났습니다',
+    },
+    'vs usual': {
+        'de': 'gegenüber sonst', 'sp': 'vs lo habitual', 'fi': 'vs tavallinen',
+        'fr': 'vs habituel', 'pl': 'vs zwykle', 'pt': 'vs o normal', 'ru': 'к обычному',
+        'zh': '与平常相比', 'ja': '普段比', 'ko': '평소 대비',
+    },
+    'the middle of your other {n} runs on this difficulty is {rate}/h': {
+
+        'de': 'die Mitte deiner übrigen {n} Läufe auf diesem Schwierigkeitsgrad liegt bei {rate}/h',
+        'sp': 'el medio de tus otras {n} partidas en esta dificultad es {rate}/h',
+        'fi': 'muiden {n} ajosi keskikohta tällä vaikeustasolla on {rate}/h',
+        'fr': 'le milieu de vos {n} autres sessions à cette difficulté est de {rate}/h',
+        'pl': 'środek twoich pozostałych {n} biegów na tym poziomie to {rate}/h',
+        'pt': 'o meio das suas outras {n} runs nesta dificuldade é {rate}/h',
+        'ru': 'середина ваших остальных {n} забегов на этой сложности — {rate}/ч',
+        'zh': '你在该难度下其余 {n} 轮的中位数是 {rate}/h', 'ja': 'この難易度での他の{n}回の走行の中央値は {rate}/h です',
+        'ko': '같은 난이도의 다른 런 {n}회의 중앙값은 {rate}/h입니다',
+    },
+    'Accent': {
+        'de': 'Akzentfarbe', 'sp': 'Color de acento', 'fi': 'Korostusväri',
+        'fr': 'Couleur d’accent', 'pl': 'Kolor akcentu', 'pt': 'Cor de destaque',
+        'ru': 'Акцентный цвет', 'zh': '强调色', 'ja': 'アクセント色', 'ko': '강조 색',
+    },
+    'the skin’s own': {
+        'de': 'die des Skins', 'sp': 'el propio del tema', 'fi': 'ulkoasun oma',
+        'fr': 'celle du thème', 'pl': 'własny skórki', 'pt': 'a do próprio tema',
+        'ru': 'цвет самой темы', 'zh': '皮肤自带的', 'ja': 'スキン本来の色', 'ko': '스킨 기본색',
+    },
+    'Settings could not be saved': {
+        'de': 'Einstellungen konnten nicht gespeichert werden',
+        'sp': 'No se pudieron guardar los ajustes', 'fi': 'Asetuksia ei voitu tallentaa',
+        'fr': 'Les réglages n’ont pas pu être enregistrés',
+        'pl': 'Nie udało się zapisać ustawień', 'pt': 'Não foi possível salvar as configurações',
+        'ru': 'Настройки не сохранились', 'zh': '设置未能保存', 'ja': '設定を保存できませんでした',
+        'ko': '설정을 저장하지 못했습니다',
+    },
+    'Nothing on this page can be saved: the app cannot write to its own folder. Move it out of Program Files, or run it as administrator.': {
+
+        'de': 'Auf dieser Seite lässt sich nichts speichern: die App kann nicht in ihren eigenen Ordner schreiben. Verschiebe sie aus Programme heraus oder starte sie als Administrator.',
+        'sp': 'Nada de esta página puede guardarse: la aplicación no puede escribir en su propia carpeta. Muévela fuera de Program Files o ejecútala como administrador.',
+        'fi': 'Tällä sivulla ei voi tallentaa mitään: sovellus ei voi kirjoittaa omaan kansioonsa. Siirrä se pois Program Files -kansiosta tai käynnistä järjestelmänvalvojana.',
+        'fr': 'Rien ne peut être enregistré sur cette page : l’application ne peut pas écrire dans son propre dossier. Déplacez-la hors de Program Files, ou lancez-la en administrateur.',
+        'pl': 'Na tej stronie nic się nie zapisze: aplikacja nie może pisać do własnego folderu. Przenieś ją poza Program Files albo uruchom jako administrator.',
+        'pt': 'Nada nesta página pode ser salvo: o app não consegue escrever na própria pasta. Mova-o para fora de Program Files ou execute como administrador.',
+        'ru': 'Ничего на этой странице не сохранится: приложение не может писать в собственную папку. Перенесите его из Program Files или запустите от имени администратора.',
+        'zh': '此页的设置都无法保存：程序无法写入自己的文件夹。请把它移出 Program Files，或以管理员身份运行。',
+        'ja': 'このページの設定は保存できません。アプリが自分のフォルダーに書き込めません。Program Files の外へ移すか、管理者として実行してください。',
+        'ko': '이 페이지에서는 아무것도 저장할 수 없습니다. 앱이 자기 폴더에 쓸 수 없습니다. Program Files 밖으로 옮기거나 관리자 권한으로 실행하세요.',
+    },
+    'No sound of its own, and {n} of these have no rarity chime to borrow — they pass in silence until this list is given a sound': {
+
+        'de': 'Kein eigener Klang, und {n} davon haben keinen Seltenheits-Ton zum Ausleihen — sie bleiben stumm, bis diese Liste einen Klang bekommt',
+        'sp': 'Sin sonido propio, y {n} de estos no tienen sonido de rareza que tomar prestado: pasan en silencio hasta que esta lista tenga un sonido',
+        'fi': 'Ei omaa ääntä, eikä {n} näistä ole harvinaisuusääntä lainattavaksi — ne menevät ohi äänettä, kunnes tälle listalle annetaan ääni',
+        'fr': 'Pas de son propre, et {n} d’entre eux n’ont aucun son de rareté à emprunter : ils passent en silence tant que cette liste n’a pas de son',
+        'pl': 'Brak własnego dźwięku, a {n} z nich nie ma dźwięku rzadkości do pożyczenia — przejdą w ciszy, dopóki lista nie dostanie dźwięku',
+        'pt': 'Sem som próprio, e {n} destes não têm som de raridade para emprestar — passam em silêncio até esta lista receber um som',
+        'ru': 'Своего звука нет, а {n} из них нечего одолжить у редкости — они пройдут молча, пока у списка не появится собственный звук',
+        'zh': '没有自己的声音，其中 {n} 项也没有稀有度提示音可借用——在给这个列表设置声音前，它们会悄无声息地过去',
+        'ja': '独自の音がなく、このうち {n} 件は借りられるレア度の音も持ちません。このリストに音を与えるまで無音で通り過ぎます',
+        'ko': '자체 소리가 없고, 이 중 {n} 개는 빌려올 등급 소리도 없습니다. 이 목록에 소리를 지정할 때까지 조용히 지나갑니다',
+    },
+    'Drop': {
+        'de': 'Fund', 'sp': 'Botín', 'fi': 'Pudotus', 'fr': 'Butin', 'pl': 'Łup',
+        'pt': 'Queda', 'ru': 'Находка', 'zh': '掉落', 'ja': 'ドロップ', 'ko': '드랍',
+    },
+    'none': {
+        'de': 'keiner', 'sp': 'ninguno', 'fi': 'ei mitään', 'fr': 'aucun', 'pl': 'brak',
+        'pt': 'nenhum', 'ru': 'нет', 'zh': '无', 'ja': 'なし', 'ko': '없음',
+    },
+    'borrow one of the app’s own chimes': {
+        'de': 'einen der eigenen Klänge der App ausleihen',
+        'sp': 'tomar prestado uno de los sonidos de la aplicación',
+        'fi': 'lainaa jokin sovelluksen omista äänistä',
+        'fr': 'emprunter un des sons de l’application',
+        'pl': 'pożycz jeden z własnych dźwięków aplikacji',
+        'pt': 'usar um dos sons do próprio app', 'ru': 'одолжить один из звонков приложения',
+        'zh': '借用程序自带的提示音', 'ja': 'アプリ内蔵のチャイムを借りる', 'ko': '앱 자체 알림음 빌리기',
+    },
+
     # ── the one rarity the game has no word for ───────────────────────────────
     #
     # The other five come from the game itself; see RARITY_TKEY in gen_items.py.

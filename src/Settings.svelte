@@ -1,6 +1,6 @@
 <script>
   import { invoke, recall, remember } from './bridge.js';
-  import { art } from './skin.svelte.js';
+  import { art, wearTheme } from './skin.svelte.js';
   import { LANGUAGES, t } from './say.svelte.js';
   import { listen } from './bridge.js';
 
@@ -24,7 +24,8 @@
   $effect(() => {
     invoke('session_info')
       .then((s) => (session = s))
-      .catch(() => (session = { overlay: true, wayland: false, through_x11: false, can_switch: false }));
+      .catch(() =>
+        (session = { overlay: true, wayland: false, through_x11: false, can_switch: false, writable: true }));
   });
 
   let notice = $state('');
@@ -109,7 +110,13 @@
     saveTimer = setTimeout(() => {
       saveTimer = null;
       base = JSON.parse(JSON.stringify(snapshot));
-      invoke('save_settings', { settings: snapshot }).catch(() => {});
+      // Swallowed for a long time, and it cost somebody an evening: installed
+      // where the folder will not take a write — under Program Files — every
+      // save fails, so no setting on this page does anything and nothing says
+      // why. The answer was "run it as administrator", found by guesswork.
+      invoke('save_settings', { settings: snapshot }).catch((e) => {
+        notice = `${t('Settings could not be saved')}: ${e}`;
+      });
     }, 150);
   }
 
@@ -141,6 +148,11 @@
 
 <div class="panel">
   <div class="body">
+  {#if session && session.writable === false}
+    <!-- Said here rather than in the log, because this is the page whose
+         controls do nothing while it is true. -->
+    <p class="warn">{t('Nothing on this page can be saved: the app cannot write to its own folder. Move it out of Program Files, or run it as administrator.')}</p>
+  {/if}
   {#if settings && session}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       {#if overlay && advanced}
@@ -204,7 +216,15 @@
         <select
           class="picker"
           value={settings.theme ?? 'default'}
-          onchange={(e) => { settings.theme = e.target.value; save(); }}
+          onchange={(e) => {
+            settings.theme = e.target.value;
+            // Worn here and now. The other windows still follow the backend's
+            // event; this one no longer has to, so a save that never reaches
+            // the disk cannot leave the picker pointing at a theme nothing is
+            // wearing.
+            wearTheme(settings.theme, settings.accent);
+            save();
+          }}
         >
           <option value="default">Hero Siege</option>
           <option value="ebontharn">Ebontharn</option>
@@ -212,6 +232,34 @@
           <option value="plainlight">{t('Plain light')}</option>
         </select>
       </div>
+      <!-- Offered under the two skins it belongs to and nowhere else: a season
+           is the game's own art in the game's own colours, and an accent that
+           disagreed with it would look like a fault rather than a choice. -->
+      {#if settings.theme === 'plain' || settings.theme === 'plainlight'}
+        <div class="line" data-tauri-drag-region>
+          <span class="name">{t("Accent")}</span>
+          <input
+            class="tint"
+            type="color"
+            value={settings.accent || (settings.theme === 'plain' ? '#a78bfa' : '#7c3aed')}
+            oninput={(e) => {
+              settings.accent = e.target.value;
+              wearTheme(settings.theme, settings.accent);
+              save();
+            }}
+          />
+          {#if settings.accent}
+            <button
+              class="undo"
+              onclick={() => {
+                settings.accent = '';
+                wearTheme(settings.theme, '');
+                save();
+              }}
+            >{t('the skin’s own')}</button>
+          {/if}
+        </div>
+      {/if}
       <div class="line" data-tauri-drag-region>
         <button class="check" onclick={() => { settings.autostart = !settings.autostart; save(); }} aria-label={t("autostart")}>
           <img src={settings.autostart ? art('check_on') : art('check_off')} alt="" />
@@ -474,6 +522,38 @@
   }
   .secopt img { width: 19px; height: 19px; flex: none; }
   .secopt:hover { color: var(--bone-13); }
+
+  /* the accent, and the way back to the one the skin ships with */
+  .tint {
+    width: 38px;
+    height: 22px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--edge-4);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .undo {
+    padding: 2px 8px;
+    color: var(--dim-2);
+    background: none;
+    border: 1px solid var(--edge-4);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .undo:hover { color: var(--bone-8); border-color: var(--edge-6); }
+
+  .warn {
+    margin: 0 0 8px;
+    padding: 6px 9px;
+    color: var(--bone-8);
+    background: rgba(120, 40, 40, 0.35);
+    border: 1px solid rgba(160, 70, 70, 0.7);
+    border-radius: 4px;
+    font-size: 12px;
+  }
 
   .picker {
     flex: 1 1 auto;

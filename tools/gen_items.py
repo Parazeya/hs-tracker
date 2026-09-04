@@ -78,6 +78,25 @@ NOTABLE = {"Satanic", "Set", "Heroic", "Angelic", "Unholy"}
 # struct rather than assuming it, and calls it NO_DROP.
 NO_DROP = 50_000_000
 
+# What the game shows is `droprate.base` times this.
+#
+# The item's own script assigns the base — `self.droprate.base = 584670` for
+# Ra's Band — and the game's tooltip prints 204634 for the same ring. Both
+# halves of the tooltip were read against ours on three items: Ra's Band,
+# St. Aaron's Eternal Rage and The Absence of Constraint, base and in-zone
+# alike, five numbers in all. Every one of them is the base times 0.35 with the
+# fraction cut off, exactly:
+#
+#     584670 * 0.35 = 204634.5  ->  204634        (the tooltip's own number)
+#     185632 * 0.35 =  64971.2  ->   64971        (and its green one)
+#    3267580 * 0.35 = 1143653.0 -> 1143653
+#
+# It is not the player: the tooltip's left-hand figure is what moves with them,
+# and this half does not. So the base is the table's number and this is the
+# chance, and printing the base read one in 585,000 where the game says one in
+# 205,000 — nearly three times too rare, on every item in the Codex.
+SHOWN = 0.35
+
 ORDINARY = {"Common", "Superior", "Rare"}
 TIERS = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5, "SS": 6}
 
@@ -350,7 +369,16 @@ for entry in ENTRIES:
     # a rate rarer than the default and meant it: 50,696,969, 111,111,111 and
     # 999,999,999 are hand-picked, and Lucifer's Crown really is one in a
     # hundred and eleven million.
-    rate = (entry.get("droprate") or {}).get("base")
+    raw = (entry.get("droprate") or {}).get("base")
+    # Scaled once, here, so everything below — the chase product included — is in
+    # the shown scale. NO_DROP is a sentinel rather than a chance and is left
+    # exactly as it is: scaled, it would stop being the value the tests below
+    # compare against and 1,058 items that drop nowhere would start claiming one
+    # in seventeen million.
+    # Whole, here and once. A one-in-N with a fraction on it is not a number
+    # anybody reads, and two of the three paths that store a rate below pass it
+    # through untouched — the table came out holding 9.45 and 349999999.65.
+    rate = int(raw * SHOWN) if isinstance(raw, (int, float)) and raw > 0 and raw != NO_DROP else raw
     if notable and isinstance(rate, (int, float)) and rate > 0 and rate != NO_DROP:
         drops.setdefault(name.lower(), int(rate))
     # where it is tied to: "8-2" is act 8 zone 2, "-D" a dungeon, "-BD" a boss
