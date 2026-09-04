@@ -2,31 +2,18 @@
 
 ## 1.1.6 — 2026-09-04
 
-### Fixed
-
-- A large announcement no longer draws its shading as a black square.
-
-## 1.1.5 — 2026-09-04
-
 ### Added
 
 - Automatic updates — a new version is found on launch and installed from About.
 - A new version's changelog is shown before it installs.
-
-### Fixed
-
-- Each resource is listed under the counter it belongs to.
-- A large announcement no longer draws its shading as a black square.
-
-## 1.1.4 — 2026-09-04
-
-### Added
-
 - The plain skins take an accent colour of your choosing.
 - A list can borrow one of the app's own chimes instead of a file of its own.
 
 ### Fixed
 
+- A large announcement no longer draws its shading as a black square.
+- Each resource is listed under the counter it belongs to.
+- A large announcement no longer draws its shading as a black square.
 - The theme changes as soon as it is picked, without waiting for the save.
 - A save that cannot reach the disk says so instead of failing in silence.
 - The log says where each window is and whether it is up.
