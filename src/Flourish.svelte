@@ -266,6 +266,13 @@
       rgba(0, 0, 0, calc(var(--shade) * 0.55)) 45%,
       rgba(0, 0, 0, 0) 72%
     );
+    /* Size scales the group, and the pool is a child of it — but the pool is
+       measured against the window, which does not grow with the slider. Scaled
+       up, the stop where it reaches nothing lands outside the window and
+       `overflow: hidden` cuts the rest off square: at Size 2 the soft pool is a
+       hard-edged black slab sitting on the game. Size is for the art; Shading
+       is what makes the pool darker. */
+    transform: scale(calc(1 / var(--scale)));
     opacity: 0;
   }
   .fx.playing .shade {

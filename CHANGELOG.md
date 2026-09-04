@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.6 — 2026-09-04
+
+### Fixed
+
+- A large announcement no longer draws its shading as a black square.
+
 ## 1.1.5 — 2026-09-04
 
 ### Added
@@ -10,6 +16,7 @@
 ### Fixed
 
 - Each resource is listed under the counter it belongs to.
+- A large announcement no longer draws its shading as a black square.
 
 ## 1.1.4 — 2026-09-04
 
