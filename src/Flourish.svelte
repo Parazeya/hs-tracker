@@ -8,7 +8,7 @@
   // serve every rarity.
   import { appWindow, invoke, listen, native } from './bridge.js';
   import { tierLabel } from './items.js';
-  import { itemName, nameOf, satanicZoneName, t, typeLabel } from './say.svelte.js';
+  import { itemName, nameOf, rarityLabel, satanicZoneName, t, typeLabel } from './say.svelte.js';
   import { buffInfo, zoneName } from './buffs.js';
   import { art } from './skin.svelte.js';
 
@@ -215,7 +215,7 @@
       <div class="sparks over"></div>
       {#if drop}
         <div class="caption">
-          <span class="rar">{t(drop.rarity)}</span>
+          <span class="rar">{rarityLabel(drop.rarity, drop.item_type, drop.weapon_type)}</span>
           <span class="name">{label}</span>
           {#if drop.tier > 0}<span class="grade">{tierLabel(drop.tier)}</span>{/if}
         </div>

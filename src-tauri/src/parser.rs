@@ -861,8 +861,8 @@ const SELF_NUMBERED: [i64; 5] = [12, 13, 14, 15, 19];
 
 /// Relics. Type 16 holds the 156 of them and nothing else.
 ///
-/// The ground path admits only `c == 1`, and a relic is always `c == 0`, so the
-/// named-item flag cannot admit one — the type has to.
+/// The named-item flag cannot admit a relic — one is always `c == 0` — so the
+/// type has to, and the resources are admitted the same way beside it.
 ///
 /// Read off the FINGERPRINT, not the item: a relic packet has no `type` field,
 /// so the trailing number of the key it arrives under is the only place its
@@ -1027,7 +1027,24 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
         return candidates
             .into_iter()
             .filter(|(fp, item)| {
-                int_field(item, &["c"]) == 1 || fingerprint_type(fp.as_deref()) == Some(RELIC)
+                // `c == 1` is a named item, and the two exceptions to it are
+                // both types whose id IS their identity, so reading them
+                // through the name table is not the guess the rule guards
+                // against: a relic, and the resources — keys, collectibles,
+                // materials, socketables.
+                //
+                // Held back until the floor and the bag could be shown to be
+                // one item rather than two, because a resource seen twice is a
+                // resource counted twice. Four pairs out of one capture settle
+                // it: a Bifröst Key refused on the floor at 03:54:19 and in the
+                // bag at 03:54:21 carried the same fingerprint AND the same
+                // `sh` — `99-4964607-1a06a8e788b-12`, `cf02e71d8341` — and so
+                // did a rune, a fragment and a second key. `identity` in
+                // stats.rs keys on that hash, so the two sightings merge, and
+                // what moves is only which of them gets there first.
+                int_field(item, &["c"]) == 1
+                    || fingerprint_type(fp.as_deref())
+                        .is_some_and(|t| t == RELIC || SELF_NUMBERED.contains(&t))
             })
             .filter(|(_, item)| !belongs_to_a_player(item))
             .filter(|(_, item)| lies_on_the_floor(item))
@@ -1155,6 +1172,16 @@ pub fn known_item(name: &str, unscaled: bool, id: (i64, i64, i64)) -> Option<cra
 }
 
 pub fn resolve_rarity(packet: &Value, name: &str, unscaled: bool, id: (i64, i64, i64)) -> String {
+    // A relic is NOT answered here, though every one of them is Common and this
+    // is where that could be said. Saying it puts them in the Common column:
+    // the journal keeps a bucket by that name, relics fall 43 times an hour,
+    // and `a_relic_is_silent_until_it_is_hunted` fails on the first one. Their
+    // silence rests on resolving to a rarity no counter and no alert list
+    // holds, which "Unknown" is and "Common" is not.
+    //
+    // What the announcement shows is a different question and is answered where
+    // it is shown: see `RELIC` in Flourish.svelte, which prints the type rather
+    // than the rarity for one.
     // The identity first, because it is the only exact answer here. A name is
     // what an item goes by, and eleven of them are gone by twice: the tables
     // below can say what "Angel" is worth only by picking one of the two items
@@ -1275,10 +1302,11 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // trusts the name over a weak packet rarity, so a base whose id lands on a
     // unique's slot would be handed that unique's name and then its rarity.
     //
-    // The ground path avoids this by keeping only `c == 1`. A pickup cannot —
-    // an ordinary item going into the bag is still an item — so it goes
-    // unnamed instead: the table is asked only when the game has said this is a
-    // named item, or when the packet's rarity is already one worth naming.
+    // The ground path avoids this by admitting only `c == 1` and the two types
+    // whose id is their identity. A pickup cannot — an ordinary item going into
+    // the bag is still an item — so it goes unnamed instead: the table is asked
+    // only when the game has said this is a named item, or when the packet's
+    // rarity is already one worth naming.
     //
     // Keys, gems, runes and materials are the exception. For those types
     // `c == 0` is simply what they are and the id IS the identity, so naming

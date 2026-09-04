@@ -13,27 +13,30 @@
   <a href="../../releases"><b>➡️ Download for Windows &amp; Linux ⬅️</b></a>
 </p>
 
-<p align="center">
-  <a href="../../releases"><img alt="downloads" src="https://img.shields.io/github/downloads/Parazeya/hs-tracker/total?style=for-the-badge&amp;label=downloads&amp;color=6f42c1"></a>
-</p>
+<p align="center">
+
+  <a href="../../releases"><img alt="downloads" src="https://img.shields.io/github/downloads/Parazeya/hs-tracker/total?style=for-the-badge&amp;label=downloads&amp;color=6f42c1"></a>
+
+</p>
+
 
 <!-- downloads -->
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.3/HS.Tracker_1.1.3_x64-setup.exe">HS.Tracker_1.1.3_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.4/HS.Tracker_1.1.4_x64-setup.exe">HS.Tracker_1.1.4_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.3/HS.Tracker_1.1.3_amd64.AppImage">HS.Tracker_1.1.3_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.4/HS.Tracker_1.1.4_amd64.AppImage">HS.Tracker_1.1.4_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.3/HS.Tracker_1.1.3_amd64.deb">HS.Tracker_1.1.3_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.4/HS.Tracker_1.1.4_amd64.deb">HS.Tracker_1.1.4_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.3/HS.Tracker-1.1.3-1.x86_64.rpm">HS.Tracker-1.1.3-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.4/HS.Tracker-1.1.4-1.x86_64.rpm">HS.Tracker-1.1.4-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
@@ -234,11 +237,53 @@ The app draws four windows. Each is transparent and can be captured on its own:
 ### Capturing a window
 
 1. Add a **Window Capture** and pick the window from the list.
-2. Set **Capture Method** to **Windows 10 (1903 and up)** — that is the one that
-   keeps the transparency.
+2. Set **Capture Method** to **Windows 10 (1903 and up)**. Not a preference:
+   it is the only method that sees these windows at all. They are drawn by
+   WebView2 through the GPU, and the older BitBlt method — which is what
+   *Automatic* often settles on — captures them as a black rectangle.
 3. Set **Window Match Priority** to **Window title must match**.
+4. Tick **Client Area**. These windows have no frame, so it changes little, but
+   it is what a working capture of them looks like.
+
+A window that is not on screen cannot be captured, and three of the four come
+and go: the overlay hides with the game if you asked it to, and the ticker and
+the announcement appear for a few seconds at a time. The announcement has a
+setting of its own — *Keep its window on screen so OBS can capture it* — for
+exactly that.
+
+### The source is black
+
+OBS names the window and shows nothing. The window is there — that is why it is
+in the list — so what is missing is OBS's permission or its view of it. In the
+order worth checking:
+
+- **The capture method.** Step 2 above, and the first thing to check: on
+  anything but *Windows 10 (1903 and up)* these windows are black, and
+  *Automatic* is not that.
+- **Windows or OBS too old for it.** That method needs Windows 10 build 1903
+  and an OBS that knows what to do with it. OBS offers the option either way
+  and it simply returns nothing. **Help → About** in OBS gives its version, and
+  `winver` gives the build.
+- **One of the two is running as administrator and the other is not.** A
+  program at normal privilege cannot capture an elevated window, and it fails
+  exactly this way: named, listed, black. If you started the tracker as
+  administrator to make its settings save, that is the cause — and the better
+  answer is to move it out of Program Files so it needs nothing of the sort.
+- **The window is on a monitor a different graphics adapter drives.** On a
+  laptop with two, or a desktop with a card and the motherboard's outputs both
+  in use, the capture comes back black. Drag the window to the main monitor: if
+  it fills in, that is it.
+- **The window is hidden.** Minimised, in the tray, or hidden with the game.
 
 ## If something does not work
+
+**Nothing you change sticks.** The app keeps its settings in its own folder,
+beside the exe. Installed somewhere Windows will not let it write — under
+Program Files — every save fails, so no setting on the page does anything: the
+theme does not change, a filter does not stick, and the app used to say nothing
+about it. Move the folder somewhere of your own, or start it as administrator.
+`hs-tracker.log` says `READ-ONLY` beside the folder when this is the case.
+
 
 **Send the log.** The app writes what goes wrong to `hs-tracker.log` beside its
 settings — panics, anything a panel throws, and, when nothing is being counted,

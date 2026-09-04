@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.4 — 2026-09-04
+
+### Added
+
+- The plain skins take an accent colour of your choosing.
+- A list can borrow one of the app's own chimes instead of a file of its own.
+
+### Fixed
+
+- The theme changes as soon as it is picked, without waiting for the save.
+- A save that cannot reach the disk says so instead of failing in silence.
+- The log says where each window is and whether it is up.
+- The packet log names what ties a drop to its pickup.
+- A drop whose scale the tables cannot read is named by its type, not “Unknown”.
+- Blood Pact no longer shows mail waiting.
+- A key, rune or material is announced where it falls, not where it is picked up.
+- An item's odds are the ones the game shows.
+- A list that would pass in silence says so.
+
 ## 1.1.3 — 2026-09-03
 
 ### Added

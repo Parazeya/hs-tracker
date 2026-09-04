@@ -3,7 +3,7 @@
   import { art } from './skin.svelte.js';
   import { BY_ID, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { locale, nameOf, say, t, typeLabel } from './say.svelte.js';
-  import { soundUrl, play } from './audio.js';
+  import { BUILT_IN, soundUrl, play } from './audio.js';
 
   // Only named items can be listed. The parser leaves an ordinary pickup
   // nameless, so a list holding a base has nothing to match and never chimes.
@@ -220,6 +220,34 @@
   let lists = $derived(filter?.lists ?? []);
   let current = $derived(lists[selected] ?? null);
   let soundKey = $derived(current ? `list-${current.id}` : null);
+
+  /// The app's own chimes, offered as something to pick rather than only as a
+  /// fallback. A list of runes or keys has no rarity chime to borrow — they are
+  /// all Common — and hunting down an audio file to hear one is a poor answer
+  /// to "make a sound when this drops".
+  /// The words the app already uses for these eight, so the picker does not
+  /// invent a second set: the keys are lowercase and every label here is one
+  /// this file or the Alerts tab already prints.
+  const CHIME_NAMES = {
+    satanic: 'Satanic',
+    set: 'Set',
+    heroic: 'Heroic',
+    angelic: 'Angelic',
+    unholy: 'Unholy',
+    mail: 'Mail',
+    zone: 'Satanic zone',
+    relic: 'Relic',
+  };
+
+  let borrowed = $derived(settings?.chimes?.[soundKey] ?? '');
+  function borrow(name) {
+    if (!settings) return;
+    const chimes = { ...(settings.chimes ?? {}) };
+    if (name) chimes[soundKey] = name;
+    else delete chimes[soundKey];
+    settings.chimes = chimes;
+    save();
+  }
   let rules = $derived(current?.rules ?? []);
 
   /// The rule the two dropdowns are describing, or null while neither is set.
@@ -252,6 +280,27 @@
       return names;
     }),
   );
+
+  /// How many things on this list have no chime to borrow.
+  ///
+  /// A list without a sound of its own falls back to the chime for the item's
+  /// rarity, and only the five journal rarities have one. Everything opened to
+  /// lists in 1.1.3 — runes, keys, materials, collectibles — is Common, which
+  /// has no chime at all, so such a list borrows nothing and passes in silence.
+  /// The line under the sound button reads as reassurance and means the
+  /// opposite for them, which is exactly how the first report of it arrived.
+  let voiceless = $derived.by(() => {
+    if (!current || status[soundKey]) return 0;
+    // `selected` rather than an indexOf: `current` is the same object the
+    // array holds, but asking the array to find it again is work for a
+    // number that is already in hand.
+    const names = covered[selected] ?? new Set();
+    let n = 0;
+    for (const key of names) {
+      if (!ALERT_RARITIES.includes(facts(key)?.rarity)) n += 1;
+    }
+    return n;
+  });
 
   // An item in two lists is a conflict: only the first list's sound plays, and
   // the order of the lists decides which. The rail says so in words, and the row
@@ -628,7 +677,7 @@
   /// have picked another list — so one list's sound played at another's volume.
   async function test() {
     const volume = current?.volume ?? 0.7;
-    play(await soundUrl(soundKey), volume);
+    play(await soundUrl(soundKey, borrowed), volume);
   }
 
   const btn = (name) => `url(${art(name)})`;
@@ -791,7 +840,13 @@
                is whether there is one at all; the path is in the tooltip for
                the times it does matter. -->
           <span class="file" class:none={!status[soundKey]} title={status[soundKey] ? `sounds/${status[soundKey]}` : ''}>
-            {status[soundKey] ? t('♪ Custom sound') : t('No sound of its own — a drop here is announced by the item’s rarity')}
+            {status[soundKey]
+              ? t('♪ Custom sound')
+              : borrowed
+                ? say('♪ {name}', { name: t(borrowed) })
+                : voiceless > 0
+                  ? say('No sound of its own, and {n} of these have no rarity chime to borrow — they pass in silence until this list is given a sound', { n: voiceless })
+                  : t('No sound of its own — a drop here is announced by the item’s rarity')}
           </span>
           <input
             class="vol"
@@ -812,10 +867,28 @@
             style:--btn={btn('button')}
             style:--btn-hover={btn('button_hover')}
             style:--btn-down={btn('button_down')}
-            disabled={!status[soundKey]}
-            title={status[soundKey] ? t('play this list’s sound') : t('this list has no sound of its own — a drop on it is announced by the item’s rarity')}
+            disabled={!status[soundKey] && !borrowed}
+            title={status[soundKey] || borrowed ? t('play this list’s sound') : t('this list has no sound of its own — a drop on it is announced by the item’s rarity')}
             onclick={test}
           >{t("Test")}</button>
+          <!-- The eight the app ships, and Browse… beside them for anything
+               else. A file wins over a borrowed chime, so while one is
+               installed this is not shown at all: disabled, it was a dead
+               control with a tooltip nothing displays — the browser does not
+               show one on a disabled element, so it read as broken. Clear is
+               the way back to it, and the line on the left says a file is what
+               is playing. -->
+          {#if !status[soundKey]}
+          <select
+            class="chime"
+            value={borrowed}
+            onchange={(e) => borrow(e.currentTarget.value)}
+            title={t('borrow one of the app’s own chimes')}
+          >
+            <option value="">{t('none')}</option>
+            {#each BUILT_IN as name (name)}<option value={name}>{t(CHIME_NAMES[name] ?? name)}</option>{/each}
+          </select>
+          {/if}
           <button class="btn sm" style:--btn={btn('button')} style:--btn-hover={btn('button_hover')} style:--btn-down={btn('button_down')} onclick={pickSound}>{t("Browse…")}</button>
           <button
             class="btn sm"
@@ -1421,6 +1494,19 @@
 
   /* drawn by us, like the sliders on the other panels: an engine left to its
      own devices renders a different control on every platform */
+  /* the app's own chimes, beside Browse… */
+  .chime {
+    max-width: 120px;
+    padding: 2px 4px;
+    color: var(--bone-6);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--edge-4);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 11px;
+  }
+  .chime:disabled { opacity: 0.45; }
+
   .vol {
     flex: none;
     width: 74px;

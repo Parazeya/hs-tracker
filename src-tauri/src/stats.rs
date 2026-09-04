@@ -832,7 +832,22 @@ impl GameStats {
     /// chime, watching for false becoming true, rang on every launch for a
     /// letter that had been sitting there for days.
     pub fn mail_state(&self) -> Option<bool> {
+        if !self.has_mailbox() {
+            return Some(false);
+        }
         self.mail_known.then_some(self.has_mail)
+    }
+
+    /// Whether the mode being played has a mailbox at all.
+    ///
+    /// Blood Pact does not. The mail flag belongs to the account rather than to
+    /// the character, so the server reports it there like anywhere else and the
+    /// panel lit "Mail!" for a box the player cannot open — permanently, since
+    /// nothing in that mode can ever clear it. Asked at the two places that
+    /// read the flag rather than where it is set: the mode is learned from the
+    /// account packet, which may arrive after the mail one.
+    fn has_mailbox(&self) -> bool {
+        self.season_mode != Some("GBP")
     }
 
     /// The satanic zone has moved and this rotation is worth telling the player
@@ -2002,7 +2017,7 @@ impl GameStats {
             status,
             session_secs: self.active().as_secs(),
             paused: self.paused(),
-            has_mail: self.has_mail,
+            has_mail: self.has_mail && self.has_mailbox(),
             gold: Line {
                 total: self.total_gold,
                 earned: self.gold_earned,

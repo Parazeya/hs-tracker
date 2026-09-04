@@ -1,7 +1,7 @@
 import { mount } from 'svelte';
 import './theme.css';
 import './plain.css';
-import { wearSkin } from './skin.svelte.js';
+import { wearTheme } from './skin.svelte.js';
 import { speak } from './say.svelte.js';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import App from './App.svelte';
@@ -45,25 +45,10 @@ window.addEventListener('unhandledrejection', (e) => {
 // Settings reaches the others through the event the backend already emits.
 import { invoke, listen, native, recall, remember } from './bridge.js';
 
-const wearTheme = (name) => {
-  const root = document.documentElement;
-  if (name && name !== 'default') root.setAttribute('data-theme', name);
-  else root.removeAttribute('data-theme');
-  // The palette rides on data-theme; the SHAPE rides on this. Only the plain
-  // skin has one, because only it replaces the art with rules — a season is
-  // the same nine-slice PNGs in other colours and needs nothing here.
-  // The palette rides on data-theme and there are two plain palettes; the SHAPE
-  // is one and the same, so both wear the same skin name.
-  if (name === 'plain' || name === 'plainlight') root.setAttribute('data-skin', 'plain');
-  else root.removeAttribute('data-skin');
-  remember('theme', name ?? 'default');
-  // the sprites follow the palette; both halves of a skin move together
-  wearSkin(name);
-};
 // The settings live in the backend, and asking for them is a round trip — long
 // enough to draw one frame in the wrong colours. The last answer is kept here
 // and worn immediately; the real one arrives a moment later and corrects it.
-wearTheme(recall('theme'));
+wearTheme(recall('theme'), recall('accent'));
 // The names the game gives things follow the same path as the skin: remembered
 // so the first paint is right, corrected when the backend answers, and moved
 // when the setting changes in another window.
@@ -74,12 +59,12 @@ const wearLanguage = (code) => {
 };
 invoke('get_settings')
   .then((s) => {
-    wearTheme(s?.theme);
+    wearTheme(s?.theme, s?.accent);
     wearLanguage(s?.language);
   })
   .catch(() => {});
 listen('settings-changed', (e) => {
-  wearTheme(e.payload?.theme);
+  wearTheme(e.payload?.theme, e.payload?.accent);
   wearLanguage(e.payload?.language);
 });
 

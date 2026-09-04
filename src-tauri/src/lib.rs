@@ -344,8 +344,24 @@ pub struct Settings {
     pub sound_on_ground: bool,
     /// stop the session clock when nothing has happened for a while, so a break
     /// does not quietly halve every per-hour figure
+    /// Which of the app's own chimes a key borrows, where it has no file.
+    ///
+    /// `list-3f2a → "relic"`. A file put on a key still wins over this: it is
+    /// the shorter road for somebody who wants a sound rather than a
+    /// particular sound, and it is what a list of runes or keys needs — those
+    /// are all Common, so the rarity has no chime to lend them and the list
+    /// passed in silence.
+    pub chimes: std::collections::HashMap<String, String>,
     /// which skin the windows wear: "default", or a season's own colours
     pub theme: String,
+    /// The colour the plain skins accent with, as `#rrggbb`, or empty for the
+    /// one the palette ships with.
+    ///
+    /// The plain skins alone: a season is the game's own art in the game's own
+    /// colours, and text recoloured over it would leave the two halves
+    /// disagreeing. Kept whatever the theme is, so switching away and back does
+    /// not lose the choice.
+    pub accent: String,
     /// Which language the game's own words are shown in: an item's name, its
     /// type, the stats it rolls, the room the character stands in. The game
     /// ships eleven and the tables are generated from its own files, so this
@@ -441,7 +457,9 @@ impl Default for Settings {
             debug_log: false,
             wide_capture: false,
             sound_on_ground: true,
+            chimes: Default::default(),
             theme: "default".into(),
+            accent: String::new(),
             // English, until asked otherwise. Not the system's locale: the game
             // has its own language setting and this is about matching that, not
             // the desktop.
@@ -530,6 +548,8 @@ pub struct SessionInfo {
     can_switch: bool,
     /// there is a tray icon, so closing a window can mean hiding it
     tray: bool,
+    /// the folder the settings are written to will take a write
+    writable: bool,
 }
 
 #[tauri::command]
@@ -542,6 +562,7 @@ fn session_info() -> SessionInfo {
             through_x11: false,
             can_switch: false,
             tray: TRAY_OK.load(Ordering::Relaxed),
+            writable: data_dir_writable(),
         }
     }
     #[cfg(not(windows))]
@@ -553,6 +574,7 @@ fn session_info() -> SessionInfo {
             through_x11: forced_x11(),
             can_switch: wayland && x11_reachable(),
             tray: TRAY_OK.load(Ordering::Relaxed),
+            writable: data_dir_writable(),
         }
     }
 }
@@ -735,14 +757,31 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
                 let sz = satanic_here.map_or("-".into(), |b| b.to_string());
                 format!("vitals  mf {}  lv {level}  hlv {hlevel}  sz {sz}", say(mf))
             }
-            parser::GameEvent::ItemAdded { name, rarity, tier, ground, item_type, item_id, weapon_type, .. } => {
+            parser::GameEvent::ItemAdded {
+                name, rarity, tier, ground, item_type, item_id, weapon_type, fingerprint, hash, ..
+            } => {
                 // an empty name means the item tables predate this item
                 let label = if name.is_empty() {
                     format!("unknown {item_type}:{item_id}:{weapon_type}")
                 } else {
                     name.clone()
                 };
-                format!("item  {label:?} rarity {rarity} tier {tier} {}", if *ground { "on the ground" } else { "picked up" })
+                // The fingerprint and the hash are what tie the two sightings
+                // of one item together — see `identity` in stats.rs. Printed
+                // because the question they answer cannot be asked any other
+                // way: whether the drop and the pickup of a key are one item to
+                // this app or two, which is what decides whether the ground
+                // path can be opened to keys at all.
+                let ties = match (fingerprint.is_empty(), hash.is_empty()) {
+                    (true, true) => String::new(),
+                    (true, false) => format!("  hash {hash}"),
+                    (false, true) => format!("  fp {fingerprint}"),
+                    (false, false) => format!("  fp {fingerprint}  hash {hash}"),
+                };
+                format!(
+                    "item  {label:?} rarity {rarity} tier {tier} {}{ties}",
+                    if *ground { "on the ground" } else { "picked up" }
+                )
             }
             parser::GameEvent::Found { finder, name } => format!("chat  {finder:?} found {name:?}"),
             parser::GameEvent::SatanicZone { zone, .. } => format!("zone  {zone}"),
@@ -753,6 +792,19 @@ pub(crate) fn dev_log(events: &[parser::GameEvent], src: std::net::IpAddr) {
 
 #[cfg(not(debug_assertions))]
 pub(crate) fn dev_log(_: &[parser::GameEvent], _: std::net::IpAddr) {}
+
+/// Whether the folder everything is written to will take a write.
+///
+/// An install under Program Files will not, and then every save fails into a
+/// `Result` nobody reads: the theme does not change, a filter does not stick,
+/// and the app says nothing about why. Asked at startup for the log and by the
+/// settings panel for the person in front of it.
+fn data_dir_writable() -> bool {
+    let probe = data_dir().join(".write-probe");
+    let ok = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
 
 #[cfg(windows)]
 fn exe_dir() -> PathBuf {
@@ -2348,6 +2400,29 @@ fn on_screen(w: &tauri::WebviewWindow) -> bool {
     w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false)
 }
 
+/// Where the windows are and whether they are up.
+///
+/// Written for the reports that arrive as "OBS shows a black square". The
+/// window is in OBS's list, so it exists; what nobody can see from a
+/// screenshot is whether it was on screen at that moment and which monitor it
+/// was on — and both are ordinary causes. A capture of a hidden window is
+/// black, and so is one of a window on a monitor a second graphics adapter
+/// drives. The negative coordinates of a screen to the left of the main one
+/// are what says the second case out loud.
+pub(crate) fn log_windows(app: &AppHandle) {
+    let mut said: Vec<String> = Vec::new();
+    for label in ["main", "dashboard", "ticker", "flourish"] {
+        let Some(w) = app.get_webview_window(label) else { continue };
+        let up = on_screen(&w);
+        let where_ = match (w.outer_position(), w.outer_size()) {
+            (Ok(at), Ok(size)) => format!("{}x{} at {},{}", size.width, size.height, at.x, at.y),
+            _ => "position unknown".to_string(),
+        };
+        said.push(format!("{label} {} {where_}", if up { "up" } else { "hidden" }));
+    }
+    log::say("win", &said.join(" | "));
+}
+
 /// The sniffer follows the game with these two. Showing the overlay must leave
 /// the keyboard with the game.
 pub(crate) fn show_overlay(app: &AppHandle) {
@@ -2823,9 +2898,7 @@ fn log_environment() {
     // refuse a write — an install under Program Files does exactly that, and
     // then the log the user is asked for is the one file that was never saved.
     let dir = data_dir();
-    let probe = dir.join(".write-probe");
-    let writable = std::fs::write(&probe, b"").is_ok();
-    let _ = std::fs::remove_file(&probe);
+    let writable = data_dir_writable();
 
     log::say(
         "env",
@@ -3457,6 +3530,15 @@ pub fn run() {
                 let _ = app.asset_protocol_scope().allow_directory(sounds_dir(), false);
             }
             spawn_render_watchdog(app.handle().clone());
+            // Once, a few seconds in, when the windows have settled where they
+            // are going to be. See `log_windows` for what the line answers.
+            {
+                let app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(5));
+                    log_windows(&app);
+                });
+            }
             spawn_position_saver(app.handle().clone());
             spawn_stats_pusher(app.handle().clone());
             presence::spawn(app.handle().clone());

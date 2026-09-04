@@ -3,7 +3,7 @@
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { rarityByName, tierLabel } from './items.js';
-  import { itemName, nameOf, t, typeLabel } from './say.svelte.js';
+  import { itemName, nameOf, rarityLabel, t, typeLabel } from './say.svelte.js';
 
   const TTL_MS = 8000;
   const FADE_MS = 600;
@@ -35,6 +35,10 @@
     if (d.rarity) return d.rarity;
     return rarityByName(d.name || label(d)) ?? 'Drop';
   }
+
+  /// The same word the announcement uses, so a drop is not one thing on the
+  /// pillar and another on the strip under it.
+  const said = (d) => rarityLabel(rarity(d), d.item_type, d.weapon_type);
 
   // the list is empty most of the time; a timer running then would re-render
   // the window five times a second for nothing
@@ -86,7 +90,7 @@
 <div class="stack" class:above>
   {#each entries as it (it.key)}
     <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source="url({art('chip_dark')})">
-      <span class="rar {rarityCls[rarity(it)] ?? ''}">{t(rarity(it))}</span>
+      <span class="rar {rarityCls[rarity(it)] ?? ''}">{said(it)}</span>
       <span class="name {rarityCls[rarity(it)] ?? ''}">{label(it)}</span>
       {#if it.tier > 0}<span class="dim">{tierLabel(it.tier)}</span>{/if}
       {#if it.mf}<span class="c-blue">{t('MF')}</span>{/if}
