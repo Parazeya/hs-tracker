@@ -24,19 +24,19 @@
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.6/HS.Tracker_1.1.6_x64-setup.exe">HS.Tracker_1.1.6_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.7/HS.Tracker_1.1.7_x64-setup.exe">HS.Tracker_1.1.7_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.6/HS.Tracker_1.1.6_amd64.AppImage">HS.Tracker_1.1.6_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.7/HS.Tracker_1.1.7_amd64.AppImage">HS.Tracker_1.1.7_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.6/HS.Tracker_1.1.6_amd64.deb">HS.Tracker_1.1.6_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.7/HS.Tracker_1.1.7_amd64.deb">HS.Tracker_1.1.7_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.6/HS.Tracker-1.1.6-1.x86_64.rpm">HS.Tracker-1.1.6-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.7/HS.Tracker-1.1.7-1.x86_64.rpm">HS.Tracker-1.1.7-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
@@ -87,6 +87,12 @@ packets below the level Windows reports them at, so the addresses it names are
 not the ones on the wire, and nothing is counted at all. **Read every
 connection** in Settings takes the filter off for those machines. That widens
 what is read on your own machine and changes nothing else.
+
+A game accelerator that works the other way — the game connects to `127.0.0.1`
+and the accelerator carries it on from there — needs nothing switched on. The
+game's own traffic is then on the loopback adapter and nowhere else, so that
+adapter is listened to for as long as the game has no connection of its own to a
+server, and the filter stays off while it does.
 
 Nothing is sent anywhere; every number stays where it was counted. Two things
 leave the machine, both only if you ask for them: the **About** section's update
@@ -238,8 +244,8 @@ The app draws four windows. Each is transparent and can be captured on its own:
 | Window | What it is | On screen |
 | --- | --- | --- |
 | `HS Tracker — Overlay` | the compact panel | while you are in compact mode |
-| `HS Tracker Ticker` | drop names, under the overlay | for a few seconds after a drop |
-| `HS Tracker Flourish` | the announcement for a big drop, and for the zone rotating | while it plays |
+| `HS Tracker — Drops` | drop names, under the overlay | for a few seconds after a drop |
+| `HS Tracker — Announcement` | the announcement for a big drop, and for the zone rotating | while it plays |
 | `HS Tracker` | the dashboard | while you are in dashboard mode |
 
 ### Capturing a window

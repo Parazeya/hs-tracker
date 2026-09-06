@@ -654,6 +654,17 @@
                 style:--btn-down="url({art('button_down')})"
                 onclick={() => invoke('place_flourish', { placing: true })}
               > {t("Change location")} </button>
+              <!-- The window draws nothing between drops, so a capture that was
+                   never going to work looks exactly like one that was. This
+                   fires a real announcement through it. -->
+              <button
+                class="btn sm"
+                style:--btn="url({art('button')})"
+                style:--btn-hover="url({art('button_hover')})"
+                style:--btn-down="url({art('button_down')})"
+                title={t("Announce a drop that never happened, to see where it lands and whether OBS catches it")}
+                onclick={() => invoke('test_flourish').catch(() => {})}
+              > {t("Test")} </button>
             </div>
           {/if}
         {/if}

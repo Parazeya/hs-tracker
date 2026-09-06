@@ -99,8 +99,18 @@ static WIDE: AtomicBool = AtomicBool::new(false);
 pub fn set_wide_capture(on: bool) {
     WIDE.store(on, Ordering::Relaxed);
 }
+
 /// and how long before saying it again, if it is still true
 const DEAF_AGAIN: Duration = Duration::from_secs(300);
+
+/// Whether the game's connections all end on this machine.
+///
+/// Which decides one thing: whether the loopback adapter is captured. It is
+/// skipped by default and should be — nothing on it is the game's, and it
+/// carries every local socket on the machine. But a game behind an accelerator
+/// talks to `127.0.0.1` and nowhere else, and then it is the only adapter its
+/// traffic is on. See `worth_capturing` and `game_endpoints`.
+static THROUGH_LOOPBACK: AtomicBool = AtomicBool::new(false);
 
 /// Whether Hero Siege is up. The watcher already looks for the process every
 /// second; anything else that needs to know reads it here rather than looking
@@ -290,19 +300,31 @@ fn unmap(ip: IpAddr) -> IpAddr {
 }
 
 /// The far ends of the game's own connections, read out of the operating
-/// system's socket table, and how many of them go nowhere.
+/// system's socket table, and how many of them go nowhere but this machine.
 ///
-/// The near ends were collected too and are not any more: see `scope_for` for
-/// why naming this machine's own address in the filter did more harm than the
-/// narrowing was worth.
-fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize) {
+/// Only the far ends are returned: see `scope_for` for why naming this
+/// machine's own address in the filter did more harm than the narrowing was
+/// worth. The near ends are read all the same, because a game behind a local
+/// proxy has no far end of its own and is found by them.
+fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize, bool) {
+    /// One row of the operating system's TCP table, cut down to the four things
+    /// asked of it: who owns the socket, and the two ends of it.
+    struct Row {
+        owners: Vec<u32>,
+        near: (IpAddr, u16),
+        far: (IpAddr, u16),
+    }
+
     let mut remote = BTreeSet::new();
-    // Connections the game holds to this machine itself, counted and not
-    // followed. They are worth nothing to a capture and everything to the
-    // panel: a game talking only to itself is a local game.
+    // Connections the game holds to this machine itself. A game talking only to
+    // itself is usually a local game — but not always, and see the hop below.
     let mut homebound = 0usize;
+    // Whether the game has no connection of its own to a server and every one of
+    // them ends here. The caller keeps the filter wide and takes the loopback
+    // adapter when it does; see the hop.
+    let mut through_loopback = false;
     if pids.is_empty() {
-        return (remote, homebound);
+        return (remote, homebound, through_loopback);
     }
     // One family at a time, and one row at a time.
     //
@@ -314,6 +336,12 @@ fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize) {
     // the endpoints came back empty for as long as the app was running, and
     // the panel said the game's traffic was not reaching us while the traffic
     // was arriving perfectly well and nothing knew where to look for it.
+    //
+    // The whole table is kept rather than only the game's rows: the hop below
+    // needs the socket at the other end of a loopback pair, which belongs to
+    // another process, and reading the table twice would read two different
+    // moments of it.
+    let mut table: Vec<Row> = Vec::new();
     for (family, af) in
         [("IPv4", AddressFamilyFlags::IPV4), ("IPv6", AddressFamilyFlags::IPV6)]
     {
@@ -329,23 +357,73 @@ fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize) {
             }
         };
         for s in rows.flatten() {
-            if !s.associated_pids.iter().any(|p| pids.contains(p)) {
-                continue;
-            }
             if let ProtocolSocketInfo::Tcp(t) = &s.protocol_socket_info {
-                let far = unmap(t.remote_addr);
-                if far.is_unspecified() {
-                    continue;
-                }
-                if far.is_loopback() {
-                    homebound += 1;
-                    continue;
-                }
-                remote.insert(far);
+                table.push(Row {
+                    owners: s.associated_pids.clone(),
+                    near: (unmap(t.local_addr), t.local_port),
+                    far: (unmap(t.remote_addr), t.remote_port),
+                });
             }
         }
     }
-    (remote, homebound)
+
+    // Where the game's own sockets end. A loopback one is counted and its far
+    // end kept: that address and port are what the process on the other side is
+    // listening on, which is how it is found below.
+    let mut hops: Vec<(IpAddr, u16)> = Vec::new();
+    for row in &table {
+        if !row.owners.iter().any(|p| pids.contains(p)) || row.far.0.is_unspecified() {
+            continue;
+        }
+        if row.far.0.is_loopback() {
+            homebound += 1;
+            hops.push(row.far);
+            continue;
+        }
+        remote.insert(row.far.0);
+    }
+
+    // A game whose every connection ends on this machine, behind a proxy.
+    //
+    // Route optimisers and "game accelerators" work this way: the game is
+    // pointed at 127.0.0.1, the optimiser holds the real connection to the
+    // server, and the socket table shows the game talking to nothing but
+    // itself. By the game's own sockets that is indistinguishable from Local
+    // Mode — so the process listening at the other end of the hop is asked
+    // instead, and its far ends are what the capture is narrowed to.
+    //
+    // Only when the game has no remote socket of its own: one that has both is
+    // already answered, and the optimiser's other traffic is none of ours.
+    through_loopback = remote.is_empty() && !hops.is_empty();
+    if through_loopback {
+        let relays: BTreeSet<u32> = table
+            .iter()
+            .filter(|r| hops.contains(&r.near) && !r.owners.iter().any(|p| pids.contains(p)))
+            .flat_map(|r| r.owners.iter().copied())
+            .collect();
+        for row in &table {
+            if !row.owners.iter().any(|p| relays.contains(p)) {
+                continue;
+            }
+            if row.far.0.is_unspecified() || row.far.0.is_loopback() {
+                continue;
+            }
+            remote.insert(row.far.0);
+        }
+        if !remote.is_empty() {
+            crate::log::once(
+                "relay",
+                "info",
+                format!(
+                    "the game's connections all end on this machine; \
+                     {} process(es) between it and the network hold {} far ends",
+                    relays.len(),
+                    remote.len()
+                ),
+            );
+        }
+    }
+    (remote, homebound, through_loopback)
 }
 
 /// Every adapter worth listening on. A split-tunnel engine (WireSock and the
@@ -354,6 +432,7 @@ fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize) {
 /// or on both — picking one by address misses half of it.
 fn capture_devices() -> Vec<pcap::Device> {
     let all = pcap::Device::list().unwrap_or_default();
+    let only_loopback = THROUGH_LOOPBACK.load(Ordering::Relaxed);
     // Skip loopback, and nothing else.
     //
     // Not `any(|a| !a.addr.is_loopback())`, which keeps a device that has at
@@ -364,7 +443,7 @@ fn capture_devices() -> Vec<pcap::Device> {
     // card the same traffic is inside the tunnel.
     let kept: Vec<pcap::Device> = all
         .iter()
-        .filter(|d| worth_capturing(&d.addresses) && is_a_network(&d.name))
+        .filter(|d| worth_capturing(&d.addresses, only_loopback) && is_a_network(&d.name))
         .cloned()
         .collect();
 
@@ -399,8 +478,16 @@ fn capture_devices() -> Vec<pcap::Device> {
 /// Loopback and nothing else is passed over. A device with no addresses at all
 /// is kept: having none is not the same as having only loopback, and the
 /// adapter Npcap offers for dialup and VPN capture has none.
-fn worth_capturing(addresses: &[pcap::Address]) -> bool {
-    addresses.is_empty() || addresses.iter().any(|a| !a.addr.is_loopback())
+///
+/// Unless the game is only on loopback, which is `homebound`. A game accelerator
+/// points the game at `127.0.0.1` and carries its traffic on from a process of
+/// its own, and what that process sends is as often as not a tunnel — so the one
+/// leg that can be read is the one between the game and the accelerator, and it
+/// is on the adapter this otherwise skips. Skipped the rest of the time on
+/// purpose: nothing on it belongs to the game, and it carries every local socket
+/// on the machine.
+fn worth_capturing(addresses: &[pcap::Address], homebound: bool) -> bool {
+    homebound || addresses.is_empty() || addresses.iter().any(|a| !a.addr.is_loopback())
 }
 
 /// Devices libpcap offers that are not networks.
@@ -697,7 +784,8 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
         // inode-to-pid map — four calls in five were thrown away.
         if running && looked.elapsed() >= Duration::from_secs(5) {
             looked = std::time::Instant::now();
-            let (remote, homebound) = game_endpoints(&pids);
+            let (remote, homebound, through_loopback) = game_endpoints(&pids);
+            THROUGH_LOOPBACK.store(through_loopback, Ordering::Relaxed);
             hosts = remote.len();
             local = homebound;
             if told != Some((pids.len(), hosts, local)) {
@@ -706,13 +794,21 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                 crate::log::say(
                     "net",
                     &format!(
-                        "the game is pid {} and holds {hosts} connections, {local} of them to this machine",
+                        "the game is pid {} and holds {hosts} connections to a server and {local} to this machine",
                         who.join(", ")
                     ),
                 );
             }
             wanted = capture_devices();
-            let narrow = scope_for(&remote);
+            // Those addresses belong to the process carrying the game's traffic,
+            // not to the game, and narrowing to them would throw away the one
+            // leg that can be read. The game talks to the accelerator in the
+            // clear over loopback — which Npcap offers as an adapter of its own,
+            // and which this capture takes — while what the accelerator sends on
+            // is as likely as not a tunnel. So: named in the log and on the
+            // status line, and not in the filter.
+            let narrow =
+                if through_loopback { "tcp".to_string() } else { scope_for(&remote) };
             let next = if wide_capture() { "tcp".to_string() } else { narrow };
             if next != scope {
                 crate::log::say("net", &format!("capture filter: {next}"));
@@ -1141,11 +1237,15 @@ mod tests {
     /// the game could have been seen on.
     #[test]
     fn an_adapter_with_no_addresses_is_still_worth_listening_on() {
-        assert!(worth_capturing(&[]), "no addresses is not the same as loopback");
-        assert!(worth_capturing(&[address("192.168.0.70")]));
-        assert!(worth_capturing(&[address("127.0.0.1"), address("10.250.0.1")]));
-        assert!(!worth_capturing(&[address("127.0.0.1")]), "loopback is what this skips");
-        assert!(!worth_capturing(&[address("::1")]));
+        assert!(worth_capturing(&[], false), "no addresses is not the same as loopback");
+        assert!(worth_capturing(&[address("192.168.0.70")], false));
+        assert!(worth_capturing(&[address("127.0.0.1"), address("10.250.0.1")], false));
+        assert!(!worth_capturing(&[address("127.0.0.1")], false), "loopback is what this skips");
+        assert!(
+            worth_capturing(&[address("127.0.0.1")], true),
+            "unless it is the only adapter the game is on"
+        );
+        assert!(!worth_capturing(&[address("::1")], false));
     }
 
     /// The filter decides whether anything is captured at all. With no known

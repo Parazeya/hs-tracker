@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.7 — 2026-09-06
+
+### Added
+
+- A Streaming section in Settings: the window titles OBS lists, the capture
+  method, and what a black picture means.
+- A Test button for the announcement.
+
+### Changed
+
+- The announcement window is `HS Tracker — Announcement` and the drop list
+  `HS Tracker — Drops`. An OBS source that matches on the title has to be
+  pointed at the window again.
+
+### Fixed
+
+- An item's odds are no longer scaled down to a third of the game's.
+- A game behind an accelerator or a local proxy is counted ([#13]).
+- Such a game is no longer reported as a local game.
+- The overlay no longer clips its bottom and right edge where the webview
+  ignores the Size setting.
+
+[#13]: https://github.com/Parazeya/hs-tracker/issues/13
+
 ## 1.1.6 — 2026-09-04
 
 ### Added
@@ -13,7 +37,6 @@
 
 - A large announcement no longer draws its shading as a black square.
 - Each resource is listed under the counter it belongs to.
-- A large announcement no longer draws its shading as a black square.
 - The theme changes as soon as it is picked, without waiting for the save.
 - A save that cannot reach the disk says so instead of failing in silence.
 - The log says where each window is and whether it is up.

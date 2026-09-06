@@ -182,16 +182,46 @@
   $effect(() => {
     if (!panelEl) return;
     const report = () => {
-      const { width, height } = panelEl.getBoundingClientRect();
-      // The width goes with it. Held as a constant on both sides, a machine
-      // whose text comes out wider spills the chips — fixed widths, no wrapping
-      // — over the row instead of the panel giving way. See "Squished Panel".
-      if (height > 0) invoke('fit_overlay', { height, width }).catch(() => {});
+      const box = panelEl.getBoundingClientRect();
+      // The box AND what is inside it, whichever is larger.
+      //
+      // The box alone is what the panel was given; `scrollWidth` is what its
+      // contents actually came to. Those agree while the panel grows with its
+      // rows — `width: max-content` — and they part the moment something inside
+      // stops pushing: a chip that cannot widen, a row that clips, a rule that
+      // did not survive a browser. Then the box keeps reporting 444, the window
+      // stays 472, and the strip on the right lies over the last column while
+      // the panel runs out of the window under it. Reported at its true size the
+      // window follows, whatever the reason the box stopped growing.
+      //
+      // The width goes with the height for the same reason: held as a constant
+      // on both sides, a machine whose text comes out wider spills the chips —
+      // fixed widths, no wrapping — over the row instead of the panel giving
+      // way. See "Squished Panel".
+      const width = Math.max(box.width, panelEl.scrollWidth);
+      const height = Math.max(box.height, panelEl.scrollHeight);
+      // And what the viewport came to, so the other side can work out the zoom
+      // that is in effect rather than the one it asked for. `set_zoom` is a
+      // request: where it is dropped the window is built for a panel shrunk to
+      // the Size setting while the panel is still drawn full size, and the
+      // bottom and the right run off the edge. Window width over this is the
+      // factor that actually took.
+      if (height > 0) {
+        invoke('fit_overlay', { height, width, inner: window.innerWidth }).catch(() => {});
+      }
     };
     const observer = new ResizeObserver(report);
     observer.observe(panelEl);
+    // The panel is `max-content` with a floor, so its CSS size does not move
+    // when the window does and the observer never fires on a resize. Without
+    // this the first correction would also be the last, and the measurement
+    // could never be checked against the window it produced.
+    window.addEventListener('resize', report);
     report();
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', report);
+    };
   });
 
   let status = $derived.by(() => {
