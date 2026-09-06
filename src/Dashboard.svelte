@@ -150,14 +150,22 @@
       // a fault, and no setting would change it — which is why this line is
       // not red. The old wording called it a fault and named a Flatpak first,
       // and a player in a local game was told to go hunting for a VPN.
+      //
+      // It is not the only thing that looks like this, though, and the wording
+      // no longer claims it is. A game accelerator points the game at
+      // 127.0.0.1 and carries its traffic on from another process, so the
+      // game's socket table says the same thing while the player is online and
+      // counting. `game_endpoints` follows that hop where it can — this line is
+      // what is left when it cannot, and telling that player to join an online
+      // server is telling them to do what they have already done.
       if (Number(hosts) === 0 && snap.session_secs > 60)
         return {
           bad: false,
-          title: t('Nothing to count in a local game'),
+          title: t('Nothing reaching us from the game'),
           detail:
             Number(local) > 0
               ? t(
-                  'The game is connected to this machine and to nowhere else, which is what Local Mode looks like from here. Gold, experience and finds are read out of what the game tells its server, and a local game tells one nothing. Join an online server and counting starts on its own.',
+                  'The game is connected to this machine and to nowhere else. That is what Local Mode looks like from here — a game without a server tells one nothing, so there is nothing to count. It is also what a game accelerator or a local proxy looks like: the game is pointed at this machine and something else carries its traffic on. If one is running, close it, or turn on “Read every connection” in Settings.',
                 )
               : say(
                   'Capturing on {iface}. The game is running and holds no connection at all — Local Mode looks exactly like this, and there is nothing on the wire to read. If you are playing online, a VPN or a second network adapter can carry its traffic somewhere we are not listening.',

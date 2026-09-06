@@ -187,6 +187,11 @@ static FLOURISH_ALWAYS: AtomicBool = AtomicBool::new(false);
 /// no settings of its own.
 static FLOURISH_ZONE: AtomicBool = AtomicBool::new(true);
 static SCALE_MILLI: AtomicU32 = AtomicU32::new(1000);
+/// The zoom the webview is really drawing at, in thousandths; 0 until the page
+/// has said. See `drawn_at`.
+static ZOOM_MILLI: AtomicU32 = AtomicU32::new(0);
+/// How many times `set_zoom` has been asked again after being ignored.
+static ZOOM_TRIES: AtomicU32 = AtomicU32::new(0);
 /// The panel's own height in CSS pixels, as the overlay last measured it. Zero
 /// until the first frame has been drawn, when the guess below stands in.
 static PANEL_H: AtomicU32 = AtomicU32::new(0);
@@ -1572,8 +1577,60 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
 /// `base_w()`, the width the page has actually measured. A machine whose chips
 /// draw wider than the constant then grows the window to fit and has it
 /// squashed back by the next settings change, including the one at startup.
+/// The factor the window is actually to be built by.
+///
+/// `set_zoom` is a request, not a setting. WebView2 152 leaves the page at 1.0
+/// and reports nothing, and the window is then sized for a panel that was never
+/// shrunk: 444 CSS pixels of panel in a 345 pixel window, with the bottom and
+/// the right-hand column falling outside it.
+///
+/// So the page reports its own `innerWidth` with every measurement and
+/// `note_zoom` divides the window's logical width by it, which is the zoom that
+/// took. Where `set_zoom` works the two agree and this changes nothing.
+fn drawn_at(scale: f64) -> f64 {
+    match ZOOM_MILLI.load(Ordering::Relaxed) {
+        0 => scale,
+        z => z as f64 / 1000.0,
+    }
+}
+
+/// Read the zoom back off the viewport the page reports, and ask again for the
+/// one that was wanted if they still disagree.
+///
+/// Snapped to `scale` when it is within a few hundredths: a window part-way
+/// through a resize reports a viewport a frame behind, and letting that stand
+/// would have the window chase itself. The retry is capped because a webview
+/// that has refused three times is not going to change its mind, and the window
+/// is correct at full size either way.
+fn note_zoom(w: &tauri::WebviewWindow, inner: f64, scale: f64) {
+    let (Ok(size), Ok(factor)) = (w.inner_size(), w.scale_factor()) else { return };
+    let Some(z) = zoom_from(size.to_logical::<f64>(factor).width, inner, scale) else { return };
+    ZOOM_MILLI.store((z * 1000.0).round() as u32, Ordering::Relaxed);
+    if z == scale {
+        ZOOM_TRIES.store(0, Ordering::Relaxed);
+    } else if ZOOM_TRIES.fetch_add(1, Ordering::Relaxed) < 3 {
+        let _ = w.set_zoom(scale);
+    }
+}
+
+/// The window's logical width over the viewport the page reports, which is the
+/// zoom, and `None` for a reading not worth having.
+fn zoom_from(logical_width: f64, inner: f64, scale: f64) -> Option<f64> {
+    if !(inner > 1.0) || !logical_width.is_finite() {
+        return None;
+    }
+    let z = logical_width / inner;
+    if !(0.3..=2.0).contains(&z) {
+        return None;
+    }
+    // Snapped: a window part-way through a resize reports a viewport a frame
+    // behind, and a window built on that chases itself.
+    Some(if (z - scale).abs() < 0.04 { scale } else { z })
+}
+
 fn overlay_size(height: f64, scale: f64) -> LogicalSize<f64> {
-    LogicalSize::new(base_w() * scale, height.max(STRIP_H) * scale)
+    let z = drawn_at(scale);
+    LogicalSize::new(base_w() * z, height.max(STRIP_H) * z)
 }
 
 /// Everything a settings change touches outside the webviews.
@@ -1604,6 +1661,9 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
         // The poller reads LOCKED, stored above, and converges within one 50ms
         // tick.
         let _ = w.set_zoom(scale);
+        // the measurement that stands belongs to the zoom of a moment ago
+        ZOOM_MILLI.store(0, Ordering::Relaxed);
+        ZOOM_TRIES.store(0, Ordering::Relaxed);
         let _ = w.set_size(overlay_size(overlay_height(settings), scale));
     }
     apply_autostart(settings.autostart);
@@ -1671,7 +1731,7 @@ fn spawn_strip_poller(app: AppHandle) {
                 let pos = w.outer_position().ok()?;
                 let dpi = w.scale_factor().ok()?;
                 let cur = app.cursor_position().ok()?;
-                let z = dpi * SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
+                let z = dpi * drawn_at(SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0);
                 // The corner opens it; the whole column keeps it open.
                 let (x0, y0, x1, y1) = strip_rect(held);
                 Some(
@@ -1987,7 +2047,7 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
 
 fn build_flourish(app: &AppHandle, size: LogicalSize<f64>) {
     let built = tauri::WebviewWindowBuilder::new(app, "flourish", tauri::WebviewUrl::default())
-        .title("HS Tracker Flourish")
+        .title("HS Tracker — Announcement")
         .inner_size(size.width, size.height)
         .resizable(false)
         .visible(false)
@@ -2108,6 +2168,31 @@ fn park_below_centre(app: &AppHandle, w: &tauri::WebviewWindow) {
     let x = pos.x + (size.width as i32 - win.width as i32) / 2;
     let y = pos.y + (size.height as i32 - win.height as i32) / 2 + (size.height as i32) / 5;
     let _ = w.set_position(tauri::PhysicalPosition { x, y });
+}
+
+/// Announce a drop that never happened.
+///
+/// The rarity switches, the grade floor and the watchlist are all skipped: this
+/// is not asking whether a drop deserves a pillar, it is showing what one looks
+/// like. Everything after that is the real path — the same window, the same
+/// reveal, the same hide when the animation ends — so an announcement that does
+/// not turn up in OBS here would not have turned up on a real drop either.
+///
+/// That is the whole point of the button. The window draws nothing between
+/// drops, so a capture set up on a quiet evening looks identical whether it is
+/// working or not, and the only test anyone had was to go and farm one.
+#[tauri::command]
+fn test_flourish(app: AppHandle) {
+    let Some(w) = app.get_webview_window("flourish") else { return };
+    let sample = serde_json::json!({
+        "rarity": "Heroic",
+        "name": "Fenrir's Bloodfang",
+        "tier": 6,
+        "item_type": 3,
+        "weapon_type": 1,
+    });
+    let _ = app.emit_to("flourish", "flourish-play", &sample);
+    show_flourish(&app, &w);
 }
 
 #[tauri::command]
@@ -2282,7 +2367,7 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn fit_overlay(app: AppHandle, height: f64, width: Option<f64>) {
+fn fit_overlay(app: AppHandle, height: f64, width: Option<f64>, inner: Option<f64>) {
     let height = height.clamp(60.0, 1200.0);
     // kept for the scale slider: zoom changes the window without changing a
     // single CSS pixel of the panel, so nothing would measure it again
@@ -2292,6 +2377,9 @@ fn fit_overlay(app: AppHandle, height: f64, width: Option<f64>) {
     }
     let Some(w) = app.get_webview_window("main") else { return };
     let scale = SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
+    if let Some(inner) = inner {
+        note_zoom(&w, inner, scale);
+    }
     let wanted = overlay_size(height, scale);
     // a resize that changes nothing still goes through the window manager, and
     // on X11 that can shift the window out from under the player
@@ -2420,6 +2508,18 @@ pub(crate) fn log_windows(app: &AppHandle) {
         };
         said.push(format!("{label} {} {where_}", if up { "up" } else { "hidden" }));
     }
+    // And what the overlay asked to be, which is the other half of every report
+    // of a clipped panel: a window of 472 is right for a panel that measured 444
+    // and wrong for one that measured 520, and the line above cannot tell those
+    // apart. See `fit_overlay`.
+    let scale = SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0;
+    said.push(format!(
+        "panel {}x{} css at scale {:.2}, drawn at {:.2}",
+        panel_w(),
+        PANEL_H.load(Ordering::Relaxed),
+        scale,
+        drawn_at(scale),
+    ));
     log::say("win", &said.join(" | "));
 }
 
@@ -3430,6 +3530,7 @@ pub fn run() {
             fit_overlay,
             flourish_done,
             place_flourish,
+            test_flourish,
             hide_window,
             hide_dashboard,
             compact_mode,
@@ -3668,6 +3769,20 @@ mod tests {
         assert_eq!(overlay_size(10.0, 1.0).height, STRIP_H, "never shorter than the strip");
 
         PANEL_WIDTH.store(before, Ordering::Relaxed);
+    }
+
+    /// A webview that honours `set_zoom` and one that ignores it, told apart by
+    /// nothing but the viewport the page reports back.
+    #[test]
+    fn zoom_is_read_back_off_the_viewport() {
+        // asked for 0.73 and got it: 345 logical over 472 CSS
+        assert_eq!(zoom_from(345.0, 472.6, 0.73), Some(0.73), "honoured, and snapped");
+        // asked for 0.73 and ignored: the page still lays out at 345
+        assert_eq!(zoom_from(345.0, 345.0, 0.73), Some(1.0), "ignored");
+        // and once the window has grown to suit, it stays there
+        assert_eq!(zoom_from(472.0, 472.0, 0.73), Some(1.0), "settled");
+        assert_eq!(zoom_from(345.0, 0.0, 0.73), None, "nothing to divide by");
+        assert_eq!(zoom_from(345.0, 20.0, 0.73), None, "not a viewport");
     }
 
     /// Seven commands build a filesystem path out of an id that came from the

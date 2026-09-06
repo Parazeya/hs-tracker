@@ -144,6 +144,14 @@
   }
 
 
+  /// What each window is called in OBS's list. Not translated: it is the title
+  /// the window carries, and a translated one would be looked for in vain.
+  const WINDOWS = [
+    ['Overlay', 'HS Tracker \u2014 Overlay'],
+    ['Announcement', 'HS Tracker \u2014 Announcement'],
+    ['Drops', 'HS Tracker \u2014 Drops'],
+    ['Dashboard', 'HS Tracker'],
+  ];
 </script>
 
 <div class="panel">
@@ -373,6 +381,25 @@
       {/if}
       {#if notice}<div class="notice">{notice}</div>{/if}
     </div>
+
+    {#if overlay}
+      <!-- Everything OBS needs, in the app rather than only in the README.
+           Three support rounds went on the same three facts: the window has to
+           be picked by name, the announcement is not a window between drops,
+           and a black picture is a refusal rather than an empty window. -->
+      <div class="section" style:border-image-source="url({art('chip_dark')})">
+        <div class="sechead" data-tauri-drag-region>{t("Streaming")}</div>
+        <div class="note">{t("Each window is captured on its own. Add a Window Capture in OBS and pick one of these:")}</div>
+        <div class="wins">
+          {#each WINDOWS as [what, title]}
+            <div class="win"><span>{t(what)}</span><b class="mono">{title}</b></div>
+          {/each}
+        </div>
+        <div class="note">{t("Capture Method must be “Windows 10 (1903 and up)”. Every window here is transparent, and the older method captures nothing from one.")}</div>
+        <div class="note">{t("The announcement is only a window while it is announcing something. Tick “Keep its window on screen” on the Alerts page, or OBS never lists it.")}</div>
+        <div class="note">{t("A black picture means OBS is being refused, not that the window is empty: do not run HS Tracker as administrator unless OBS runs that way too, and put both on the same graphics card.")}</div>
+      </div>
+    {/if}
 
     {#if overlay && advanced}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
@@ -667,6 +694,33 @@
     color: var(--bone-6);
     padding: 0 2px 6px 30px;
     max-width: 620px;
+  }
+
+  /* what OBS needs, in the plain voice the rest of the guide uses */
+  .note {
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--edge-2b);
+    padding: 4px 2px 0;
+  }
+
+  /* the window titles, as OBS prints them */
+  .wins {
+    display: grid;
+    gap: 2px;
+    padding: 2px 0 4px;
+  }
+  .win {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .win span { font-size: 10px; color: var(--edge-2b); }
+  .win .mono {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 10px;
+    color: var(--bone-6);
   }
 
   .notice {
