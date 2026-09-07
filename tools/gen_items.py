@@ -14,10 +14,12 @@ Names never come from seeds; a named item's grade never comes from a packet —
 the drop that lands on the ground does not state one.
 """
 
+import functools
 import json
 import os
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 # Item names carry characters a Windows console's default code page cannot
@@ -101,6 +103,44 @@ NO_DROP = 50_000_000
 ORDINARY = {"Common", "Superior", "Rare"}
 TIERS = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5, "SS": 6}
 
+
+def group_of(tkey: str, name: str) -> str | None:
+    """The kind inside a kind, off the game's own key for the item.
+
+    One item type covers everything that goes in a socket: forty runes,
+    forty-two gems, sixteen jewels, eighteen orbs and nine soulgems, all
+    type 15. A watchlist that can only say "socketable" says all of them at
+    once, and a player who wants a chime for runes has to name forty items.
+
+    Nothing the game prints separates them — a rune is called "Ist" on screen,
+    not "Ist Rune", and the word says nothing about what it is. The key does:
+    `socketable_ist_rune`, `socketable_jewel_aether`, `socketable_orb_of_midas`,
+    `socketable_chipped_ruby`. So the group is read there and not guessed from
+    the name.
+
+    Only the two types whose keys carry a real division are grouped. Keys,
+    materials and consumables are flat runs of one-off names — `keys_aztec_key`,
+    `material_iron_ore` — and inventing tiers over them would be this file's
+    opinion rather than the game's.
+    """
+    if tkey.startswith("collectible_tarot_"):
+        return "tarot"
+    if not tkey.startswith("socketable_"):
+        return None
+    if tkey.endswith("_rune"):
+        return "runes"
+    if tkey.startswith("socketable_jewel_"):
+        return "jewels"
+    if tkey.startswith("socketable_orb_of_"):
+        return "orbs"
+    # `socketable_gem_*` is fourteen keys and only nine are soulgems: the rest
+    # are the Angelic, Chaos, Elemental and Moonstone Gems and the Gem of
+    # Incarnation, which are gems and say so. The name is what tells them apart,
+    # and it is the thing a player actually reads.
+    if name.lower().endswith("soulgem"):
+        return "soulgems"
+    return "gems"
+
 # The datamined stat ids and the game's attribute table are two vocabularies,
 # not one spelled twice: `defense_base` against `stat_defense`,
 # `all_attributes_flat` against `stat_all_stats`, `life_percent` against
@@ -128,6 +168,44 @@ TIERS = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5, "SS": 6}
 # There is no Turkish. The community has a channel for it and the game ships no
 # column, so nothing here can invent one.
 LANGS: list[str] = []
+
+# A language written out of another rather than read from a column.
+#
+# The game has one Chinese and it is Simplified. Taiwan and Hong Kong read the
+# other script, and nothing in the files answers for them.
+#
+# Derived rather than translated by hand: a season that adds two hundred items
+# adds them here the same day, and `said.py` keeps one Chinese column instead of
+# two that drift apart. A name is a name in either script — what a conversion
+# cannot do is idiom, and the app's own sentences go through the same profile
+# for exactly that reason: see `_to_traditional`.
+DERIVED = {"tw": "zh"}
+
+
+@functools.cache
+def _to_traditional():
+    """Simplified to Traditional, Taiwanese vocabulary and all.
+
+    `s2twp` rather than `s2t`: the plain profile swaps characters and stops
+    there, which writes 默認設置 where a Taiwanese reader expects 預設設定 and
+    鼠標 where they expect 滑鼠. The `p` profile carries the words across too.
+    """
+    try:
+        from opencc import OpenCC
+    except ImportError:
+        raise SystemExit(
+            "Traditional Chinese is written out of the Simplified column and needs OpenCC.\n"
+            "  pip install opencc-python-reimplemented"
+        )
+    return OpenCC("s2twp").convert
+
+
+def _in(said: dict[str, str], lang: str) -> str:
+    """One row's word in a language, written out where the language is derived."""
+    if source := DERIVED.get(lang):
+        value = said.get(source, "")
+        return _to_traditional()(value) if value else ""
+    return said.get(lang, "")
 # tkey -> {lang: name}, for each of the three files that name something
 ITEM_TR: dict[str, dict[str, str]] = {}
 ROOM_TR: dict[str, dict[str, str]] = {}
@@ -587,6 +665,28 @@ rs_rooms = sorted(rooms.items())
 
 rooms_js = json.dumps(rooms, ensure_ascii=False, separators=(",", ":"))
 
+# Keyed by the lowercased name, as the rarity and grade tables are: a list
+# stores names, and a drop arrives with one. See `group_of`.
+groups = {
+    name.lower(): group
+    for key, tkey in sorted(tkey_of.items())
+    if (name := items.get(key)) and (group := group_of(tkey, name))
+}
+# Which item type each group lives in.
+#
+# The table above is keyed by name, and one name can belong to two types: the
+# game calls both a socketable orb and a Set gun "Angel", so "angel" carries the
+# orb's group and the gun inherits it. A rule is safe either way, since it names
+# the item type alongside the group — this is so the picker does not offer
+# "Orbs · 1" under Weapon.
+group_types = {
+    group: int(key.split(":")[0])
+    for key, tkey in sorted(tkey_of.items())
+    if (name := items.get(key)) and (group := group_of(tkey, name))
+}
+print(f"groups: {len(groups)} items in "
+      f"{', '.join(f'{g} {n}' for g, n in sorted(Counter(groups.values()).items()))}")
+
 out = rf"""{header}
 // Item identity is (type, gameId, weaponType); key "type:id:wt".
 
@@ -595,6 +695,16 @@ export const ITEMS = {json.dumps(items, ensure_ascii=False, separators=(",", ":"
 export const RARITY_BY_NAME = {json.dumps(rarities, ensure_ascii=False, separators=(",", ":"))};
 
 export const TIER_BY_NAME = {json.dumps(tiers, ensure_ascii=False, separators=(",", ":"))};
+
+// The kind inside a kind: a socketable is a rune, a gem, a soulgem, a jewel or
+// an orb, and a collectible may be a tarot card. Read off the game's own item
+// keys — see `group_of` in tools/gen_items.py — because nothing the game prints
+// says which of them a thing is.
+export const GROUP_BY_NAME = {json.dumps(groups, ensure_ascii=False, separators=(",", ":"))};
+
+// The item type each of those groups belongs to. A name two types share hands
+// its group to both, and this is what says which one meant it.
+export const GROUP_TYPE = {json.dumps(group_types, separators=(",", ":"))};
 
 // What an identity is, where the name it goes by says otherwise: [name, rarity,
 // grade], keyed the same way as ITEMS. Two items can wear one name — the game
@@ -714,6 +824,20 @@ rs_lines += ["];", "", f"static RARITY_BY_NAME: [(&str, &str); {len(rs_rarities)
 rs_lines += [f"    ({rs_str(k)}, {rs_str(v)})," for k, v in rs_rarities]
 rs_lines += ["];", "", f"static TIER_BY_NAME: [(&str, u8); {len(rs_tiers)}] = ["]
 rs_lines += [f"    ({rs_str(k)}, {v})," for k, v in rs_tiers]
+rs_groups = sorted(groups.items())
+rs_lines += [
+    "];",
+    "",
+    "/// The kind inside a kind: which of the five things that go in a socket an",
+    "/// item is, and whether a collectible is a tarot card. A watchlist rule can",
+    "/// name one of these, and only an item type could be named before — which",
+    "/// for socketables is a hundred and forty-four things at once.",
+    "///",
+    "/// Read off the game's own item keys at generation time; nothing the game",
+    "/// prints says which group a name belongs to. See `group_of`.",
+    f"static GROUP_BY_NAME: [(&str, &str); {len(rs_groups)}] = [",
+]
+rs_lines += [f"    ({rs_str(k)}, {rs_str(v)})," for k, v in rs_groups]
 rs_lines += [
     "];",
     "",
@@ -816,6 +940,15 @@ rs_lines += [
     "        .binary_search_by_key(&key.as_str(), |(k, _)| *k)",
     "        .ok()",
     "        .map(|i| RARITY_BY_NAME[i].1)",
+    "}",
+    "",
+    "/// Which group a named item belongs to; names are matched lowercased.",
+    "pub fn group_by_name(name: &str) -> Option<&'static str> {",
+    "    let key = name.trim().to_lowercase();",
+    "    GROUP_BY_NAME",
+    "        .binary_search_by_key(&key.as_str(), |(k, _)| *k)",
+    "        .ok()",
+    "        .map(|i| GROUP_BY_NAME[i].1)",
     "}",
     "",
     "/// Grade (1 = D .. 6 = SS) of a named item. The grade is fixed per item,",
@@ -923,7 +1056,7 @@ WEAPON_TKEY = {
 
 def _said(table, key, lang):
     said = table.get(key or "", {})
-    value = said.get(lang, "")
+    value = _in(said, lang)
     # A language the game left blank for one row falls back to English, and the
     # page falls back to English again for a row that is missing entirely — so
     # writing the English out here would only make the file bigger.
@@ -1149,7 +1282,10 @@ def write_languages():
     words = app_words()
     written = []
     shipped: dict[str, set[str]] = {}
-    for lang in LANGS:
+    # `dict.fromkeys` rather than a plain concatenation: a season that ships a
+    # Traditional column of its own would otherwise write the file twice, the
+    # second pass overwriting the game's own words with a conversion of them.
+    for lang in dict.fromkeys([*LANGS, *DERIVED]):
         if lang == "en":
             continue
         side = {
@@ -1180,7 +1316,7 @@ def write_languages():
                 **{en: v for en in sorted(BUFF_TR) if (v := _said(BUFF_TR, en, lang))},
                 # and the places a chase item is tied to
                 **{en: v for en in sorted(PLACE_TR) if (v := _said(PLACE_TR, en, lang))},
-                **{en: said[lang] for en, said in sorted(words.items()) if said.get(lang)},
+                **{en: v for en, said in sorted(words.items()) if (v := _in(said, lang))},
             },
         }
         path = LANG_OUT / f"{lang}.json"

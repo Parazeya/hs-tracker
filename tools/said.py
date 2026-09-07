@@ -1670,17 +1670,92 @@ SAID = {
         "zh": "撒旦区域轮换也会有光柱，画法不同 — 显示区域及其掷出的增益",
         "ja": "ゾーンの切り替わりにも柱が出ます。描き方は別で、ゾーンと引いたバフを示します",
         "ko": "구역 교체에도 기둥이 뜨며, 그리는 방식이 달라 구역과 뽑힌 버프를 보여줍니다"},
-    "A relic you ticked hitting the floor: the chime, the drop feed and the pillar": {
-        "de": "Ein angekreuztes Relikt fällt zu Boden: der Ton, die Fundzeile und die Säule",
-        "sp": "Una reliquia marcada cae al suelo: el sonido, el listado de caídas y la columna",
-        "fi": "Rastittamasi reliikki osuu maahan: ääni, pudotusrivi ja pylväs",
-        "fr": "Une relique cochée touche le sol : le son, le fil des trouvailles et la colonne",
-        "pl": "Zaznaczony relikt spada na ziemię: dźwięk, pasek wypadów i słup",
-        "pt": "Uma relíquia marcada cai no chão: o som, a lista de quedas e a coluna",
-        "ru": "Отмеченная реликвия падает на землю: звук, лента дропа и колонна",
-        "zh": "你勾选的遗物落地时：提示音、掉落条与光柱",
-        "ja": "選んだレリックが落ちたとき：音、ドロップ表示、そして柱",
-        "ko": "선택한 유물이 떨어질 때: 소리, 드롭 표시, 그리고 기둥"},
+    "A relic you ticked hitting the floor: the chime and the drop feed. The pillar is its own switch below.": {
+        "de": "Ein angekreuztes Relikt fällt zu Boden: der Ton und die Fundzeile. Die Säule hat unten ihren eigenen Schalter.",
+        "sp": "Una reliquia marcada cae al suelo: el sonido y el listado de caídas. La columna tiene su propio interruptor abajo.",
+        "fi": "Rastittamasi reliikki osuu maahan: ääni ja pudotusrivi. Pylväällä on oma kytkimensä alempana.",
+        "fr": "Une relique cochée touche le sol : le son et le fil des trouvailles. La colonne a son propre interrupteur plus bas.",
+        "pl": "Zaznaczony relikt spada na ziemię: dźwięk i pasek wypadów. Słup ma własny przełącznik niżej.",
+        "pt": "Uma relíquia marcada cai no chão: o som e a lista de quedas. A coluna tem o próprio interruptor abaixo.",
+        "ru": "Отмеченная реликвия падает на землю: звук и лента дропа. У колонны свой переключатель ниже.",
+        "zh": "你勾选的遗物落地时：提示音与掉落条。光柱在下面有自己的开关。",
+        "ja": "選んだレリックが落ちたとき：音とドロップ表示。柱は下に独自の切り替えがあります。",
+        "ko": "선택한 유물이 떨어질 때: 소리와 드롭 표시. 기둥은 아래에 별도 스위치가 있습니다."},
+    # ── the kinds inside a kind, on the watchlist's category picker ──
+    #
+    # Singular, because the item kinds beside them are — the picker reads
+    # "Helmet · 91" and a rule off it reads "every Helmet", so a plural here
+    # would print "every Runes" and sit crooked in the same list.
+    #
+    # Built on the game's own word where it has one: `rune`, `craft_gem` and
+    # `craft_jewel` in its table. The rest are this app's.
+    "Rune": {
+        "de": "Rune", "sp": "Runa", "fi": "Riimu", "fr": "Rune",
+        "pl": "Runa", "pt": "Runa", "ru": "Руна",
+        "zh": "符文", "ja": "ルーン", "ko": "룬"},
+    "Gem": {
+        "de": "Edelstein", "sp": "Gema", "fi": "Jalokivi", "fr": "Gemme",
+        "pl": "Kamień", "pt": "Gema", "ru": "Самоцвет",
+        "zh": "宝石", "ja": "ジェム", "ko": "젬"},
+    "Soulgem": {
+        "de": "Seelenstein", "sp": "Gema de alma", "fi": "Sielukivi",
+        "fr": "Gemme d'âme", "pl": "Kamień duszy", "pt": "Gema de alma",
+        "ru": "Камень душ", "zh": "灵魂宝石", "ja": "ソウルジェム", "ko": "영혼석"},
+    "Jewel": {
+        "de": "Juwel", "sp": "Joya", "fi": "Korukivi", "fr": "Joyau",
+        "pl": "Klejnot", "pt": "Joia", "ru": "Драгоценность",
+        "zh": "珠宝", "ja": "ジュエル", "ko": "쥬얼"},
+    "Orb": {
+        "de": "Kugel", "sp": "Orbe", "fi": "Pallo", "fr": "Orbe",
+        "pl": "Kula", "pt": "Orbe", "ru": "Сфера",
+        "zh": "宝珠", "ja": "オーブ", "ko": "오브"},
+    "Tarot card": {
+        "de": "Tarotkarte", "sp": "Carta de tarot", "fi": "Tarot-kortti",
+        "fr": "Carte de tarot", "pl": "Karta tarota", "pt": "Carta de tarô",
+        "ru": "Карта таро", "zh": "塔罗牌", "ja": "タロットカード", "ko": "타로 카드"},
+
+    # ── the pillar's own switches for what the rarity grid cannot reach ──
+    "Relic": {
+        "de": "Relikt", "sp": "Reliquia", "fi": "Reliikki", "fr": "Relique",
+        "pl": "Relikt", "pt": "Relíquia", "ru": "Реликвия",
+        "zh": "遗物", "ja": "レリック", "ko": "유물"},
+    "Codex": {
+        "de": "Kodex", "sp": "Códice", "fi": "Koodeksi", "fr": "Codex",
+        "pl": "Kodeks", "pt": "Códice", "ru": "Кодекс",
+        "zh": "典籍", "ja": "コーデックス", "ko": "코덱스"},
+    "A relic you ticked above. Relics have no rarity on the switches, so they need this one.": {
+        "de": "Ein oben angekreuztes Relikt. Relikte haben keine Seltenheit auf den Schaltern, darum dieser hier.",
+        "sp": "Una reliquia marcada arriba. Las reliquias no tienen rareza en los interruptores, por eso necesitan este.",
+        "fi": "Yllä rastittamasi reliikki. Reliikeillä ei ole harvinaisuutta kytkimissä, joten ne tarvitsevat tämän.",
+        "fr": "Une relique cochée plus haut. Les reliques n'ont pas de rareté parmi les interrupteurs, d'où celui-ci.",
+        "pl": "Relikt zaznaczony powyżej. Relikty nie mają rzadkości wśród przełączników, więc potrzebują tego.",
+        "pt": "Uma relíquia marcada acima. Relíquias não têm raridade nos interruptores, por isso precisam deste.",
+        "ru": "Реликвия, отмеченная выше. У реликвий нет редкости среди переключателей, поэтому им нужен этот.",
+        "zh": "你在上面勾选的遗物。遗物在上方开关里没有稀有度，所以需要这个。",
+        "ja": "上で選んだレリック。レリックには稀少度の欄がないため、この切り替えが要ります。",
+        "ko": "위에서 선택한 유물. 유물에는 등급 스위치가 없어 이 스위치가 필요합니다."},
+    "Eternity Codex and Infernal Codex. Both are Common consumables, so the rarity switches never see them.": {
+        "de": "Ewigkeits- und Höllenkodex. Beide sind gewöhnliche Verbrauchsgüter, die Seltenheitsschalter sehen sie nie.",
+        "sp": "Códice de la Eternidad y Códice Infernal. Ambos son consumibles comunes, así que los interruptores de rareza nunca los ven.",
+        "fi": "Ikuisuuden ja Infernon koodeksi. Molemmat ovat tavallisia kulutustavaroita, joten harvinaisuuskytkimet eivät näe niitä.",
+        "fr": "Codex d'Éternité et Codex Infernal. Tous deux sont des consommables communs : les interrupteurs de rareté ne les voient jamais.",
+        "pl": "Kodeks Wieczności i Kodeks Piekielny. Oba są zwykłymi przedmiotami użytkowymi, więc przełączniki rzadkości ich nie widzą.",
+        "pt": "Códice da Eternidade e Códice Infernal. Ambos são consumíveis comuns, então os interruptores de raridade nunca os veem.",
+        "ru": "Кодекс вечности и Инфернальный кодекс. Оба — обычные расходники, поэтому переключатели редкости их не видят.",
+        "zh": "永恒典籍与炼狱典籍。两者都是普通消耗品，稀有度开关永远看不到它们。",
+        "ja": "エタニティ・コーデックスとインファーナル・コーデックス。どちらもコモンの消耗品で、稀少度の切り替えには映りません。",
+        "ko": "영원의 코덱스와 지옥의 코덱스. 둘 다 일반 소모품이라 등급 스위치에는 잡히지 않습니다."},
+    "A key, rune or collectible has no rarity here — the watchlist switch above is the only thing that gives one the pillar.": {
+        "de": "Ein Schlüssel, eine Rune oder ein Sammelstück hat hier keine Seltenheit — nur der Watchlist-Schalter oben gibt ihnen die Säule.",
+        "sp": "Una llave, runa o coleccionable no tiene rareza aquí: solo el interruptor de la lista, arriba, les da la columna.",
+        "fi": "Avaimella, riimulla tai keräilyesineellä ei ole täällä harvinaisuutta — vain yllä oleva listakytkin antaa niille pylvään.",
+        "fr": "Une clé, une rune ou un objet de collection n'a pas de rareté ici — seul l'interrupteur de la liste, plus haut, leur donne la colonne.",
+        "pl": "Klucz, runa lub przedmiot kolekcjonerski nie ma tu rzadkości — słup daje im tylko przełącznik listy powyżej.",
+        "pt": "Uma chave, runa ou colecionável não tem raridade aqui — só o interruptor da lista, acima, lhes dá a coluna.",
+        "ru": "У ключа, руны или коллекционного предмета здесь нет редкости — колонну им даёт только переключатель списка выше.",
+        "zh": "钥匙、符文和收藏品在这里没有稀有度 — 只有上面的监视列表开关能给它们光柱。",
+        "ja": "鍵・ルーン・収集品には上の稀少度がありません。柱を与えるのは上のウォッチリストの切り替えだけです。",
+        "ko": "열쇠, 룬, 수집품은 여기에 등급이 없습니다 — 기둥은 위의 감시 목록 스위치만이 줍니다."},
     "The satanic zone rotating: the chime, and the zone chip pulsing on the overlay": {
         "de": "Der Zonenwechsel: der Ton und der pulsierende Zonen-Chip im Overlay",
         "sp": "La rotación de la zona: el sonido y el recuadro de zona latiendo en la superposición",

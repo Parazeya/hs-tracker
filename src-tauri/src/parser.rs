@@ -876,6 +876,27 @@ const SELF_NUMBERED: [i64; 5] = [12, 13, 14, 15, 19];
 /// `GameStats::hunted_relic`.
 const RELIC: i64 = 16;
 
+/// Consumables. Healing potions live here, and so do the two Codexes.
+const CONSUMABLE: i64 = 11;
+
+/// Eternity Codex (id 18) and Infernal Codex (id 23).
+///
+/// Common consumables whose id is the identity — same as a key — but they are
+/// not in `SELF_NUMBERED`, because that list would name every potion too.
+pub(crate) const ENTRY_CODEX_IDS: [i64; 2] = [18, 23];
+
+/// Whether this drop is an Eternity or Infernal Codex.
+///
+/// Matched by identity when the packet has one, and by the English name when
+/// it does not: a chat find carries the name and zeroes for type and id.
+pub(crate) fn is_entry_codex(item_type: i64, item_id: i64, name: &str) -> bool {
+    if item_type == CONSUMABLE && ENTRY_CODEX_IDS.contains(&item_id) {
+        return true;
+    }
+    let n = name.trim().to_lowercase();
+    n == "eternity codex" || n == "infernal codex"
+}
+
 /// What only a market message carries. See `item_sources`.
 const MARKET_FIELDS: &[&str] =
     &["marketId", "market_id", "market_tokens", "marketTokens", "seller_name", "sellerName", "price"];
@@ -1043,8 +1064,17 @@ fn item_sources(d: &Value) -> Vec<(Option<String>, Value, bool)> {
                 // stats.rs keys on that hash, so the two sightings merge, and
                 // what moves is only which of them gets there first.
                 int_field(item, &["c"]) == 1
-                    || fingerprint_type(fp.as_deref())
-                        .is_some_and(|t| t == RELIC || SELF_NUMBERED.contains(&t))
+                    || fingerprint_type(fp.as_deref()).is_some_and(|t| {
+                        t == RELIC
+                            || SELF_NUMBERED.contains(&t)
+                            // A Codex is a consumable, so `c == 0` is simply
+                            // what it is — the same wall that hid relics. The
+                            // id is what tells it from a potion, and only those
+                            // two ids are admitted; every other type-11 drop
+                            // stays refused.
+                            || (t == CONSUMABLE
+                                && ENTRY_CODEX_IDS.contains(&int_field(item, &["b"])))
+                    })
             })
             .filter(|(_, item)| !belongs_to_a_player(item))
             .filter(|(_, item)| lies_on_the_floor(item))
@@ -1352,7 +1382,7 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
         .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
     let name = if !explicit_name.is_empty() {
         explicit_name
-    } else if named_flag || worth_naming || resource {
+    } else if named_flag || worth_naming || resource || is_entry_codex(item_type, item_id, "") {
         crate::items::item_name(item_type, item_id, weapon_type).unwrap_or_default().to_string()
     } else {
         String::new()
@@ -1858,6 +1888,38 @@ mod tests {
         // the name off the identity instead, and `item_name` is what they call.
         assert!(name.is_empty(), "relics are not named here");
         assert_eq!(crate::items::item_name(16, 127, 0), Some("Jungle Vial"));
+    }
+
+    /// An Eternity Codex on the floor is seen, and a potion beside it is not.
+    ///
+    /// Both are type 11 with `c == 0`, so the relic-style type admission would
+    /// let every healing potion through. The two Codex ids are what tell them
+    /// apart; every other consumable stays behind the `c == 1` wall.
+    #[test]
+    fn a_codex_on_the_floor_is_seen_and_a_potion_beside_it_is_not() {
+        let msg = json!({
+            "message": "ok",
+            "status": 1,
+            "itemData": {
+                "99-4964607-1a025650aaa-11": {
+                    "a": 1, "b": 18, "c": 0, "d": 1, "e": 0,
+                    "gd": 2694669, "j": 0, "sh": "codexhash0001"
+                },
+                "99-4964607-1a025650bbb-11": {
+                    "a": 2, "b": 0, "c": 0, "d": 1, "e": 0,
+                    "gd": 2694670, "j": 0, "sh": "potionhash000"
+                }
+            }
+        });
+        let events = events_from_messages(std::slice::from_ref(&msg));
+        assert_eq!(events.len(), 1, "the potion is still refused: {events:?}");
+        let GameEvent::ItemAdded { name, item_type, item_id, ground, hash, .. } = &events[0] else {
+            panic!("not an item: {events:?}")
+        };
+        assert_eq!((*item_type, *item_id), (11, 18), "Eternity Codex");
+        assert!(*ground);
+        assert_eq!(hash, "codexhash0001");
+        assert_eq!(name, "Eternity Codex", "the two Codexes are named; potions are not");
     }
 
     /// The same relic going into the bag, verbatim from the same capture.

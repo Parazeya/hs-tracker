@@ -503,12 +503,28 @@ pub struct Rule {
     pub item_type: Option<i64>,
     /// the weapon type inside item type 3; ignored without an item type
     pub weapon: Option<i64>,
+    /// The kind inside the kind — "runes", "gems", "jewels", "orbs",
+    /// "soulgems", "tarot" — lowercased, against the group the TABLES give the
+    /// name. Item type 15 is a hundred and forty-four things and a rule could
+    /// only ever ask for all of them; this is how it asks for the forty runes.
+    pub group: Option<String>,
 }
 
 impl Rule {
-    fn matches(&self, rarity: Option<&str>, item_type: i64, weapon_type: i64) -> bool {
+    fn matches(
+        &self,
+        rarity: Option<&str>,
+        item_type: i64,
+        weapon_type: i64,
+        group: Option<&str>,
+    ) -> bool {
         if let Some(want) = self.rarity.as_deref() {
             if rarity != Some(want) {
+                return false;
+            }
+        }
+        if let Some(want) = self.group.as_deref() {
+            if group != Some(want) {
                 return false;
             }
         }
@@ -545,6 +561,10 @@ pub struct Prefs {
     pub fx_tier: i64,
     /// announce anything the custom filter's lists match, whatever its rarity
     pub fx_listed: bool,
+    /// hunted relics take the pillar — their own switch, not a rarity
+    pub fx_relic: bool,
+    /// Eternity / Infernal Codex take the pillar — Common, so the rarity grid cannot
+    pub fx_codex: bool,
     pub notable_defs: Vec<(String, Vec<String>)>,
     /// The custom lists, in the order the player put them in — an item matched
     /// by one is announced by it, and the FIRST that matches wins. The order is
@@ -568,6 +588,8 @@ impl Default for Prefs {
             fx_rarities: Vec::new(),
             fx_tier: 6,
             fx_listed: false,
+            fx_relic: false,
+            fx_codex: false,
             notable_defs: default_notable(),
             sound_lists: Vec::new(),
             // every rotation, until the player narrows it
@@ -1096,11 +1118,8 @@ impl GameStats {
         // Only looked up when some list actually holds a category. Every named
         // drop passes through here and most filters have no rules at all;
         // `to_lowercase` allocates, and this is the hot path.
-        let rarity = self
-            .prefs
-            .sound_lists
-            .iter()
-            .any(|l| !l.rules.is_empty())
+        let categorised = self.prefs.sound_lists.iter().any(|l| !l.rules.is_empty());
+        let rarity = categorised
             .then(|| {
                 known
                     .map(|k| k.rarity)
@@ -1108,6 +1127,10 @@ impl GameStats {
                     .map(str::to_lowercase)
             })
             .flatten();
+        // The group table holds only what the game's keys divide — socketables
+        // and the tarot deck — so this answers None for most of what arrives,
+        // and a rule naming a group then matches nothing rather than everything.
+        let group = categorised.then(|| crate::items::group_by_name(name)).flatten();
         self.prefs
             .sound_lists
             .iter()
@@ -1115,7 +1138,7 @@ impl GameStats {
                 l.names.contains(&lower)
                     || qualified.as_ref().is_some_and(|q| l.names.contains(q))
                     || l.rules.iter().any(|r| {
-                        r.matches(rarity.as_deref(), item_type, weapon_type)
+                        r.matches(rarity.as_deref(), item_type, weapon_type, group)
                     })
             })
             .map(|l| l.key.clone())
@@ -1130,9 +1153,9 @@ impl GameStats {
     /// tell the two apart.
     ///
     /// Answers into the same slot as `listed_sound` rather than beside it, so a
-    /// hunted relic travels the one path everything else does: it announces, it
-    /// reaches the journal, and it takes the flourish. Two questions, one
-    /// decision point.
+    /// hunted relic travels the one path everything else does: it announces and
+    /// it reaches the journal. The pillar is its own switch — see
+    /// `worth_a_flourish`. Two questions, one decision point.
     fn hunted_relic(&self, item_type: i64, item_id: i64) -> Option<String> {
         if item_type != RELIC || self.prefs.relics.is_empty() {
             return None;
@@ -1192,6 +1215,14 @@ impl GameStats {
         self.set_listed(lists);
     }
 
+    /// Whether a list takes the pillar as well as the chime. Off by default,
+    /// here and in the settings, so a test that wants it says so.
+    #[cfg(test)]
+    pub fn set_flourish_listed(&mut self, on: bool) {
+        self.revision += 1;
+        self.prefs.fx_listed = on;
+    }
+
     /// The same, for the tests that care about rules or about which list wins.
     #[cfg(test)]
     pub fn set_listed(&mut self, lists: Vec<Listed>) {
@@ -1237,9 +1268,46 @@ impl GameStats {
     /// its own: the point of putting an item on a list is that it matters, and
     /// having to describe it a second time in rarity and grade switches is the
     /// kind of duplication that makes a filter look broken.
-    fn worth_a_flourish(&self, rarity: &str, tier: i64, listed: bool) -> bool {
-        if self.prefs.fx_listed && listed {
+    ///
+    /// A hunted relic, an Eternity/Infernal Codex and a resource never match
+    /// those switches: relics resolve to no journal rarity on purpose, a Codex
+    /// is Common, and a key, collectible, rune or vault is Common too (or a
+    /// vault colour the grid does not offer). Relics and Codexes have switches
+    /// of their own; a resource has only the list.
+    ///
+    /// And the list answers to the list switch, resource or not. It was written
+    /// the other way once — a listed resource took the pillar whether or not
+    /// the player had asked for listed items to take it — which made the switch
+    /// say one thing and do another for half of what a list can hold. A
+    /// resource that loses the pillar this way still chimes and still reaches
+    /// the drop list; neither of those was ever behind this switch.
+    fn worth_a_flourish(
+        &self,
+        rarity: &str,
+        tier: i64,
+        listed: bool,
+        relic: bool,
+        resource: bool,
+        codex: bool,
+    ) -> bool {
+        if relic {
+            return self.prefs.fx_relic;
+        }
+        // The list route, and the only one a resource has. Above the rest so a
+        // listed item takes the pillar whatever its rarity, and below `relic`
+        // because a hunted relic answers to a switch of its own.
+        if listed && self.prefs.fx_listed {
             return true;
+        }
+        // A key, rune, collectible or vault, and the switch above said no —
+        // or there was no list. Either way it stops here: rarity cannot reach
+        // it (they are all Common) and ticking Angelic on the pillar must not
+        // light the screen for every Angelic Key, which fall by the handful.
+        if resource {
+            return false;
+        }
+        if codex {
+            return self.prefs.fx_codex;
         }
         let graded = tier >= self.prefs.fx_tier || self.prefs.fx_tier <= 1;
         self.prefs.fx_rarities.iter().any(|r| r == rarity) && graded
@@ -1749,7 +1817,14 @@ impl GameStats {
                 let announce = *announced
                     || listed_hit
                     || (!is_resource && self.passes_filter(&rarity_key, tier));
-                let flourish = !is_resource && self.worth_a_flourish(&rarity_key, tier, listed_hit);
+                let flourish = self.worth_a_flourish(
+                    &rarity_key,
+                    tier,
+                    listed_hit,
+                    listed.as_deref() == Some("relic"),
+                    is_resource,
+                    crate::parser::is_entry_codex(*item_type, *item_id, name),
+                );
                 if wanted && (announce || flourish) {
                     // One item, one notification, whichever sighting got here
                     // first. The rule above says as much, but a list was
@@ -2475,10 +2550,12 @@ mod tests {
         assert_eq!((name.as_str(), *item_type, *item_id), ("Essence Vault", 19, 5));
 
         let mut s = GameStats::default();
+        s.set_flourish_listed(true);
         s.set_sound_lists(vec![("list-vault".into(), vec!["Essence Vault (Angelic)".into()])]);
         let angelic = s.apply(&vault(5, "a")).expect("the one the list names");
         assert_eq!(angelic.rarity, "Angelic");
         assert_eq!(angelic.sound.as_deref(), Some("list-vault"));
+        assert!(angelic.flourish, "a listed vault takes the pillar: it is a container, so rarity alone never would");
         assert!(s.apply(&vault(0, "b")).is_none(), "the Superior one is another item");
 
         // the bare name still means any of them
@@ -2948,6 +3025,7 @@ mod tests {
                 rarity: Some("satanic".into()),
                 item_type: Some(0),
                 weapon: None,
+                group: None,
             }],
         }]);
         let drop = |name: &str, item_type: i64, item_id: i64, weapon_type: i64, hash: &str| {
@@ -3011,7 +3089,7 @@ mod tests {
         let category = || Listed {
             key: "list-category".into(),
             names: Vec::new(),
-            rules: vec![Rule { rarity: Some("satanic".into()), item_type: Some(0), weapon: None }],
+            rules: vec![Rule { rarity: Some("satanic".into()), item_type: Some(0), weapon: None, group: None }],
         };
         let by_name = || Listed {
             key: "list-name".into(),
@@ -3038,6 +3116,63 @@ mod tests {
         );
     }
 
+    /// A rule can name the kind inside the kind.
+    ///
+    /// Everything that goes in a socket is item type 15 — forty runes,
+    /// forty-seven gems, sixteen jewels — so a rule that could only say
+    /// "socketable" said all one hundred and forty-four at once, and a player
+    /// wanting a chime for runes had to write out forty names. The group comes
+    /// off the game's own item keys; see `group_of` in tools/gen_items.py.
+    #[test]
+    fn a_rule_can_name_a_group_inside_an_item_type() {
+        let socketable = |name: &str, hash: &str| GameEvent::ItemAdded {
+            rarity: json!(1),
+            unscaled: false,
+            mf: false,
+            tier: 0,
+            item_type: 15,
+            item_id: 0,
+            weapon_type: 0,
+            seed: 1,
+            name: name.into(),
+            announced: false,
+            amount: 1,
+            fingerprint: format!("15-{hash}"),
+            hash: hash.into(),
+            ground: true,
+        };
+
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_listed(vec![Listed {
+            key: "list-runes".into(),
+            names: Vec::new(),
+            rules: vec![Rule {
+                rarity: None,
+                item_type: Some(15),
+                weapon: None,
+                group: Some("runes".into()),
+            }],
+        }]);
+
+        let rune = s.apply(&socketable("Ist", "ist")).expect("a rune is in the group");
+        assert_eq!(rune.sound.as_deref(), Some("list-runes"));
+
+        // A gem is the same item type and the same rarity, and only the group
+        // tells them apart. Without it the rule would have caught this too.
+        assert!(
+            s.apply(&socketable("Flawless Ruby", "ruby")).is_none(),
+            "a gem is not a rune, and the rule said runes"
+        );
+
+        // And a name the group table has never heard of does not match a group
+        // rule by falling through to None.
+        assert!(
+            s.apply(&socketable("Iron Ore", "ore")).is_none(),
+            "an ungrouped name matches nothing rather than everything"
+        );
+    }
+
     /// A rule asks the tables what the item is, and the identity answers first.
     ///
     /// `Shrunken Head` is two items: a Satanic charm at 10:37:0 and a Common
@@ -3052,7 +3187,7 @@ mod tests {
         s.set_listed(vec![Listed {
             key: "list-charms".into(),
             names: Vec::new(),
-            rules: vec![Rule { rarity: Some("satanic".into()), item_type: Some(10), weapon: None }],
+            rules: vec![Rule { rarity: Some("satanic".into()), item_type: Some(10), weapon: None, group: None }],
         }]);
 
         let charm = s
@@ -4195,8 +4330,10 @@ mod tests {
         // counted against that hash.
         let mut s = GameStats::default();
         s.prefs.relics = vec![127];
+        s.prefs.fx_relic = true;
         let hit = s.apply(&relic(127, "8b5bdb8ad9be", true)).expect("a hunted relic is announced");
         assert_eq!(hit.sound.as_deref(), Some("relic"), "and it chimes on its own key");
+        assert!(hit.flourish, "the Relic switch on the pillar is on, so it takes that too");
         // The chime is not the whole alert: the drop feed is where a player
         // looks to see WHICH relic it was, and the entry carries no name, so
         // the windows read it off the identity. `item_name` is what they call.
@@ -4214,6 +4351,178 @@ mod tests {
         // one is not ticking the type.
         let other = s.apply(&relic(134, "cc808046c7c7", true));
         assert!(other.is_none_or(|d| d.sound.is_none()), "relic 134 was not ticked");
+    }
+
+    /// A collectible (and a key, rune, material, vault) is a resource: rarity
+    /// never chimes for one, and the flourish's rarity grid cannot either.
+    /// Putting it on a list is how it gets a sound; that has to be how it gets
+    /// the pillar too, or the announcement looks broken next to the chime.
+    #[test]
+    fn a_listed_collectible_takes_the_pillar() {
+        let card = |name: &str, hash: &str| GameEvent::ItemAdded {
+            rarity: Value::Null,
+            unscaled: false,
+            mf: false,
+            tier: 0,
+            item_type: 13,
+            item_id: 30,
+            weapon_type: 0,
+            seed: 1,
+            name: name.into(),
+            announced: false,
+            amount: 1,
+            fingerprint: format!("13-1-{hash}"),
+            hash: hash.into(),
+            ground: true,
+        };
+
+        let mut s = GameStats::default();
+        s.set_flourish_filter(vec!["Satanic".into(), "Angelic".into()], 1);
+        assert!(
+            s.apply(&card("Justice", "quiet")).is_none(),
+            "an unlisted tarot card is still not news, even with the pillar armed"
+        );
+
+        // On a list, and the pillar's list switch left alone: it chimes and it
+        // reaches the drop list, and it does not light the screen. That switch
+        // is the one place the answer lives, for a card as for a helmet.
+        let mut s = GameStats::default();
+        s.set_sound_lists(vec![("list-codex".into(), vec!["Justice".into()])]);
+        let quiet = s.apply(&card("Justice", "listed")).expect("on a list, so it is announced");
+        assert_eq!(quiet.sound.as_deref(), Some("list-codex"));
+        assert!(!quiet.flourish, "the pillar was not asked for, so the pillar stays down");
+
+        let mut s = GameStats::default();
+        s.set_flourish_listed(true);
+        s.set_sound_lists(vec![("list-codex".into(), vec!["Justice".into()])]);
+        let hit = s.apply(&card("Justice", "listed")).expect("on a list, so it is announced");
+        assert_eq!(hit.sound.as_deref(), Some("list-codex"));
+        assert!(hit.flourish, "and now the pillar follows the list, not the rarity grid");
+    }
+
+    /// Ticking Angelic on the pillar must not light the screen for every
+    /// Angelic Key. Those fall by the handful; a list is how one of them is
+    /// asked for.
+    #[test]
+    fn an_unlisted_key_does_not_take_the_pillar() {
+        let mut s = GameStats::default();
+        s.set_flourish_filter(vec!["Angelic".into()], 1);
+        s.set_filter(vec!["Angelic".into()], 0);
+        assert!(
+            s.apply(&notable_item("Angelic Key", 12, 1)).is_none(),
+            "a resource is not a rarity find, on the pillar or the horn"
+        );
+
+        // Named on a list, and the pillar's list switch on: that pair is what
+        // reaches a resource, and neither half does it alone.
+        s.set_flourish_listed(true);
+        s.set_sound_lists(vec![("list-keys".into(), vec!["Angelic Key".into()])]);
+        let hit = s
+            .apply(&GameEvent::ItemAdded {
+                rarity: json!(7),
+                unscaled: false,
+                mf: false,
+                tier: 0,
+                item_type: 12,
+                item_id: 0,
+                weapon_type: 0,
+                seed: 0,
+                name: "Angelic Key".into(),
+                announced: false,
+                amount: 1,
+                fingerprint: "key-listed".into(),
+                hash: "key-listed".into(),
+                ground: true,
+            })
+            .expect("the list asked for this one");
+        assert!(hit.flourish, "named on a list, the key takes the pillar");
+    }
+
+    fn entry_codex(id: i64, hash: &str) -> GameEvent {
+        GameEvent::ItemAdded {
+            rarity: Value::Null,
+            unscaled: false,
+            mf: false,
+            tier: 0,
+            item_type: 11,
+            item_id: id,
+            weapon_type: 0,
+            seed: 1,
+            name: String::new(),
+            announced: false,
+            amount: 1,
+            fingerprint: format!("11-1-{hash}-11"),
+            hash: hash.into(),
+            ground: true,
+        }
+    }
+
+    /// An Eternity or Infernal Codex is Common, so the rarity grid cannot pick
+    /// it. Its own switch on the announcement is how it gets the pillar — and
+    /// that switch does not need a watchlist, because there are two of them
+    /// and they are the point of ticking Codex.
+    #[test]
+    fn a_codex_takes_the_pillar_when_its_switch_is_on() {
+        let mut s = GameStats::default();
+        s.set_flourish_filter(vec!["Satanic".into(), "Angelic".into()], 1);
+        assert!(
+            s.apply(&entry_codex(18, "quiet")).is_none(),
+            "a Codex is not a rarity find, even with the pillar armed"
+        );
+
+        let mut s = GameStats::default();
+        s.prefs.fx_codex = true;
+        let eternity = s.apply(&entry_codex(18, "et")).expect("the Codex switch asked for it");
+        assert!(eternity.flourish);
+        assert!(!eternity.announce, "the pillar is not a chime");
+        assert_eq!(eternity.item_id, 18);
+
+        let infernal = s.apply(&entry_codex(23, "inf")).expect("both Codexes share the switch");
+        assert!(infernal.flourish);
+        assert_eq!(infernal.item_id, 23);
+    }
+
+    /// Unticking Codex on the pillar leaves an Eternity Codex quiet, the way
+    /// unticking Satanic leaves a Satanic quiet. A healing potion at the
+    /// neighbouring id must never ride along.
+    #[test]
+    fn a_potion_does_not_borrow_the_codex_switch() {
+        let mut s = GameStats::default();
+        s.prefs.fx_codex = true;
+        assert!(
+            s.apply(&entry_codex(2, "potion")).is_none(),
+            "id 2 is a healing potion, not a Codex"
+        );
+    }
+
+    /// The Relic switch on the pillar is independent of the chime. A hunted
+    /// relic still sounds when the pillar is off; it just does not light the
+    /// screen.
+    #[test]
+    fn a_hunted_relic_can_chime_without_the_pillar() {
+        let mut s = GameStats::default();
+        s.prefs.relics = vec![127];
+        s.prefs.fx_relic = false;
+        let hit = s.apply(&relic(127, "8b5bdb8ad9be", true)).expect("the chime still fires");
+        assert_eq!(hit.sound.as_deref(), Some("relic"));
+        assert!(!hit.flourish, "the Relic switch on the pillar was off");
+    }
+
+    /// A Codex the server named in chat still takes the pillar: that line
+    /// carries the name and nothing else, so identity matching is not enough.
+    #[test]
+    fn a_codex_named_in_chat_takes_the_pillar() {
+        let mut s = GameStats::default();
+        s.prefs.fx_codex = true;
+        s.apply(&account_packet("Tester", 0, 0));
+        let hit = s
+            .apply(&GameEvent::Found {
+                finder: "Tester".into(),
+                name: "Eternity Codex".into(),
+            })
+            .expect("our own find still counts");
+        assert!(hit.flourish);
+        assert_eq!(hit.name, "Eternity Codex");
     }
 
     /// The relic pick is the OPPOSITE way round to the zone-buff pick above it

@@ -1,7 +1,7 @@
 <script>
   import { invoke, listen } from './bridge.js';
   import { art } from './skin.svelte.js';
-  import { BY_ID, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
+  import { BY_ID, GROUP_BY_NAME, GROUP_TYPE, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { locale, nameOf, say, t, typeLabel } from './say.svelte.js';
   import { BUILT_IN, soundUrl, play } from './audio.js';
 
@@ -26,6 +26,16 @@
   // listable, where an ordinary item outside the five never arrives named at
   // all and could not fire.
   const VAULT = 19;
+
+  // Eternity Codex and Infernal Codex, the two of item type 11 that are worth
+  // a chime.
+  //
+  // Not the type, the two ids. Type 11 is the consumables and most of it is
+  // healing potions, which fall by the hundred; the parser admits these two by
+  // id for the same reason (`ENTRY_CODEX_IDS`). They arrive named, so a list
+  // holding one matches — and until this they were the only thing the pillar
+  // could announce that nothing could make a sound for.
+  const CODEX = new Set(['11:18:0', '11:23:0']);
 
   // Two items can wear one name — a Set gun and a Heroic orb are both "Angel" —
   // and the seven Essence Vaults share theirs across every rarity. A list keyed
@@ -67,7 +77,8 @@
       Object.entries(ITEMS)
         .filter(([key, name]) =>
           LISTABLE.has(RARITY_BY_NAME[name.toLowerCase()]) ||
-          STOCK.has(Number(key.split(':')[0])),
+          STOCK.has(Number(key.split(':')[0])) ||
+          CODEX.has(key),
         )
         .map(([key, name]) => {
           const [type, , weapon] = key.split(':').map(Number);
@@ -80,6 +91,7 @@
               rarity: RARITY_BY_NAME[name.toLowerCase()],
               tier: TIER_BY_NAME[name.toLowerCase()] ?? 0,
               rate: DROP_RATE[name.toLowerCase()] ?? 0,
+              group: GROUP_BY_NAME[name.toLowerCase()] ?? null,
               key: name.toLowerCase(),
             },
           ];
@@ -143,6 +155,42 @@
   // Relics are absent: every one of them is Common, they arrive nameless, and
   // they have a picker of their own on the Alerts tab. "Relic · 156" here would
   // be a category that could never make a sound.
+  // The word for each group. English keys, translated where they are printed,
+  // the same as every other label on this screen — and singular, because the
+  // item kinds they sit among are: "Helmet · 91", and a rule off it reads
+  // "every Helmet".
+  const GROUP_LABEL = {
+    runes: 'Rune',
+    gems: 'Gem',
+    soulgems: 'Soulgem',
+    jewels: 'Jewel',
+    orbs: 'Orb',
+    tarot: 'Tarot card',
+  };
+
+  // The kinds inside a kind, counted the same way the kinds are.
+  //
+  // A rule carries the item type as well as the group, so a group can never
+  // catch a name that belongs to another type — `Relic` is an orb at 15 and a
+  // relic at 16, and the two share nothing but the word.
+  //
+  // `GROUP_TYPE` is why the row itself is guarded as well. The group table is
+  // keyed by name and one name can belong to two types — the game calls both a
+  // socketable orb and a Set gun "Angel" — so without it the gun would put an
+  // "Orb · 1" under Weapon, a category with one member that means nothing.
+  const GROUP_CHOICES = (() => {
+    const by = new Map();
+    for (const it of NAMED) {
+      if (!it.group || GROUP_TYPE[it.group] !== it.type) continue;
+      const weapon = it.type === 3 ? it.weapon : null;
+      const key = `${it.type}:${weapon ?? ''}:${it.group}`;
+      const row = by.get(key) ?? { key, type: it.type, weapon, group: it.group, n: 0 };
+      row.n += 1;
+      by.set(key, row);
+    }
+    return [...by.values()];
+  })();
+
   const TYPE_CHOICES = (() => {
     const by = new Map();
     for (const it of NAMED) {
@@ -171,7 +219,16 @@
     for (const r of rows) {
       if (spoken.get(r.label) > 1 && r.weapon != null) r.label = `${r.label} (${t('weapon')})`;
     }
-    return rows.sort((a, b) => b.n - a.n || a.label.localeCompare(b.label, locale()));
+    rows.sort((a, b) => b.n - a.n || a.label.localeCompare(b.label, locale()));
+    // A kind's groups follow it rather than taking their own place in the
+    // ordering: sorted with everything else, "Runes" would land between two
+    // unrelated kinds and read as one.
+    return rows.flatMap((r) => [
+      r,
+      ...GROUP_CHOICES.filter((g) => g.type === r.type && (g.weapon ?? null) === (r.weapon ?? null))
+        .map((g) => ({ ...g, label: t(GROUP_LABEL[g.group]), under: true }))
+        .sort((a, b) => b.n - a.n || a.label.localeCompare(b.label, locale())),
+    ]);
   });
 
   /// The same question the engine asks of a drop, asked of a row of the table.
@@ -181,13 +238,20 @@
   /// is only looked at once an item type has been named.
   const ruleHits = (rule, it) =>
     (!rule.rarity || rule.rarity === it.rarity) &&
+    (!rule.group || rule.group === it.group) &&
     (rule.item_type == null ||
       (rule.item_type === it.type && (rule.weapon == null || rule.weapon === it.weapon)));
 
   const ruleMatches = (rule) => NAMED.filter((it) => ruleHits(rule, it));
 
   const ruleName = (rule) => {
-    const kind = rule.item_type == null ? null : typeLabel(rule.item_type, rule.weapon ?? 0);
+    // The group speaks for the kind it sits in: "every rune" says more than
+    // "every socketable rune", and the two would only ever appear together.
+    const kind = rule.group
+      ? t(GROUP_LABEL[rule.group])
+      : rule.item_type == null
+        ? null
+        : typeLabel(rule.item_type, rule.weapon ?? 0);
     if (rule.rarity && kind) return say('every {rarity} {kind}', { rarity: t(rule.rarity), kind });
     if (rule.rarity) return say('every {rarity} item', { rarity: t(rule.rarity) });
     return say('every {kind}', { kind });
@@ -196,7 +260,8 @@
   const sameRule = (a, b) =>
     (a.rarity ?? null) === (b.rarity ?? null) &&
     (a.item_type ?? null) === (b.item_type ?? null) &&
-    (a.weapon ?? null) === (b.weapon ?? null);
+    (a.weapon ?? null) === (b.weapon ?? null) &&
+    (a.group ?? null) === (b.group ?? null);
 
   let settings = $state(null);
   let selected = $state(0);
@@ -256,12 +321,16 @@
   /// the button simply is not there. `engine_rule` refuses the same thing on
   /// the way in, because a settings file can be edited by hand.
   let draft = $derived.by(() => {
-    const kind = TYPE_CHOICES.find((row) => row.key === addType) ?? null;
+    const kind =
+      TYPE_CHOICES.find((row) => row.key === addType) ??
+      GROUP_CHOICES.find((row) => row.key === addType) ??
+      null;
     if (!addRarity && !kind) return null;
     return {
       rarity: addRarity || null,
       item_type: kind ? kind.type : null,
       weapon: kind ? kind.weapon : null,
+      group: kind?.group ?? null,
     };
   });
   let draftCount = $derived(draft ? ruleMatches(draft).length : 0);
@@ -919,7 +988,12 @@
             </select>
             <select class="picker" bind:value={addType}>
               <option value="">{t("Any kind")}</option>
-              {#each kindChoices as kind}<option value={kind.key}>{kind.label} · {kind.n}</option>{/each}
+              <!-- A group is indented under the kind it belongs to. Spaces
+                   rather than an optgroup: the kind is a choice of its own as
+                   well as a heading, and an optgroup label cannot be chosen. -->
+              {#each kindChoices as kind}
+                <option value={kind.key}>{kind.under ? '   ' : ''}{kind.label} · {kind.n}</option>
+              {/each}
             </select>
           </div>
 

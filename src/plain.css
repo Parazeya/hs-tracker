@@ -838,7 +838,8 @@ html[data-skin='plain'][data-theme='plainlight'] .row.c-her { border-left-color:
 html[data-skin='plain'][data-theme='plainlight'] .c-unh { color: #be185d; }        /* 6.04 */
 html[data-skin='plain'][data-theme='plainlight'] .row.c-unh { border-left-color: #be185d; }
 html[data-skin='plain'][data-theme='plainlight'] .c-myt { color: #9333ea; }        /* 5.38 */
-html[data-skin='plain'][data-theme='plainlight'] .c-relic { color: #0e7490; }      /* 5.31 */
+html[data-skin='plain'][data-theme='plainlight'] .c-relic { color: #ab500a; }      /* 5.41 */
+html[data-skin='plain'][data-theme='plainlight'] .c-codex { color: #876505; }      /* 5.39 */
 html[data-skin='plain'][data-theme='plainlight'] .c-xp { color: #7c3aed; }         /* 5.70 */
 html[data-skin='plain'][data-theme='plainlight'] .c-zone { color: #c2410c; }       /* 5.18 */
 
