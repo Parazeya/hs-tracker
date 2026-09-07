@@ -40,6 +40,22 @@
   /// pillar and another on the strip under it.
   const said = (d) => rarityLabel(rarity(d), d.item_type, d.weapon_type);
 
+  /// The separator between the parts of a fold key.
+  ///
+  /// A character no name contains, rather than a space: a space is in plenty of
+  /// item names, and "Ist Rune" at grade 0 would key the same as "Ist" at grade
+  /// "Rune 0".
+  const SPLIT = '\u0000';
+
+  /// What makes two pickups one row.
+  ///
+  /// Everything the row draws, not the name alone: folded on the name a row
+  /// would answer for a grade, a magic-find mark or a server line that half of
+  /// what it counts never had. The run card folds by name and grade for the
+  /// same reason — see runcard.js.
+  const same = (d) =>
+    [label(d), rarity(d), d.tier ?? 0, d.mf ? 1 : 0, d.announced ? 1 : 0].join(SPLIT);
+
   // the list is empty most of the time; a timer running then would re-render
   // the window five times a second for nothing
   let sweep = null;
@@ -66,8 +82,25 @@
       listen('drop-entry', (e) => {
         if (!enabled) return;
         const d = e.payload;
-        entries = [{ ...d, key: nextKey++, until: Date.now() + TTL_MS }, ...entries].slice(0, MAX_VISIBLE);
-        nowTick = Date.now();
+        const now = Date.now();
+        const until = now + TTL_MS;
+        const fold = same(d);
+        // A pickup the strip is already showing counts up in place instead of
+        // taking a second row. Auto-loot delivers the same rune twenty at a
+        // time, and five rows lasting eight seconds lose fifteen of them before
+        // they can be read; one row saying 20x loses none.
+        //
+        // Not into a row already fading: it would snap back to full opacity
+        // halfway out. And a row that is counting up keeps its place rather
+        // than moving to the top, or the stack shuffles under the eye that is
+        // trying to read it.
+        const at = entries.findIndex((it) => it.fold === fold && it.until - now > FADE_MS);
+        if (at >= 0) {
+          entries = entries.map((it, i) => (i === at ? { ...it, n: it.n + 1, until } : it));
+        } else {
+          entries = [{ ...d, fold, n: 1, key: nextKey++, until }, ...entries].slice(0, MAX_VISIBLE);
+        }
+        nowTick = now;
         startSweep();
       }),
     ];
@@ -91,6 +124,11 @@
   {#each entries as it (it.key)}
     <div class="entry" class:fading={it.until - nowTick < FADE_MS} style:border-image-source="url({art('chip_dark')})">
       <span class="rar {rarityCls[rarity(it)] ?? ''}">{said(it)}</span>
+      <!-- Before the name, where a count belongs when it is read aloud: "7x Ist
+           Rune". After it the name's own `flex: 1` would push the figure to the
+           far edge of the plate, where it reads as a column of its own rather
+           than as part of what it counts. -->
+      {#if it.n > 1}<span class="times">{it.n}x</span>{/if}
       <span class="name {rarityCls[rarity(it)] ?? ''}">{label(it)}</span>
       {#if it.tier > 0}<span class="dim">{tierLabel(it.tier)}</span>{/if}
       {#if it.mf}<span class="c-blue">{t('MF')}</span>{/if}
@@ -167,6 +205,13 @@
   .rar { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; flex: none; }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dim { color: var(--edge-8); font-size: 10px; flex: none; }
+  /* Fixed-width figures: in a burst this changes several times a second, and
+     proportional digits shove the name sideways on every one of them. */
+  .times {
+    color: var(--gold-2);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+  }
 
   .c-ang { color: #f6f794; }
   .c-her { color: #00ffae; }

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.8 — 2026-09-07
+
+### Added
+
+- Eternity Codex and Infernal Codex take the announcement pillar, with a switch
+  of their own beside the rarities.
+- Relics have their own announcement switch.
+- Traditional Chinese, in the language picker beside Simplified.
+- A watchlist can hold Eternity Codex and Infernal Codex.
+- A watchlist category can name the kind inside a kind: Rune, Gem, Soulgem,
+  Jewel, Orb, Tarot card.
+
+### Changed
+
+- The drop list counts a repeated pickup in place — `20x Ist Rune` on one row
+  instead of twenty rows.
+- Relics are drawn orange rather than teal, matching the pillar they raise.
+
+### Fixed
+
+- A Codex on the floor is seen at all: it reached neither the drop list nor
+  the pillar before.
+- A key, rune, collectible or vault named by a watchlist takes the pillar, not
+  only the chime — with "Announce everything the watchlist names" ticked, the
+  same switch that governs everything else on a list.
+
 ## 1.1.7 — 2026-09-06
 
 ### Added

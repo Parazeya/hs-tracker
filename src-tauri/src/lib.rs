@@ -261,6 +261,11 @@ pub struct SoundRule {
     pub rarity: Option<String>,
     pub item_type: Option<i64>,
     pub weapon: Option<i64>,
+    /// The kind inside the kind — "runes", "gems", "tarot". Item type 15 is one
+    /// hundred and forty-four things, and before this a list could only ask for
+    /// all of them. Read from the game's own item keys at generation time; see
+    /// `group_of` in tools/gen_items.py.
+    pub group: Option<String>,
 }
 
 /// A pack of lists, the way a loot filter is a pack of rules. One is active at
@@ -393,6 +398,13 @@ pub struct Settings {
     /// it again in the announcement's own switches is how a filter comes to
     /// look as though it does nothing.
     pub flourish_listed: bool,
+    /// Announce a hunted relic with the pillar. Relics resolve to no journal
+    /// rarity, so they cannot borrow the rarity grid; this is their own switch,
+    /// on by default so an upgrade keeps the pillar a hunted relic already had.
+    pub flourish_relic: bool,
+    /// Announce an Eternity or Infernal Codex with the pillar. Both are Common
+    /// consumables, so the rarity grid cannot pick them either.
+    pub flourish_codex: bool,
     /// Announce a rotation with the pillar as well as the chime. Its own
     /// switch, and not one the chime can veto: the player with the game's audio
     /// up wants to be shown, not told.
@@ -483,6 +495,8 @@ impl Default for Settings {
             // grade 1 is D, which this slider reads as "any"
             flourish_tier: 1,
             flourish_listed: false,
+            flourish_relic: true,
+            flourish_codex: true,
             // The rotation is the one thing on this panel the player is meant
             // to act on, and it is rare enough that a pillar for it is not a
             // pillar in the way. On, for the same reason the announcement is.
@@ -1500,12 +1514,20 @@ fn engine_rule(rule: &SoundRule) -> Option<stats::Rule> {
         .filter(|r| !r.is_empty())
         .map(str::to_lowercase);
     let item_type = rule.item_type;
-    if rarity.is_none() && item_type.is_none() {
+    // After the trim, not before: a group of "" is a group of nothing, and
+    // guarding on the raw field would let it through as a rule with no terms.
+    let group = rule
+        .group
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .map(str::to_lowercase);
+    if rarity.is_none() && item_type.is_none() && group.is_none() {
         return None;
     }
     // A weapon type says nothing on its own: it numbers the kinds inside item
     // type 3, and 6 means Polearm there and nothing anywhere else.
-    Some(stats::Rule { rarity, item_type, weapon: item_type.and(rule.weapon) })
+    Some(stats::Rule { rarity, item_type, weapon: item_type.and(rule.weapon), group })
 }
 
 fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
@@ -1539,6 +1561,8 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         fx_rarities: if settings.flourish { settings.flourish_rarities.clone() } else { Vec::new() },
         fx_tier: settings.flourish_tier.clamp(1, 6),
         fx_listed: settings.flourish && settings.flourish_listed && settings.use_filter,
+        fx_relic: settings.flourish && settings.flourish_relic,
+        fx_codex: settings.flourish && settings.flourish_codex,
         notable_defs: notable,
         // the rotation asks a different question again, of the zone rather
         // than of a drop
@@ -1546,8 +1570,8 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         // and this one of an item, but by identity rather than by name — see
         // `hunted_relic`. Emptied when the chime is switched off, so the engine
         // is told the alert is gone rather than being left to fire into a muted
-        // channel: a hunted relic also takes the journal and the pillar, and
-        // those are not the volume slider's to decide.
+        // channel: a hunted relic also takes the journal, and that is not the
+        // volume slider's to decide. The pillar is its own switch.
         relics: if settings.relic.enabled { settings.relics.clone() } else { Vec::new() },
         sound_lists: active
             .map(|f| {
@@ -3859,6 +3883,8 @@ mod tests {
         let settings: Settings = serde_json::from_str(old).expect("an old file still parses");
         assert!(settings.relics.is_empty(), "no relic is hunted by an upgrade");
         assert!(settings.relic.enabled, "the switch is on, which costs nothing while the list is empty");
+        assert!(settings.flourish_relic, "a hunted relic still takes the pillar after an upgrade");
+        assert!(settings.flourish_codex, "and so does a Codex, which had no switch to inherit");
         assert_eq!(settings.unholy.volume, 0.24, "and the settings it did carry are untouched");
 
         // The engine has to agree, not just the file: an empty pick reaches
@@ -4053,9 +4079,25 @@ mod tests {
             rarity: Some("Set".into()),
             item_type: None,
             weapon: Some(6),
+            group: None,
         })
         .expect("the rarity still makes it a category");
         assert!(stray.weapon.is_none(), "the weapon type is dropped with no item type to hold it");
+
+        // A group narrows on its own — it is the only way to ask for the forty
+        // runes rather than all hundred and forty-four socketables — and a
+        // blank one narrows nothing, the same as a blank rarity.
+        let group = engine_rule(&SoundRule {
+            item_type: Some(15),
+            group: Some(" Runes ".into()),
+            ..Default::default()
+        })
+        .expect("a group is a category");
+        assert_eq!(group.group.as_deref(), Some("runes"), "trimmed and lowercased for the engine");
+        assert!(
+            engine_rule(&SoundRule { group: Some("   ".into()), ..Default::default() }).is_none(),
+            "a blank group is no group, and nothing else was named"
+        );
     }
 
     /// settings.json is a plain file on disk, and one can come back

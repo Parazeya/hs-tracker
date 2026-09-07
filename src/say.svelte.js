@@ -29,8 +29,13 @@ import { invoke } from './bridge.js';
 
 const FILES = import.meta.glob('./lang/*.json');
 
-/// The ten the game ships. There is no Turkish: the community has a channel for
-/// it and the game has no column, so the picker cannot offer one.
+/// The ten the game ships, and one it does not.
+///
+/// Hero Siege has a single Chinese column and it is Simplified, so Taiwan and
+/// Hong Kong had to read the other script or read English. `tw` is written out
+/// of `zh` at generation time — see DERIVED in tools/gen_items.py — which is
+/// why it is here and Turkish is not: the community has a channel for Turkish
+/// and nothing to write it out of.
 export const LANGUAGES = [
   ['en', 'English'],
   ['de', 'Deutsch'],
@@ -40,7 +45,8 @@ export const LANGUAGES = [
   ['pl', 'Polski'],
   ['pt', 'Português'],
   ['ru', 'Русский'],
-  ['zh', '中文'],
+  ['zh', '简体中文'],
+  ['tw', '繁體中文'],
   ['ja', '日本語'],
   ['ko', '한국어'],
 ];
@@ -97,7 +103,7 @@ export function language() {
 /// The tag Intl wants, for the dates and the thousands separators. The game's
 /// codes are close to BCP-47 but not it: `sp` is Spanish, and English stays
 /// en-GB because that is the order and the clock the panels were written for.
-const INTL = { en: 'en-GB', sp: 'es', zh: 'zh-CN' };
+const INTL = { en: 'en-GB', sp: 'es', zh: 'zh-CN', tw: 'zh-TW' };
 export function locale() {
   return INTL[lang] ?? lang;
 }

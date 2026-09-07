@@ -462,7 +462,7 @@
         <button class="check" onclick={() => { settings.relic.enabled = !settings.relic.enabled; save(); }} aria-label={t("relic chime")}>
           <img src={settings.relic?.enabled ? art('check_on') : art('check_off')} alt="" />
         </button>
-        <span class="rname c-relic" title={t("A relic you ticked hitting the floor: the chime, the drop feed and the pillar")}>{t("Relic")}</span>
+        <span class="rname c-relic" title={t("A relic you ticked hitting the floor: the chime and the drop feed. The pillar is its own switch below.")}>{t("Relic")}</span>
         <input
           class="vol"
           type="range"
@@ -617,7 +617,24 @@
                 <span class={rarityCls[name]}>{t(name)}</span>
               </button>
             {/each}
+            <button
+              class="secopt"
+              onclick={() => { settings.flourish_relic = !settings.flourish_relic; save(); }}
+              title={t("A relic you ticked above. Relics have no rarity on the switches, so they need this one.")}
+            >
+              <img src={settings.flourish_relic ? art('check_on') : art('check_off')} alt="" />
+              <span class="c-relic">{t("Relic")}</span>
+            </button>
+            <button
+              class="secopt"
+              onclick={() => { settings.flourish_codex = !settings.flourish_codex; save(); }}
+              title={t("Eternity Codex and Infernal Codex. Both are Common consumables, so the rarity switches never see them.")}
+            >
+              <img src={settings.flourish_codex ? art('check_on') : art('check_off')} alt="" />
+              <span class="c-codex">{t("Codex")}</span>
+            </button>
           </div>
+          <div class="note">{t("A key, rune or collectible has no rarity here — the watchlist switch above is the only thing that gives one the pillar.")}</div>
           <div class="line">
             <span class="name">{t("Min Tier")}</span>
             <input type="range" min="1" max="6" bind:value={settings.flourish_tier} oninput={() => save()} />
@@ -1033,10 +1050,13 @@
      no colour of its own. */
   .c-gold { color: var(--gold-1); }
   /* A hunted relic is not a rarity either — all 156 of them are Common, which
-     is the whole reason this row exists instead of a rarity switch. Teal, so it
-     reads as its own kind of alert beside the five colours that all mean "an
+     is the whole reason this row exists instead of a rarity switch. Orange, so
+     it reads as its own kind of alert beside the five colours that all mean "an
      item this good" and the peach the zone owns. */
-  .c-relic { color: #7fd6c2; }
+  .c-relic { color: #f08a28; }
+  /* Eternity / Infernal Codex: Common, so they cannot wear a rarity colour.
+     Manuscript bronze, against the relic orange and the gold of Angelic. */
+  .c-codex { color: #d4a84b; }
 
   /* 156 rows against the buffs' 25, so this one scrolls rather than growing the
      panel by a screen and a half. The height is a little over ten rows: enough
@@ -1056,7 +1076,7 @@
      as "this whole control is disabled". So ticked is marked by GAINING the
      relic colour rather than by everything else losing brightness, and the
      checkbox says the same thing a second time. */
-  .relic:not(.off) .bname { color: #7fd6c2; }
+  .relic:not(.off) .bname { color: #f08a28; }
   .relic img { width: 16px; height: 16px; }
   .relic .bname {
     flex: 1 1 auto;

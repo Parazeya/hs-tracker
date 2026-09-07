@@ -221,7 +221,7 @@ for its own. Check the result with `objdump -p usr/bin/hs-tracker | grep NEEDED`
 | | |
 | --- | --- |
 | `fetch_items.py` | Pulls the datamined item table from hero-siege-helper into `tools/data/helper/items.json`. |
-| `gen_items.py` | Rebuilds `src/items.js` and `src-tauri/src/items.rs` from that table plus the game's own `translationsItem.csv`. Point `HERO_SIEGE_BIN` at the install if it is not on the default path. |
+| `gen_items.py` | Rebuilds `src/items.js` and `src-tauri/src/items.rs` from that table plus the game's own `translationsItem.csv`. Point `HERO_SIEGE_BIN` at the install if it is not on the default path. Traditional Chinese is written out of the game's Simplified column, so this one needs `pip install opencc-python-reimplemented`. |
 | `gen_icon.py` | Draws the app icon on a 16×16 grid and writes every size the app, the tray and Windows want. `--preview` lays them out to look at, `--discord` writes the artwork the Discord application is given. |
 | `gen_installer_art.py` | The installer's header and sidebar, drawn from the icon. Run it after `gen_icon.py`. |
 | `yytex.py`, `datawin.py`, `export_ui.py` | Decode the game's own textures and re-export the UI sprites the app is skinned with, from an installed copy of Hero Siege. |
