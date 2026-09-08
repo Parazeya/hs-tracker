@@ -169,7 +169,14 @@
       {#if ready}
         <div class="good">
           <b>{ready.version}</b> {t('is out')}{ready.date ? ` — ${String(ready.date).slice(0, 10)}` : ''}.
-          {t('You have')} {info.version}.
+          <!-- Only once `about` has answered. The release is known before this
+               panel is ever opened — the launch check puts it in `update.found`
+               — while `info` arrives from an effect, which runs after the first
+               paint. So the first frame of an About tab with an update waiting
+               had a null here, and the panel died on it rather than drawing the
+               news it exists to draw. The version we are on is context; the
+               release is the sentence. -->
+          {#if info}{t('You have')} {info.version}.{/if}
         </div>
         <!-- What changed, before anything is downloaded. It is the release's own
              section of the changelog, carried in the manifest. -->
@@ -188,7 +195,7 @@
         <div class="bad">{t('Could not check:')} {failed}</div>
       {:else if latest?.newer}
         <div class="good">
-          <b>{latest.tag}</b> {t('is out')}{latest.when ? ` — ${latest.when}` : ''}. {t('You have')} {info.version}.
+          <b>{latest.tag}</b> {t('is out')}{latest.when ? ` — ${latest.when}` : ''}.{#if info} {t('You have')} {info.version}.{/if}
         </div>
         <div class="line">
           <button class="btn wide" onclick={() => open(latest.url)}>{t("Open the download page")}</button>
