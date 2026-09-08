@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.9 — 2026-09-08
+
+### Fixed
+
+- About no longer dies on its first frame when an update is waiting.
+
 ## 1.1.8 — 2026-09-07
 
 ### Added
