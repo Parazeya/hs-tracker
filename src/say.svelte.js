@@ -20,6 +20,8 @@
 // tables were built — all three land on English, which is always there.
 
 import {
+  GROUP_BY_NAME,
+  GROUP_TYPE,
   ITEMS,
   itemName as englishItem,
   typeLabel as englishType,
@@ -178,6 +180,40 @@ export function rarityLabel(rarity, type, weaponType) {
   if (rarity && rarity !== 'Unknown') return t(rarity);
   if (typeof type === 'number' && type >= 0) return typeLabel(type, weaponType);
   return t('Drop');
+}
+
+/// The word for each group a socketable can belong to, and for the tarot deck.
+/// Singular, because the item kinds these sit among are: the watchlist reads
+/// "Helmet · 91" and a rule off it reads "every Helmet".
+export const GROUP_LABEL = {
+  runes: 'Rune',
+  gems: 'Gem',
+  soulgems: 'Soulgem',
+  jewels: 'Jewel',
+  orbs: 'Orb',
+  tarot: 'Tarot card',
+};
+
+/// What a drop IS, rather than what it is worth.
+///
+/// The rarity, except where the rarity is not the useful half of the answer.
+/// The game grades the seventeen socketable orbs as gear — every one of them
+/// Heroic and SS, each with a drop rate of its own — so an Orb of Doom arrives
+/// captioned "HEROIC … SS", which on a strip beside real finds reads as a
+/// unique weapon called Doom. There is no such weapon: `socketable_orb_of_doom`
+/// is the only thing in the whole game by that name.
+///
+/// So anything the tables put in a group is captioned by its group. "ORB Doom"
+/// says what it is; the grade beside it still says what it is worth, and the
+/// colour is left on the rarity so nothing else on the row moves.
+export function kindLabel(name, rarity, type, weaponType) {
+  const group = GROUP_BY_NAME[String(name ?? '').trim().toLowerCase()];
+  // The table is keyed by name and one name can belong to two item types: the
+  // game calls both a socketable orb and a Set gun "Angel". Without the type
+  // beside it the gun would be captioned "ORB", which is the same mistake in
+  // the other direction.
+  if (group && GROUP_LABEL[group] && GROUP_TYPE[group] === type) return t(GROUP_LABEL[group]);
+  return rarityLabel(rarity, type, weaponType);
 }
 
 export function zoneLabel(room) {

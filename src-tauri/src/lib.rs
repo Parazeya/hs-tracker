@@ -1735,10 +1735,32 @@ fn set_click_through(w: &tauri::WebviewWindow, through: bool) {
 /// While locked the overlay is click-through EXCEPT the strip of icons down its
 /// right-hand edge: a poller re-enables mouse events whenever the cursor is over
 /// it. The lock is that strip's top cell, so this is still one rectangle.
+/// How far from the strip the cursor may be and still be worth watching at
+/// full speed. A pointer this far away cannot be on the button one frame later,
+/// and out there the only answer the loop produces is "not hovering", which is
+/// the same answer at 50ms and at 250ms.
+const STRIP_WATCH: f64 = 220.0;
+
+/// How long a cached window rect is trusted while the cursor is elsewhere. The
+/// overlay only moves when it is dragged — and then the cursor is on it — or
+/// when a setting resizes it, which is what this heartbeat is for.
+const STRIP_GEOMETRY_FOR: Duration = Duration::from_millis(1000);
+
 fn spawn_strip_poller(app: AppHandle) {
     std::thread::spawn(move || {
         let mut ignoring: Option<bool> = None;
         let mut told: Option<bool> = None;
+        // The window's own geometry, and when it was last read. Cached because
+        // reading it is what this loop costs.
+        //
+        // Twenty ticks a second, five window calls each — `get_webview_window`,
+        // `is_visible`, `outer_position`, `scale_factor` — was most of what the
+        // app burned with no game running and nothing on screen: about 300µs a
+        // tick, against a `GetCursorPos` that costs almost nothing. So the
+        // cursor is read every tick and the window only when the answer could
+        // turn on it.
+        let mut rect: Option<(tauri::PhysicalPosition<i32>, f64)> = None;
+        let mut read_at = Instant::now() - STRIP_GEOMETRY_FOR;
         loop {
             let locked = LOCKED.load(Ordering::Relaxed);
             // Where the cursor is, reported whether the overlay is locked or
@@ -1747,24 +1769,37 @@ fn spawn_strip_poller(app: AppHandle) {
             // the time gave the button two different truths and a moment
             // between them where it had neither.
             let held = told == Some(true);
-            let over = (|| {
-                let w = app.get_webview_window("main")?;
-                if !w.is_visible().ok()? {
-                    return None;
-                }
-                let pos = w.outer_position().ok()?;
-                let dpi = w.scale_factor().ok()?;
-                let cur = app.cursor_position().ok()?;
-                let z = dpi * drawn_at(SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0);
+            let cur = app.cursor_position().ok();
+            // Against the rect we already hold: a stale one is only ever wrong
+            // about a window that moved while the cursor was somewhere else,
+            // and the heartbeat below bounds that.
+            let near = cur.zip(rect).is_none_or(|(cur, (pos, z))| {
+                let (x0, y0, x1, y1) = strip_rect(held);
+                cur.x >= pos.x as f64 + x0 * z - STRIP_WATCH
+                    && cur.x <= pos.x as f64 + x1 * z + STRIP_WATCH
+                    && cur.y >= pos.y as f64 + y0 * z - STRIP_WATCH
+                    && cur.y <= pos.y as f64 + y1 * z + STRIP_WATCH
+            });
+            if near || read_at.elapsed() >= STRIP_GEOMETRY_FOR {
+                rect = (|| {
+                    let w = app.get_webview_window("main")?;
+                    if !w.is_visible().ok()? {
+                        return None;
+                    }
+                    let z = w.scale_factor().ok()?
+                        * drawn_at(SCALE_MILLI.load(Ordering::Relaxed) as f64 / 1000.0);
+                    Some((w.outer_position().ok()?, z))
+                })();
+                read_at = Instant::now();
+            }
+            let over = cur.zip(rect).map(|(cur, (pos, z))| {
                 // The corner opens it; the whole column keeps it open.
                 let (x0, y0, x1, y1) = strip_rect(held);
-                Some(
-                    cur.x >= pos.x as f64 + x0 * z
-                        && cur.x <= pos.x as f64 + x1 * z
-                        && cur.y >= pos.y as f64 + y0 * z
-                        && cur.y <= pos.y as f64 + y1 * z,
-                )
-            })();
+                cur.x >= pos.x as f64 + x0 * z
+                    && cur.x <= pos.x as f64 + x1 * z
+                    && cur.y >= pos.y as f64 + y0 * z
+                    && cur.y <= pos.y as f64 + y1 * z
+            });
             // The overlay is hidden: leave the state unset so the right one is
             // applied the first time it is really shown. Reading `None` as
             // "the cursor is not over the button" is what asked a never-mapped
@@ -1788,7 +1823,7 @@ fn spawn_strip_poller(app: AppHandle) {
                 }
                 ignoring = Some(want_ignore);
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(if near { 50 } else { 250 }));
         }
     });
 }
@@ -1935,8 +1970,22 @@ pub(crate) fn read_runs() -> Vec<stats::Run> {
 /// here — the button, the hotkey, the tray, the game closing and the app
 /// quitting — so a run is never lost and never counted twice.
 pub(crate) fn end_run(app: &AppHandle) {
-    let finished = app.state::<Shared>().stats().finish();
-    app.state::<Shared>().stats().reset();
+    // One guard across both, not one each.
+    //
+    // `stats()` hands back a MutexGuard that dies at the end of its statement,
+    // so written as two lines the lock is released between them — and a capture
+    // thread that took it in that gap recorded its events into a run `finish`
+    // had already taken away, for `reset` to wipe a moment later. The drop
+    // belonged to neither run and was simply gone.
+    let finished = {
+        // The state is bound too: `app.state()` is a temporary, and a guard
+        // taken straight off it would borrow something already dropped.
+        let shared = app.state::<Shared>();
+        let mut stats = shared.stats();
+        let finished = stats.finish();
+        stats.reset();
+        finished
+    };
     let Some(run) = finished else { return };
     let mut runs = read_runs();
     runs.insert(0, run);

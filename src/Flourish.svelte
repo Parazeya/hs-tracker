@@ -8,7 +8,7 @@
   // serve every rarity.
   import { appWindow, invoke, listen, native } from './bridge.js';
   import { tierLabel } from './items.js';
-  import { itemName, nameOf, rarityLabel, satanicZoneName, t, typeLabel } from './say.svelte.js';
+  import { itemName, kindLabel, nameOf, rarityLabel, satanicZoneName, t, typeLabel } from './say.svelte.js';
   import { buffInfo, zoneName } from './buffs.js';
   import { art } from './skin.svelte.js';
 
@@ -158,7 +158,7 @@
   let kind = $derived.by(() => {
     if (!drop || drop.kind === 'zone') return '';
     if (isCodex(drop)) return t('Codex');
-    return rarityLabel(drop.rarity, drop.item_type, drop.weapon_type);
+    return kindLabel(drop.name, drop.rarity, drop.item_type, drop.weapon_type);
   });
   let label = $derived.by(() => {
     if (!drop || drop.kind === 'zone') return '';

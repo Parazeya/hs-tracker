@@ -3,7 +3,7 @@
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { rarityByName, tierLabel } from './items.js';
-  import { itemName, nameOf, rarityLabel, t, typeLabel } from './say.svelte.js';
+  import { itemName, kindLabel, nameOf, t, typeLabel } from './say.svelte.js';
 
   const TTL_MS = 8000;
   const FADE_MS = 600;
@@ -37,8 +37,9 @@
   }
 
   /// The same word the announcement uses, so a drop is not one thing on the
-  /// pillar and another on the strip under it.
-  const said = (d) => rarityLabel(rarity(d), d.item_type, d.weapon_type);
+  /// pillar and another on the strip under it. A rune, a gem or an orb is
+  /// called what it is rather than what it is graded — see `kindLabel`.
+  const said = (d) => kindLabel(d.name || label(d), rarity(d), d.item_type, d.weapon_type);
 
   /// The separator between the parts of a fold key.
   ///

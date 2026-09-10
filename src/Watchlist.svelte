@@ -2,7 +2,7 @@
   import { invoke, listen } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { BY_ID, GROUP_BY_NAME, GROUP_TYPE, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
-  import { locale, nameOf, say, t, typeLabel } from './say.svelte.js';
+  import { GROUP_LABEL, locale, nameOf, say, t, typeLabel } from './say.svelte.js';
   import { BUILT_IN, soundUrl, play } from './audio.js';
 
   // Only named items can be listed. The parser leaves an ordinary pickup
@@ -155,19 +155,6 @@
   // Relics are absent: every one of them is Common, they arrive nameless, and
   // they have a picker of their own on the Alerts tab. "Relic · 156" here would
   // be a category that could never make a sound.
-  // The word for each group. English keys, translated where they are printed,
-  // the same as every other label on this screen — and singular, because the
-  // item kinds they sit among are: "Helmet · 91", and a rule off it reads
-  // "every Helmet".
-  const GROUP_LABEL = {
-    runes: 'Rune',
-    gems: 'Gem',
-    soulgems: 'Soulgem',
-    jewels: 'Jewel',
-    orbs: 'Orb',
-    tarot: 'Tarot card',
-  };
-
   // The kinds inside a kind, counted the same way the kinds are.
   //
   // A rule carries the item type as well as the group, so a group can never

@@ -59,6 +59,24 @@ export const EXTRACTOR =
   read('HS_EXTRACTOR') ||
   resolve(root, '..', 'HeroSiege Extractor');
 
+/// The certificate the Windows build signs with, by its SHA-1 thumbprint, and
+/// empty when there is none — an unsigned build is the ordinary case and must
+/// keep working.
+///
+/// Read here rather than straight off `process.env` so that .env is where it
+/// can go, beside the game path and the toolchain. That is the first place
+/// anybody looks, and this file is the only thing that reads .env: nothing
+/// puts those keys into the environment.
+///
+/// Not in tauri.conf.json: a thumbprint committed to a public repository names
+/// a certificate for anyone who cares to go looking for it.
+export const SIGN_THUMBPRINT = read('HS_SIGN_THUMBPRINT').replace(/[^0-9a-fA-F]/g, '');
+
+/// Timestamping is not optional. Without it every installer already cut stops
+/// verifying on the day the certificate expires, rather than staying good for
+/// what it was signed with while it was valid.
+export const SIGN_TIMESTAMP = read('HS_SIGN_TIMESTAMP') || 'http://timestamp.digicert.com';
+
 /// A Visual Studio whose CRT headers are actually installed. cargo finds a
 /// compiler by looking for cl.exe, not by checking that it works, so a broken
 /// installation is found first and every build dies in vswhom-sys.

@@ -239,3 +239,43 @@ Inherited from how the protocol reports things, not from the parsing:
   number means the seasonal one, no season means non-seasonal or blood pact. A
   character left over from a past season that still reports that season number
   would be read from the seasonal purse.
+
+## Signing the Windows build
+
+The installer and the exe inside it are unsigned unless a certificate is named.
+Defender's ml classifiers judge an unsigned binary on what it does, and this one
+reads network traffic and installs under `%LOCALAPPDATA%`: 1.1.9 was flagged as
+`Trojan:Win32/Bearfoos.B!ml` on machines that had run every release before it.
+A signature is the only thing that answers that, and it removes SmartScreen's
+warning with it.
+
+Import the certificate into the Windows store, read its thumbprint, and put it
+in `.env` beside the game path and the toolchain:
+
+```powershell
+Get-ChildItem Cert:\CurrentUser\My | Format-List Subject, Thumbprint
+```
+
+```ini
+HS_SIGN_THUMBPRINT=a1b2c3…
+```
+
+`npm run all` then prints `signing: yes`; with the line absent it prints
+`signing: no` and builds unsigned, which is the ordinary case. An environment
+variable of the same name wins over `.env`, for a one-off.
+
+`HS_SIGN_TIMESTAMP` overrides the timestamp server; the default is DigiCert's.
+Timestamping is not optional — without it every installer already cut stops
+verifying the day the certificate expires.
+
+This is a different key from `TAURI_SIGNING_PRIVATE_KEY_PATH` above it. That one
+is the updater's, and only tells this app that an update is really ours; this one
+is Authenticode, and tells Windows the same thing.
+
+Not in `tauri.conf.json`: a thumbprint committed to a public repository names a
+certificate for anyone who wants to go looking for it, and a machine without the
+certificate has to be able to cut a build anyway.
+
+For an open-source project, SignPath Foundation issues certificates free and
+Azure Trusted Signing is about ten dollars a month with no hardware token; a
+traditional OV certificate has needed one since 2023.
