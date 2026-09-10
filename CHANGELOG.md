@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.10 — 2026-09-10
+
+### Changed
+
+- A rune, gem, jewel, orb, soulgem or tarot card is announced as what it is
+  rather than by the rarity the tables grade it at.
+- The overlay stops polling the cursor twenty times a second once it is well
+  away from the strip.
+
+### Fixed
+
+- A setting changed from the tray, a hotkey or the strip is no longer written
+  over by a save this panel had already queued.
+- A drop that lands in the instant a run ends reaches one of the two runs
+  instead of neither.
+
 ## 1.1.9 — 2026-09-08
 
 ### Fixed

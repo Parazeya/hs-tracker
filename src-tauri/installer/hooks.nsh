@@ -32,7 +32,14 @@
 ; which fails with "Error launching installer", and the installer then says
 ; "Unable to uninstall!" and will not go on. Every existing install upgrades
 ; through that path. `copyright`, `license` and `longDescription` are safe;
-; this one is not.
+; this one is not. So is `homepage`, which is set: it fills nothing but the
+; Help link Windows shows beside the entry in Apps & features.
+;
+; Tried again in September 2026, to give the binary a publisher string after
+; Defender's ml classifier flagged 1.1.9. It would have broken every upgrade
+; for a signal worth almost nothing — the version resource already carries
+; `hstracker` as the company name, built from the bundle identifier. Signing
+; is the answer to that classifier; this field is not.
 
 ; the welcome page is generic by default, and it is the first thing anyone
 ; sees — say what the thing is and what it needs. Defined here because Tauri

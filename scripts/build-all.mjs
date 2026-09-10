@@ -23,7 +23,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { SIGNING_KEY, VCVARS, loadSigningKey } from './paths.mjs';
+import { SIGNING_KEY, SIGN_THUMBPRINT, SIGN_TIMESTAMP, VCVARS, loadSigningKey } from './paths.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // only this build's artifacts are collected; older ones stay where they are
@@ -94,13 +94,50 @@ function show(dir, exts) {
   }
 }
 
+// Authenticode, when there is a certificate to sign with.
+//
+// Windows Defender's ml classifiers judge an unsigned binary on what it does,
+// and this one reads network traffic and installs under %LOCALAPPDATA% — close
+// enough to the shape of a stealer that 1.1.9 was flagged as
+// Trojan:Win32/Bearfoos.B!ml on machines that had run every release before it.
+// A signature is the only thing that answers that, and SmartScreen's warning
+// with it.
+//
+// Put HS_SIGN_THUMBPRINT in .env beside the game path and the toolchain, or in
+// the environment for a one-off — see SIGN_THUMBPRINT in paths.mjs, which is
+// the only thing here that reads .env. It is the SHA-1 of a certificate in the
+// Windows store:
+//
+//   Get-ChildItem Cert:\CurrentUser\My | Format-List Subject, Thumbprint
+//
+// With one, the installer and the exe inside it are both signed and timestamped.
+function signingConfig() {
+  if (!SIGN_THUMBPRINT) return null;
+  return {
+    bundle: {
+      windows: {
+        certificateThumbprint: SIGN_THUMBPRINT,
+        digestAlgorithm: 'sha256',
+        timestampUrl: SIGN_TIMESTAMP,
+      },
+    },
+  };
+}
+
 if (wantWindows) {
   console.log('== Windows ==');
+  const signing = signingConfig();
+  // JSON on the command line, which is what `tauri build --config` takes when
+  // it is not given a path. The quotes are doubled for cmd.exe below; the
+  // no-VCVARS branch hands it to execFile, which needs no escaping at all.
+  const conf = signing ? JSON.stringify(signing) : null;
+  console.log(conf ? '  signing:   yes' : '  signing:   no — set HS_SIGN_THUMBPRINT to sign');
   if (!VCVARS) {
-    run('npx', ['tauri', 'build']);
+    run('npx', conf ? ['tauri', 'build', '--config', conf] : ['tauri', 'build']);
   } else {
     console.log(`  toolchain: ${VCVARS}`);
-    execSync(`call "${VCVARS.replace(/\//g, "\\")}" >nul && npx tauri build`, {
+    const build = conf ? `npx tauri build --config "${conf.replace(/"/g, '\\"')}"` : 'npx tauri build';
+    execSync(`call "${VCVARS.replace(/\//g, "\\")}" >nul && ${build}`, {
       cwd: root,
       stdio: 'inherit',
       shell: 'cmd.exe',

@@ -106,9 +106,18 @@
   let base = null;
   function save() {
     clearTimeout(saveTimer);
-    const snapshot = $state.snapshot(settings);
     saveTimer = setTimeout(() => {
       saveTimer = null;
+      // Taken here and not when the edit was made.
+      //
+      // The listener above spends these 150ms merging changes from the tray, a
+      // hotkey or the strip into `settings`, precisely so they are not lost —
+      // and a snapshot taken before the wait was written over the top of every
+      // one of them. The merge reached the screen, the file kept the older
+      // copy, and the next broadcast put the older copy back on the screen too:
+      // a lock toggled from the strip while this page had an unsaved edit came
+      // straight back on.
+      const snapshot = $state.snapshot(settings);
       base = JSON.parse(JSON.stringify(snapshot));
       // Swallowed for a long time, and it cost somebody an evening: installed
       // where the folder will not take a write — under Program Files — every
