@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.12 — 2026-09-12
+
+### Fixed
+
+- A find typed into chat is no longer announced as though the server had said
+  it.
+
 ## 1.1.11 — 2026-09-12
 
 ### Added
