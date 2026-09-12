@@ -727,9 +727,17 @@ fn dict_to_events(d: &Value) -> Vec<GameEvent> {
     if !is_chat(d) && (says_mail(&message) || has(d, MAIL_FIELDS)) {
         events.push(GameEvent::Mail(mail_is_present(d)));
     }
-    // server chat announcement: "Someone just found [Item Name]"
-    if let Some((finder, name)) = announced_item_name(&msg_text(d)) {
-        events.push(GameEvent::Found { finder, name });
+    // The server's own announcement of a find: "Someone just found [Item]".
+    //
+    // `!is_chat` for the same reason the mail line above has it, and it is not
+    // caution but a hole somebody walked through: the server's announcement is
+    // a bare message, while a player typing those words is a chat packet, and
+    // without the guard anybody could type "X just found [Aurelion Fury]" and
+    // have every tracker in the shard announce it. The journal took it too.
+    if !is_chat(d) {
+        if let Some((finder, name)) = announced_item_name(&msg_text(d)) {
+            events.push(GameEvent::Found { finder, name });
+        }
     }
     events.extend(item_events(d));
     if let Some(region) = zone_request_region(d) {
@@ -2927,6 +2935,41 @@ named things, by what the tracker made of them:");
             &events[0],
             GameEvent::Found { finder, name } if name == "Doctor's Potion" && finder == "Parahryushka"
         ));
+    }
+
+    /// A player typing the server's words is not the server.
+    ///
+    /// The announcement of a find is a bare message from the shard. Somebody
+    /// typing the same sentence into chat sends the same words wrapped in what
+    /// a chat packet carries — a room, a colour for the name — and that is what
+    /// tells them apart. Without it a player could announce anything they liked
+    /// on every tracker in the game, and it was reported by one who tried.
+    #[test]
+    fn a_find_typed_in_chat_is_not_a_find() {
+        // The shape a real chat packet has, straight from a capture: the
+        // global room is room ZERO, so this also holds `has` to meaning "the
+        // field is there" and not "the field is truthy".
+        let spoof = json!({
+            "message": "[Softcore] GorillaSSF Just found [Aurelion Fury]",
+            "chatRoom": 0,
+            "nameColor": 7844807,
+            "msgColor": 16777215,
+            "name": "GorillaSSF",
+        });
+        let events = events_from_messages(std::slice::from_ref(&spoof));
+        assert!(
+            !events.iter().any(|e| matches!(e, GameEvent::Found { .. })),
+            "a chat line is somebody talking: {events:?}"
+        );
+
+        // and the shard's own announcement, which carries none of that, is
+        // still read
+        let real = json!({"message": "GorillaSSF Just found [Aurelion Fury]"});
+        let events = events_from_messages(std::slice::from_ref(&real));
+        assert!(
+            events.iter().any(|e| matches!(e, GameEvent::Found { name, .. } if name == "Aurelion Fury")),
+            "the server still announces: {events:?}"
+        );
     }
 
     #[test]
