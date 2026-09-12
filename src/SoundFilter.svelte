@@ -641,6 +641,18 @@
             <span class="pct">{FX_TIERS[(settings.flourish_tier ?? 6) - 1]}</span>
           </div>
           <div class="line">
+            <span class="name">{t("Layout")}</span>
+            <select
+              class="layout"
+              value={settings.flourish_layout ?? 'stacked'}
+              onchange={(e) => { settings.flourish_layout = e.currentTarget.value; save(); }}
+              title={t("Stacked draws the name large under the rarity; the line is the shorter, older caption.")}
+            >
+              <option value="stacked">{t("Stacked")}</option>
+              <option value="line">{t("One line")}</option>
+            </select>
+          </div>
+          <div class="line">
             <span class="name">{t("Size")}</span>
             <input type="range" min="50" max="200" bind:value={scalePct} oninput={() => setNumber('flourish_scale', scalePct / 100)} />
             <span class="pct">{Math.round((settings.flourish_scale ?? 1) * 100)}%</span>
@@ -891,6 +903,23 @@
   /* a setting that is on but cannot act yet says so where it is set */
   .note.warn { color: var(--gold, #e8c860); }
   .vol { width: 100%; min-width: 44px; }
+  /* On the same track as the sliders beside it, so the rows line up: the name
+     column, then the control, then the reading on the right. */
+  .layout {
+    flex: 1;
+    min-width: 0;
+    padding: 2px 6px;
+    color: var(--bone-6);
+    background: #180d13;
+    border: 1px solid var(--edge);
+    border-radius: 5px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .layout:hover { border-color: var(--gold-2); }
+  .layout option { background: #180d13; }
+
   .pct {
     font-size: 11px;
     color: var(--edge-2b);

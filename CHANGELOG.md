@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.11 — 2026-09-12
+
+### Added
+
+- An item on a watchlist can be given its own colour, gradient and glow on the
+  announcement pillar, with a preview beside it.
+- An appearance can be saved as a theme and put on another item.
+- The announcement's caption can be set back to the single line it used to be.
+- Watchlist takes a list of ignored items, silenced on the chime, the pillar
+  or both, whatever the rarity switches say.
+- The overlay panel's readings can be arranged: each row holds three, and
+  which reading sits in which cell is chosen in Settings. A row emptied is a
+  row the panel does not draw.
+
+### Changed
+
+- The announcement stacks the rarity, the name and the grade instead of setting
+  them in a line, and draws the name large.
+
 ## 1.1.10 — 2026-09-10
 
 ### Changed

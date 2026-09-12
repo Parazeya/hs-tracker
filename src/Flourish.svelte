@@ -11,14 +11,8 @@
   import { itemName, kindLabel, nameOf, rarityLabel, satanicZoneName, t, typeLabel } from './say.svelte.js';
   import { buffInfo, zoneName } from './buffs.js';
   import { art } from './skin.svelte.js';
+  import { RARITY_TINT, accentOf, lookForDrop, nameStyle } from './look.js';
 
-  const RARITY_TINT = {
-    Satanic: '#ca1717',
-    Set: '#40d040',
-    Heroic: '#00ffae',
-    Angelic: '#f6f794',
-    Unholy: '#e04a7a',
-  };
   /// Same type the engine hunts by. Relics resolve to no journal rarity, so the
   /// caption prints the type (see `rarityLabel`) and the pillar is tinted
   /// orange — the Relic row's colour, rather than the beige leftover of
@@ -166,9 +160,28 @@
     const known = itemName(drop.item_type, drop.item_id, drop.weapon_type);
     return known ?? typeLabel(drop.item_type, drop.weapon_type);
   });
+  /// What the player dressed this item in, and the colour the rest of the
+  /// caption takes from it. Off the name, so it holds wherever the item is
+  /// listed — see src/look.js.
+  let look = $derived(lookForDrop(cfg?.looks, drop?.name, drop?.rarity));
+  let accent = $derived(accentOf(look, tint));
+
+  /// The name's size, which only falls for a name long enough to need it.
+  ///
+  /// The window is 672 CSS px wide before the Size setting scales it, and the
+  /// longest name the tables hold is 36 characters — "Muspelheim Guardian's
+  /// Scorched Plate" — which at the full size runs off the end and is simply
+  /// not drawn. The divisor is that width over the font's widest plausible
+  /// average glyph, so the point at which it starts shrinking is the point at
+  /// which it would otherwise be cut, and the other 99% of names are untouched.
+  const NAME_PX = 34;
+  let nameSize = $derived(Math.min(NAME_PX, Math.floor(1030 / Math.max(1, (label ?? '').length))));
+
   let runMs = $derived(Math.round(Math.min(12, Math.max(2, cfg?.flourish_secs ?? 6)) * 1000));
   let scale = $derived(Math.min(2, Math.max(0.5, cfg?.flourish_scale ?? 1)));
   let shade = $derived(Math.min(1, Math.max(0, cfg?.flourish_shade ?? 0.55)));
+  /// Stacked, or the single line the pillar used before — see `flourish_layout`.
+  let stacked = $derived((cfg?.flourish_layout ?? 'stacked') !== 'line');
 </script>
 
 <div
@@ -241,9 +254,23 @@
       <div class="sparks right"></div>
       <div class="sparks over"></div>
       {#if drop}
-        <div class="caption">
-          <span class="rar">{kind}</span>
-          <span class="name">{label}</span>
+        <!-- A column, not a line. Read left to right the three parts compete for
+             one glance and the name — the only part anybody is actually
+             waiting for — was the middle of them. Stacked, the eye lands on
+             the name first and the rarity and grade are there to be checked
+             after. The rules either side of the rarity word are what stop a
+             short word looking lost above a long name. -->
+        <div class="caption" class:stacked style:--accent={accent}>
+          {#if stacked}
+            <div class="rarline">
+              <i class="rule"></i>
+              <span class="rar">{kind}</span>
+              <i class="rule"></i>
+            </div>
+          {:else}
+            <span class="rar">{kind}</span>
+          {/if}
+          <span class="name" style="font-size:{stacked ? nameSize : 19}px;{nameStyle(look, tint)}">{label}</span>
           {#if drop.tier > 0}<span class="grade">{tierLabel(drop.tier)}</span>{/if}
         </div>
       {/if}
@@ -389,6 +416,9 @@
   }
   @keyframes sparkframes { to { -webkit-mask-position: -1344px 0; mask-position: -1344px 0 } }
 
+  /* The line is what this was, and it is still an option: it is the shorter of
+     the two, and a window parked in a tight corner of a stream layout was
+     parked there on purpose. */
   .caption {
     position: relative;
     display: flex;
@@ -396,8 +426,12 @@
     gap: 8px;
     font-size: 19px;
     white-space: nowrap;
-    text-shadow: 0 2px 0 #000, 0 0 12px #000, 0 0 24px var(--tint);
     opacity: 0;
+  }
+  .caption.stacked {
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
   }
   .fx.playing .caption {
     animation: rise var(--in) ease-out forwards,
@@ -407,18 +441,45 @@
     from { opacity: 0; transform: translateY(8px) scale(0.94) }
     to { opacity: 1; transform: translateY(0) scale(1) }
   }
-  .rar {
-    color: var(--tint);
-    font-size: 12px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
+  /* The rules are given a width rather than being stretched to the name: a
+     long name would otherwise drag them out into two long lines with a word
+     between, and the rarity stops reading as a label. */
+  .rarline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
-  .name { color: #f4e6bb }
-  .grade {
-    color: var(--tint);
+  .rule {
+    width: 46px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent));
+    opacity: 0.7;
+  }
+  .rule:last-child { background: linear-gradient(270deg, transparent, var(--accent)) }
+  .rar {
+    color: var(--accent);
     font-size: 12px;
-    border: 1px solid var(--tint);
-    padding: 0 4px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    text-shadow: 0 1px 0 #000, 0 0 10px #000;
+  }
+  /* The one part anybody is waiting for, so it is the one that is big. Its
+     colour and glow are set inline from `nameStyle` — see src/look.js — and
+     nothing here may declare either, or the player's own choice loses to this
+     file. */
+  .name {
+    line-height: 1.12;
+    letter-spacing: 0.01em;
+  }
+  .grade {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    padding: 1px 9px;
+    background: rgba(0, 0, 0, 0.35);
+    text-shadow: 0 1px 0 #000;
   }
 
   /* only while it is being parked */
