@@ -2,6 +2,7 @@
   import { say, t } from './say.svelte.js';
   import { invoke } from './bridge.js';
   import { art } from './skin.svelte.js';
+  import { rowsOf } from './panel.js';
   import { listen, native } from './bridge.js';
   import { buffInfo, defaultBuffIcon, zoneAct, zoneName, icon } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
@@ -245,6 +246,10 @@
 
   const shown = (id) => !(cfg?.hidden ?? []).includes(id);
 
+  /// The panel's cells, three to a row, as the player left them. See
+  /// src/panel.js, which the Settings editor reads too.
+  let rows = $derived(rowsOf(cfg?.overlay_slots));
+
   // pinned over a running game: drop the frame, leave the numbers floating on
   // top of the game
   let live = $derived((snap?.status ?? '').startsWith('capturing'));
@@ -321,117 +326,24 @@
   style:opacity={cfg?.opacity ?? 1}
   data-tauri-drag-region={drag}
 >
-  {#if shown('session')}
+  <!-- The panel, three cells to a row, laid out as the player left them.
+       See SLOTS above and `slots_of` in src-tauri/src/lib.rs. -->
+  {#each rows as row, r (r)}
     <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={status.tip}>
-        <span class="dot {status.cls}"></span>
-        <img src={snap?.paused ? art('frozen_icon') : icon('time')} alt="" class="ic" />
-        <span class="val" class:frozen={snap?.paused}>{snap ? dur(sessionSecs) : '0:00:00'}</span>
-      </div>
-      <div
-        class="chip md mail"
-        class:has={snap?.has_mail}
-        class:fresh={mailFresh && snap?.has_mail}
-        style:border-image-source="url({art('chip_dark')})"
-        title={snap?.has_mail ? t('there is mail waiting') : t('no mail')}
-      >
-        <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
-        <span class="val">{snap?.has_mail ? t('Mail!') : t('No mail')}</span>
-      </div>
-      <!-- The third cell of the session row, which stood empty from the day the
-           magic-find figure came out of it: every row on this panel is
-           140 + 124 + 124 and the comment on `.chip` keeps those boundaries
-           down the whole panel, so a row of two ended in a gap.
-
-           The skull is the game's own: `Mapscreen_Skull_spr` is what its map
-           screen puts over a boss dungeon, so it already reads as "boss" to
-           anyone who has opened that screen — and hs-map marks the same
-           dungeons with the same sprite. Exported by tools/export_ui.py rather
-           than dropped in by hand, so a season that redraws it can regenerate
-           it. The chests are counted too and are on the Statistics tab; one
-           number is what fits here and the bosses are the one worth watching. -->
-      <div
-        class="chip md"
-        style:border-image-source="url({art('chip_dark')})"
-        title={t("bosses put down this session")}
-      >
-        <img src={icon('boss')} alt="" class="ic" />
-        <span class="val">{fmt(tallied('boss'))}</span>
-      </div>
+      {#each row as id, c (c)}
+        {#if id}
+          {@render cell(id, c === 0 ? 'lg' : 'md')}
+        {:else}
+          <!-- A blank keeps the column boundaries of the rows above and below
+               it. Without it the cells after a gap slide left and the panel
+               reads as crooked; the whole point of the grid is that the
+               boundaries do not move. -->
+          <div class="chip {c === 0 ? 'lg' : 'md'} blank"></div>
+        {/if}
+      {/each}
     </div>
-  {/if}
+  {/each}
 
-  {#if shown('items')}
-    <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={t("Angelic | Unholy")}>
-        <img src={icon('chest')} alt="" class="ic" />
-        <span class="val">
-          <span class="c-ang">{fmt(item('Angelic').total)}</span>
-          | <span class="c-unh">{fmt(item('Unholy').total)}</span>
-        </span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("Satanic | per hour")}>
-        <span class="val">
-          <span class="c-sat">{fmt(item('Satanic').total)}</span>
-          | <span class="c-sat">{fmt(item('Satanic').per_hour)}{t('/h')}</span>
-        </span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("Heroic | Set")}>
-        <span class="val">
-          <span class="c-her">{fmt(item('Heroic').total)}</span>
-          | <span class="c-set">{fmt(item('Set').total)}</span>
-        </span>
-      </div>
-    </div>
-  {/if}
-
-  {#if shown('gold')}
-    <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={t("gold earned this session")}>
-        <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
-        <span class="val">+{fmt(snap?.gold?.earned)}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("gold per hour")}>
-        <span class="val">{fmt(snap?.gold?.per_hour)}{t('/h')}</span>
-      </div>
-      <!-- Kills is a statistic, not a stand-in for the button. Rendering it
-           only when the Reset button is off or the overlay is ghosted makes the
-           panel's one combat figure something you see by accident. -->
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})">
-        <span class="dot {status.cls}"></span>
-        <span class="val">{fmt(snap?.kills?.earned)} {t('kills')}</span>
-      </div>
-    </div>
-  {/if}
-
-  {#if shown('xp')}
-    <div class="row" data-tauri-drag-region={drag}>
-      <div class="chip lg" style:border-image-source="url({art('chip_dark')})" title={t("experience earned this session")}>
-        <img src={icon('xp')} alt="" class="ic" />
-        <span class="val">+{fmt(snap?.xp?.earned)}</span>
-      </div>
-      <div class="chip md" style:border-image-source="url({art('chip_dark')})" title={t("experience per hour")}>
-        <span class="val">{fmt(snap?.xp?.per_hour)}/h</span>
-      </div>
-      <!-- The cell that ends the row. The Reset button was the only chip that
-           came and went — ghost mode draws none — so the panel finished on a gap
-           exactly when it was pinned over the game.
-
-           SS is the top tier, and the number a run is judged by whatever colour
-           the drops came out in. The backend has counted every tier all along;
-           this is the one worth a chip. The label is written out rather than
-           left to a tooltip: this panel is what a capture card records, and
-           nobody hovers a video. -->
-      <div
-        class="chip md"
-        style:border-image-source="url({art('chip_dark')})"
-        title={t("SS drops this session — the top tier, counted whatever the rarity")}
-      >
-        <span class="grade">SS</span>
-        <span class="val">{fmt(snap?.ss)}</span>
-      </div>
-    </div>
-  {/if}
 
   {#if shown('zone')}
     <div class="row" data-tauri-drag-region={drag}>
@@ -498,6 +410,100 @@
     {/each}
   </div>
 {/if}
+
+{#snippet cell(id, size)}
+  {#if id === 'time'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={status.tip}>
+      <span class="dot {status.cls}"></span>
+      <img src={snap?.paused ? art('frozen_icon') : icon('time')} alt="" class="ic" />
+      <span class="val" class:frozen={snap?.paused}>{snap ? dur(sessionSecs) : '0:00:00'}</span>
+    </div>
+  {:else if id === 'mail'}
+    <div
+      class="chip {size} mail"
+      class:has={snap?.has_mail}
+      class:fresh={mailFresh && snap?.has_mail}
+      style:border-image-source="url({art('chip_dark')})"
+      title={snap?.has_mail ? t('there is mail waiting') : t('no mail')}
+    >
+      <img src={icon(snap?.has_mail ? 'mail_1' : 'mail_0')} alt="" class="ic" />
+      <span class="val">{snap?.has_mail ? t('Mail!') : t('No mail')}</span>
+    </div>
+  {:else if id === 'boss'}
+    <!-- The skull is the game's own: `Mapscreen_Skull_spr` is what its map
+         screen puts over a boss dungeon, so it already reads as "boss" to
+         anyone who has opened that screen — and hs-map marks the same dungeons
+         with the same sprite. Exported by tools/export_ui.py rather than
+         dropped in by hand, so a season that redraws it can regenerate it. The
+         chests are counted too and are on the Statistics tab; one number is
+         what fits here and the bosses are the one worth watching. -->
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("bosses put down this session")}>
+      <img src={icon('boss')} alt="" class="ic" />
+      <span class="val">{fmt(tallied('boss'))}</span>
+    </div>
+  {:else if id === 'rare'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("Angelic | Unholy")}>
+      <img src={icon('chest')} alt="" class="ic" />
+      <span class="val">
+        <span class="c-ang">{fmt(item('Angelic').total)}</span>
+        | <span class="c-unh">{fmt(item('Unholy').total)}</span>
+      </span>
+    </div>
+  {:else if id === 'sat'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("Satanic | per hour")}>
+      <span class="val">
+        <span class="c-sat">{fmt(item('Satanic').total)}</span>
+        | <span class="c-sat">{fmt(item('Satanic').per_hour)}{t('/h')}</span>
+      </span>
+    </div>
+  {:else if id === 'heroset'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("Heroic | Set")}>
+      <span class="val">
+        <span class="c-her">{fmt(item('Heroic').total)}</span>
+        | <span class="c-set">{fmt(item('Set').total)}</span>
+      </span>
+    </div>
+  {:else if id === 'gold'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("gold earned this session")}>
+      <span class="coin" class:idle={!live} style:background-image="url({art('coin_strip')})"></span>
+      <span class="val">+{fmt(snap?.gold?.earned)}</span>
+    </div>
+  {:else if id === 'goldh'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("gold per hour")}>
+      <span class="val">{fmt(snap?.gold?.per_hour)}{t('/h')}</span>
+    </div>
+  {:else if id === 'kills'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("kills this session")}>
+      <span class="dot {status.cls}"></span>
+      <span class="val">{fmt(snap?.kills?.earned)} {t('kills')}</span>
+    </div>
+  {:else if id === 'xp'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("experience earned this session")}>
+      <img src={icon('xp')} alt="" class="ic" />
+      <span class="val">+{fmt(snap?.xp?.earned)}</span>
+    </div>
+  {:else if id === 'xph'}
+    <div class="chip {size}" style:border-image-source="url({art('chip_dark')})" title={t("experience per hour")}>
+      <span class="val">{fmt(snap?.xp?.per_hour)}/h</span>
+    </div>
+  {:else if id === 'ss'}
+    <!-- SS is the top tier, and the number a run is judged by whatever colour
+         the drops came out in. The backend has counted every tier all along;
+         this is the one worth a chip. The label is written out rather than
+         left to a tooltip: this panel is what a capture card records, and
+         nobody hovers a video. -->
+    <div
+      class="chip {size}"
+      style:border-image-source="url({art('chip_dark')})"
+      title={t("SS drops this session — the top tier, counted whatever the rarity")}
+    >
+      <span class="grade">SS</span>
+      <span class="val">{fmt(snap?.ss)}</span>
+    </div>
+  {:else}
+    <div class="chip {size} blank"></div>
+  {/if}
+{/snippet}
 
 <style>
   @font-face {
@@ -597,6 +603,9 @@
      after its bracketed figures came out — the same total, so nothing
      overflowed, but its first boundary sat 16px left of every other row's and
      the panel read as crooked. The widths are the grid, not the content. */
+  /* An empty cell: it holds its column and draws nothing. No plate art, so it
+     is a gap and not a chip with no reading in it. */
+  .chip.blank { border-image-source: none; background: none; }
   .chip.lg { min-width: 140px; }
   .chip.md { min-width: 124px; }
 

@@ -561,6 +561,11 @@ pub struct Prefs {
     pub fx_tier: i64,
     /// announce anything the custom filter's lists match, whatever its rarity
     pub fx_listed: bool,
+    /// Names the rarity alerts leave alone, lowercased — the horn and the drop
+    /// list here, the pillar below. A watchlist is not touched by either: see
+    /// `Muted` in lib.rs.
+    pub muted_sound: std::collections::HashSet<String>,
+    pub muted_flourish: std::collections::HashSet<String>,
     /// hunted relics take the pillar — their own switch, not a rarity
     pub fx_relic: bool,
     /// Eternity / Infernal Codex take the pillar — Common, so the rarity grid cannot
@@ -587,6 +592,8 @@ impl Default for Prefs {
             min_tier: 0,
             fx_rarities: Vec::new(),
             fx_tier: 6,
+            muted_sound: Default::default(),
+            muted_flourish: Default::default(),
             fx_listed: false,
             fx_relic: false,
             fx_codex: false,
@@ -1215,6 +1222,13 @@ impl GameStats {
         self.set_listed(lists);
     }
 
+    #[cfg(test)]
+    pub fn set_muted(&mut self, sound: Vec<String>, flourish: Vec<String>) {
+        self.revision += 1;
+        self.prefs.muted_sound = sound.into_iter().collect();
+        self.prefs.muted_flourish = flourish.into_iter().collect();
+    }
+
     /// Whether a list takes the pillar as well as the chime. Off by default,
     /// here and in the settings, so a test that wants it says so.
     #[cfg(test)]
@@ -1286,6 +1300,7 @@ impl GameStats {
         rarity: &str,
         tier: i64,
         listed: bool,
+        muted: bool,
         relic: bool,
         resource: bool,
         codex: bool,
@@ -1308,6 +1323,11 @@ impl GameStats {
         }
         if codex {
             return self.prefs.fx_codex;
+        }
+        // Named on the exception list, and nothing above claimed it: the
+        // rarity grid is exactly what that list exists to narrow.
+        if muted {
+            return false;
         }
         let graded = tier >= self.prefs.fx_tier || self.prefs.fx_tier <= 1;
         self.prefs.fx_rarities.iter().any(|r| r == rarity) && graded
@@ -1814,13 +1834,30 @@ impl GameStats {
                     .or_else(|| self.hunted_relic(*item_type, *item_id));
                 let listed_hit = listed.is_some();
                 let wanted = *announced || listed_hit || self.prefs.prefer_ground || !*ground;
+                // The exception list gates the rarity path and nothing else:
+                // a list the player built still sounds, and so does a find the
+                // server announced to the whole shard.
+                //
+                // Two keys, the same pair `listed_sound` uses: the seven
+                // Essence Vaults share one name across every rarity, so the
+                // list stores those as "Name (Rarity)" while the drop carries
+                // the bare name and the rarity apart. Ignoring the Angelic one
+                // must not silence the Satanic one.
+                let lower = name.to_lowercase();
+                let qualified = format!("{lower} ({})", rarity_key.to_lowercase());
+                let ignored = |set: &std::collections::HashSet<String>| {
+                    set.contains(&lower) || set.contains(&qualified)
+                };
                 let announce = *announced
                     || listed_hit
-                    || (!is_resource && self.passes_filter(&rarity_key, tier));
+                    || (!is_resource
+                        && !ignored(&self.prefs.muted_sound)
+                        && self.passes_filter(&rarity_key, tier));
                 let flourish = self.worth_a_flourish(
                     &rarity_key,
                     tier,
                     listed_hit,
+                    ignored(&self.prefs.muted_flourish),
                     listed.as_deref() == Some("relic"),
                     is_resource,
                     crate::parser::is_entry_codex(*item_type, *item_id, name),
@@ -3114,6 +3151,58 @@ mod tests {
             Some("list-name"),
             "the name is first, so the name sounds"
         );
+    }
+
+    /// The exception list narrows the rarity switches and nothing else.
+    ///
+    /// It exists because ticking Heroic asks for every Heroic there is, and a
+    /// few fall often enough to be noise. What it must never do is overrule a
+    /// list the player built: that is a statement the item matters, and a
+    /// blanket "except these" quietly beating it would be a watchlist that
+    /// stopped working with nothing on the screen to say why.
+    #[test]
+    fn the_exception_list_narrows_the_rarity_and_not_a_watchlist() {
+        let make = |hash: &str| GameEvent::ItemAdded {
+            rarity: json!(6),
+            unscaled: false,
+            mf: false,
+            tier: 6,
+            item_type: 0,
+            item_id: 0,
+            weapon_type: 0,
+            seed: 1,
+            name: "Harlequinn's Crest".into(),
+            announced: false,
+            amount: 1,
+            fingerprint: format!("0-0-{hash}"),
+            hash: hash.into(),
+            ground: true,
+        };
+
+        // Ticked as a rarity, it sounds.
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_filter(vec!["Satanic".into()], 1);
+        s.set_flourish_filter(vec!["Satanic".into()], 1);
+        let loud = s.apply(&make("loud")).expect("Satanic is ticked");
+        assert!(loud.flourish, "and it takes the pillar");
+
+        // Named on the exception list, the same drop passes in silence.
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_filter(vec!["Satanic".into()], 1);
+        s.set_flourish_filter(vec!["Satanic".into()], 1);
+        s.set_muted(vec!["harlequinn's crest".into()], vec!["harlequinn's crest".into()]);
+        assert!(s.apply(&make("quiet")).is_none(), "muted on both channels");
+
+        // Unless a list names it, which outranks the exception.
+        let mut s = GameStats::default();
+        s.set_prefer_ground(true);
+        s.set_filter(vec!["Satanic".into()], 1);
+        s.set_muted(vec!["harlequinn's crest".into()], vec!["harlequinn's crest".into()]);
+        s.set_sound_lists(vec![("list-keep".into(), vec!["Harlequinn's Crest".into()])]);
+        let kept = s.apply(&make("listed")).expect("the list wins");
+        assert_eq!(kept.sound.as_deref(), Some("list-keep"));
     }
 
     /// A rule can name the kind inside the kind.

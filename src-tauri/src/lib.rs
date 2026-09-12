@@ -124,13 +124,50 @@ fn strip_rect(held: bool) -> (f64, f64, f64, f64) {
     (panel_w(), 0.0, base_w(), end)
 }
 
-/// The rows that add height to the overlay. "vitals" is not one of them and has
-/// no Settings entry any more: magic find had moved into the session row, and
-/// then the readout itself came out because the heartbeat that carried it went
-/// tens of minutes between packets. A stored `hidden: ["vitals"]` from an older
-/// version hides nothing and costs nothing, which is why it is not migrated
-/// away.
-const OVERLAY_ROWS: [&str; 5] = ["session", "gold", "xp", "items", "zone"];
+/// `hidden` is down to one entry now, "zone": the four counter rows became
+/// cells the player arranges — see `OVERLAY_SLOTS` — and the Satanic zone is
+/// one wide reading across the whole width rather than three, so it cannot
+/// take part in that and stays a switch. An older file's "session" or "vitals"
+/// in there hides nothing and costs nothing, which is why none of it is
+/// migrated away.
+/// What sits in each cell of the panel, three to a row, in order.
+///
+/// The panel is a grid and stays one: 140px then 124 then 124, the same column
+/// boundaries all the way down — see `.row` in App.svelte for why that is not
+/// negotiable. What a player may change is which reading sits in which cell,
+/// not where the cells are. An empty string is a cell left blank, and a row
+/// with three of them is not drawn at all, which is how a reading is removed.
+///
+/// Names rather than numbers, so a settings file says what it means and a
+/// season that adds a reading does not renumber anybody's layout.
+///
+/// The page holds this order too, in src/panel.js, and that copy is the one
+/// that draws. This one is read for a single thing: the height the window is
+/// given for the frame before the page has measured itself and said so through
+/// `fit_overlay`. A copy that drifted would cost that one frame and nothing
+/// after it, which is why the duplication is tolerable and why it is only the
+/// LENGTH of this list that matters here.
+const OVERLAY_SLOTS: [&str; 12] = [
+    "time", "mail", "boss",
+    "rare", "sat", "heroset",
+    "gold", "goldh", "kills",
+    "xp", "xph", "ss",
+];
+
+/// The layout as the player left it, or the one it ships with. A file that
+/// holds a short list — hand-edited, or written by a version with fewer
+/// readings — is padded rather than refused, so the panel is never missing a
+/// row because somebody deleted a line.
+fn slots_of(settings: &Settings) -> Vec<String> {
+    let mut out = settings.overlay_slots.clone();
+    if out.is_empty() {
+        return OVERLAY_SLOTS.iter().map(|s| s.to_string()).collect();
+    }
+    while out.len() % 3 != 0 {
+        out.push(String::new());
+    }
+    out
+}
 
 fn overlay_height(settings: &Settings) -> f64 {
     // what the overlay says it is, and only otherwise what its rows suggest
@@ -138,8 +175,16 @@ fn overlay_height(settings: &Settings) -> f64 {
     let panel = if measured > 0 {
         measured as f64
     } else {
-        let rows = OVERLAY_ROWS.iter().filter(|r| !settings.hidden.iter().any(|h| h == *r)).count();
-        34.0 + 33.0 * rows.max(1) as f64
+        // Only the first frame lands here: the page measures itself and says
+        // so through `fit_overlay`, and that measurement wins from then on.
+        // This is the guess that decides how far the window is wrong for one
+        // frame, so it counts the same rows the page will draw.
+        let filled = slots_of(settings)
+            .chunks(3)
+            .filter(|row| row.iter().any(|c| !c.is_empty()))
+            .count();
+        let zone = usize::from(!settings.hidden.iter().any(|h| h == "zone"));
+        34.0 + 33.0 * (filled + zone).max(1) as f64
     };
     // The strip stands beside the panel and can be the taller of the two — a
     // window cut to the panel would clip the last buttons off the bottom. The
@@ -212,6 +257,88 @@ pub struct SoundCfg {
 impl Default for SoundCfg {
     fn default() -> Self {
         Self { enabled: true, volume: 0.5 }
+    }
+}
+
+/// One item the rarity alerts are to leave alone.
+///
+/// The rarity switches are a broad instrument: ticking Heroic asks for every
+/// Heroic there is, and a handful of them fall often enough to be noise rather
+/// than news. This is the exception list for those — by name, with the horn and
+/// the pillar answered separately, because an item can be worth seeing without
+/// being worth hearing forty times an hour.
+///
+/// It does NOT reach a watchlist. Putting an item on a list is a statement that
+/// it matters, and a blanket "except these" that quietly overruled it would be
+/// a list that stopped working for a reason nowhere on the screen.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct Muted {
+    pub name: String,
+    /// Whether the chime and the drop list are silenced for it.
+    pub sound: bool,
+    /// Whether the announcement pillar is.
+    pub flourish: bool,
+}
+
+/// Both channels, because an entry on this list exists to silence something.
+/// Derived, the two would default to false and a line added by hand — this file
+/// is edited by hand often enough — would sit there doing nothing.
+impl Default for Muted {
+    fn default() -> Self {
+        Self { name: String::new(), sound: true, flourish: true }
+    }
+}
+
+/// How one item is painted when the pillar announces it.
+///
+/// Kept by name and applied wherever that name appears, because a list is a
+/// grouping and not a costume: the same item on two lists is the same find, and
+/// having it come up green on one and gold on the other would say something
+/// about the drop that is not true.
+///
+/// Colours are `#rrggbb` as the page writes them. They are held as strings
+/// rather than packed into an integer so that a settings file stays something a
+/// person can read and edit, which is how half the filters in this app were
+/// first built.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct Look {
+    /// "rarity" — the colour the rarity would have given it anyway — or
+    /// "solid", or "gradient" for a wash between the two colours below.
+    pub effect: String,
+    pub color: String,
+    /// The second stop. Ignored unless the effect is a gradient.
+    pub color2: String,
+    /// The glow behind the name, as a percentage of the usual. 0 turns it off
+    /// and 200 is as far as it goes; a glow is a light on a transparent window
+    /// and past that it stops being a light and becomes a fog.
+    pub glow: u32,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self {
+            effect: "rarity".into(),
+            color: String::new(),
+            color2: String::new(),
+            glow: 100,
+        }
+    }
+}
+
+/// A saved appearance, to put on the next item without setting it up again.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct LookTheme {
+    pub id: String,
+    pub name: String,
+    pub look: Look,
+}
+
+impl Default for LookTheme {
+    fn default() -> Self {
+        Self { id: String::new(), name: String::new(), look: Look::default() }
     }
 }
 
@@ -392,6 +519,20 @@ pub struct Settings {
     pub flourish_secs: f32,
     /// which rarities are worth it, and the grade a drop must reach
     pub flourish_rarities: Vec<String>,
+    /// How the caption is set out: "stacked" puts the rarity, the name and the
+    /// grade one under the other with the name large, "line" is the single row
+    /// the pillar used before. Kept rather than replaced because the line is
+    /// the shorter of the two, and a player who has parked the window in a
+    /// tight corner of a stream layout chose that corner for a reason.
+    pub flourish_layout: String,
+    /// Items the rarity alerts skip. See `Muted`.
+    pub muted: Vec<Muted>,
+    /// How named items are painted on the pillar, by the lowercased English
+    /// name — the same key a watchlist stores, so the two always agree.
+    /// An item with no entry here is painted by its rarity, as it always was.
+    pub looks: std::collections::BTreeMap<String, Look>,
+    /// Appearances saved to be reused. Ordered as the player put them.
+    pub look_themes: Vec<LookTheme>,
     pub flourish_tier: i64,
     /// Announce whatever the custom filter's lists match, whatever its rarity
     /// or grade. A list is already a statement that those items matter; saying
@@ -432,6 +573,9 @@ pub struct Settings {
     /// through. Chosen in Settings, applied at the next start.
     pub x11_backend: bool,
     pub hidden: Vec<String>,
+    /// Which reading sits in which cell of the panel. Empty means the panel is
+    /// laid out as it ships; see `OVERLAY_SLOTS`.
+    pub overlay_slots: Vec<String>,
 }
 
 impl Default for Settings {
@@ -497,6 +641,12 @@ impl Default for Settings {
             flourish_listed: false,
             flourish_relic: true,
             flourish_codex: true,
+            // Empty: every item is painted by its rarity until somebody says
+            // otherwise, which is what the app has always done.
+            flourish_layout: "stacked".into(),
+            muted: Vec::new(),
+            looks: Default::default(),
+            look_themes: Vec::new(),
             // The rotation is the one thing on this panel the player is meant
             // to act on, and it is rare enough that a pillar for it is not a
             // pillar in the way. On, for the same reason the announcement is.
@@ -507,6 +657,7 @@ impl Default for Settings {
             ghost: ghost_default(),
             x11_backend: false,
             hidden: Vec::new(),
+            overlay_slots: Vec::new(),
         }
     }
 }
@@ -1560,6 +1711,23 @@ fn apply_stats_settings(app: &AppHandle, settings: &Settings) {
         // the flourish asks a different question of the same drop
         fx_rarities: if settings.flourish { settings.flourish_rarities.clone() } else { Vec::new() },
         fx_tier: settings.flourish_tier.clamp(1, 6),
+        // Trimmed and lowercased on the way in, the same as a list's names:
+        // this is a file a player edits by hand and a trailing space is not a
+        // different item.
+        muted_sound: settings
+            .muted
+            .iter()
+            .filter(|m| m.sound)
+            .map(|m| m.name.trim().to_lowercase())
+            .filter(|n| !n.is_empty())
+            .collect(),
+        muted_flourish: settings
+            .muted
+            .iter()
+            .filter(|m| m.flourish)
+            .map(|m| m.name.trim().to_lowercase())
+            .filter(|n| !n.is_empty())
+            .collect(),
         fx_listed: settings.flourish && settings.flourish_listed && settings.use_filter,
         fx_relic: settings.flourish && settings.flourish_relic,
         fx_codex: settings.flourish && settings.flourish_codex,
@@ -2255,15 +2423,38 @@ fn park_below_centre(app: &AppHandle, w: &tauri::WebviewWindow) {
 /// drops, so a capture set up on a quiet evening looks identical whether it is
 /// working or not, and the only test anyone had was to go and farm one.
 #[tauri::command]
-fn test_flourish(app: AppHandle) {
+/// Play the pillar for something, to see what it looks like.
+///
+/// With no item it plays the sample the Alerts tab has always used. The
+/// Watchlist passes a real one, because an appearance is keyed by name — the
+/// preview has to be of that name or it shows the player somebody else's
+/// colours. See `Look`.
+fn test_flourish(
+    app: AppHandle,
+    name: Option<String>,
+    rarity: Option<String>,
+    tier: Option<i64>,
+    item_type: Option<i64>,
+    weapon_type: Option<i64>,
+) {
     let Some(w) = app.get_webview_window("flourish") else { return };
-    let sample = serde_json::json!({
+    let named = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+    let sample = match named {
+        Some(name) => serde_json::json!({
+            "rarity": rarity.unwrap_or_else(|| "Common".into()),
+            "name": name,
+            "tier": tier.unwrap_or(0),
+            "item_type": item_type.unwrap_or(-1),
+            "weapon_type": weapon_type.unwrap_or(0),
+        }),
+        None => serde_json::json!({
         "rarity": "Heroic",
         "name": "Fenrir's Bloodfang",
         "tier": 6,
         "item_type": 3,
         "weapon_type": 1,
-    });
+    }),
+    };
     let _ = app.emit_to("flourish", "flourish-play", &sample);
     show_flourish(&app, &w);
 }

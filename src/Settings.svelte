@@ -1,6 +1,7 @@
 <script>
   import { invoke, recall, remember } from './bridge.js';
   import { art, wearTheme } from './skin.svelte.js';
+  import { READINGS, slotsOf } from './panel.js';
   import { LANGUAGES, t } from './say.svelte.js';
   import { listen } from './bridge.js';
 
@@ -137,13 +138,39 @@
     save();
   }
 
-  const SECTIONS = [
-    ['session', 'Session timer, mail & reset'],
-    ['gold', 'Gold'],
-    ['xp', 'Experience'],
-    ['items', 'Item counters'],
-    ['zone', 'Satanic zone'],
-  ];
+  // The Satanic zone is a row to itself and stays a switch: it is one wide
+  // reading across the whole width, not three cells, so it cannot take part in
+  // the arrangement below.
+  const SECTIONS = [['zone', 'Satanic zone']];
+
+  // ── what sits in each cell of the overlay panel ──────────────────────────
+  //
+  // The grid does not move: 140px then 124 then 124, the same column
+  // boundaries all the way down. What is arranged here is which reading sits
+  // in which cell — see SLOTS in App.svelte and `slots_of` in lib.rs. A row
+  // left entirely empty is not drawn, which is how a reading is removed rather
+  // than merely blanked.
+  let slots = $derived(slotsOf(settings?.overlay_slots));
+  /// However many rows the stored layout comes to, not a fixed four: a file
+  /// holding more cells than this app ships with would otherwise have them
+  /// drawn on the panel and be invisible here, with no way to reach them.
+  let slotRows = $derived(Math.max(1, Math.ceil(slots.length / 3)));
+
+  /// Putting a reading in a cell moves it there: it is cleared from wherever
+  /// else it was. Two cells showing one figure is not something anybody means
+  /// to ask for, and leaving the old one behind makes every rearrangement a
+  /// two-step job.
+  function setSlot(at, id) {
+    const next = slots.map((cur, i) => (id && cur === id && i !== at ? '' : cur));
+    next[at] = id;
+    settings.overlay_slots = next;
+    save();
+  }
+
+  function resetSlots() {
+    settings.overlay_slots = [];
+    save();
+  }
 
   function toggleSection(id) {
     const hidden = new Set(settings.hidden ?? []);
@@ -410,9 +437,27 @@
       </div>
     {/if}
 
-    {#if overlay && advanced}
+    <!-- Not behind "advanced": arranging the panel is the answer to the
+         commonest question this app gets — "can I hide the things I do not
+         use" — and a setting nobody finds answers nobody. -->
+    {#if overlay}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
-        <div class="sechead" data-tauri-drag-region>{t("Overlay sections")}</div>
+        <div class="sechead" data-tauri-drag-region>{t("Overlay panel")}</div>
+        <div class="note">{t("Each row of the panel holds three readings. Pick what goes where; a row you empty is not drawn.")}</div>
+        <div class="slots">
+          {#each Array(slotRows) as _, r}
+            <div class="slotrow">
+              {#each [0, 1, 2] as c}
+                {@const at = r * 3 + c}
+                <select class="slot" value={slots[at] ?? ''} onchange={(e) => setSlot(at, e.currentTarget.value)}>
+                  <option value="">{t("— empty —")}</option>
+                  {#each READINGS as [id, label]}<option value={id}>{t(label)}</option>{/each}
+                </select>
+              {/each}
+            </div>
+          {/each}
+        </div>
+        <button class="secopt wide" onclick={resetSlots}>{t("Back to the usual layout")}</button>
         <div class="grid">
           {#each SECTIONS as [id, label]}
             <button class="secopt" onclick={() => toggleSection(id)}>
@@ -538,6 +583,25 @@
     color: var(--bone-4);
     padding: 2px 0 4px;
   }
+  /* The editor is the panel's own shape: three cells to a row, the first one
+     wider, so what is being arranged looks like the thing it arranges. */
+  .slots { display: grid; gap: 4px; margin: 6px 0; }
+  .slotrow { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 4px; }
+  .slot {
+    min-width: 0;
+    padding: 3px 6px;
+    color: var(--bone-6);
+    background: #180d13;
+    border: 1px solid var(--edge);
+    border-radius: 5px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .slot:hover { border-color: var(--gold-2); }
+  .slot option { background: #180d13; }
+  .secopt.wide { width: 100%; justify-content: center; }
+
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

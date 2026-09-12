@@ -3,6 +3,7 @@
   import { art } from './skin.svelte.js';
   import { BY_ID, GROUP_BY_NAME, GROUP_TYPE, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { GROUP_LABEL, locale, nameOf, say, t, typeLabel } from './say.svelte.js';
+  import { DEFAULT_LOOK, EFFECTS, GLOW_MAX, RARITY_TINT, accentOf, isCustom, lookFor, nameStyle } from './look.js';
   import { BUILT_IN, soundUrl, play } from './audio.js';
 
   // Only named items can be listed. The parser leaves an ordinary pickup
@@ -610,6 +611,116 @@
     save();
   }
 
+  // ── how an item is painted when the pillar announces it ──────────────────
+  //
+  // Kept in the settings by lowercased name rather than on the list row,
+  // because an appearance belongs to the item and not to the list it happens
+  // to sit on. See `Look` in src-tauri/src/lib.rs and src/look.js.
+
+  /// Which row has its panel open. One at a time: the panel is tall, and two of
+  /// them open turns the list into a scroll hunt.
+  let dressing = $state(null);
+
+  const lookOf = (name) => lookFor(settings?.looks, name);
+
+  /// The rarity colour the item would wear anyway, which is what the picker
+  /// shows as the starting point and what "Rarity colour" means.
+  const tintOf = (name) => RARITY_TINT[facts(name)?.rarity] ?? '#f4e6bb';
+
+  function setLook(name, patch) {
+    if (!settings) return;
+    const key = name.toLowerCase();
+    const next = { ...lookOf(name), ...patch };
+    const looks = { ...(settings.looks ?? {}) };
+    // Back to the default is a removal, not an entry that says "nothing".
+    // Settings files are read by hand here often enough that a hundred rows of
+    // no-change would be its own small cost.
+    if (!isCustom(next)) delete looks[key];
+    else looks[key] = next;
+    settings.looks = looks;
+    save();
+  }
+
+  const resetLook = (name) => setLook(name, { ...DEFAULT_LOOK });
+
+  /// Show it for real, in the window it will actually appear in. The rarity and
+  /// grade travel with it so the pillar draws the same caption a drop would.
+  function previewLook(name) {
+    const it = facts(name) ?? {};
+    invoke('test_flourish', {
+      name: it.bare ?? name,
+      rarity: it.rarity ?? 'Common',
+      tier: it.tier ?? 0,
+      itemType: it.type ?? -1,
+      weaponType: it.weapon ?? 0,
+    }).catch(() => {});
+  }
+
+  // ── themes: an appearance saved to be put on the next item ───────────────
+  let themes = $derived(settings?.look_themes ?? []);
+  let themeName = $state('');
+
+  function saveTheme(name) {
+    if (!settings) return;
+    const label = themeName.trim() || shownName(name);
+    settings.look_themes = [
+      ...themes,
+      { id: `theme-${Math.random().toString(16).slice(2, 10)}`, name: label, look: { ...lookOf(name) } },
+    ];
+    themeName = '';
+    save();
+  }
+
+  function applyTheme(name, id) {
+    const theme = themes.find((x) => x.id === id);
+    if (theme) setLook(name, { ...theme.look });
+  }
+
+  function dropTheme(id) {
+    if (!settings) return;
+    settings.look_themes = themes.filter((x) => x.id !== id);
+    save();
+  }
+
+  // ── the items the rarity alerts leave alone ──────────────────────────────
+  //
+  // The other half of this tab. A list says "tell me about these"; this says
+  // "and never about those" — and it is here rather than beside the rarity
+  // switches because both are lists of items, and the question a player is
+  // holding when they reach for either is the same one.
+  //
+  // It narrows the rarity switches and nothing else: a list still sounds, and
+  // so does a find the server announces to the whole shard. See `Muted` in
+  // src-tauri/src/lib.rs.
+  let ignoring = $state(false);
+  let mutedQuery = $state('');
+  let muted = $derived(settings?.muted ?? []);
+
+  let mutedHits = $derived.by(() => {
+    const q = mutedQuery.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const held = new Set(muted.map((m) => m.name.toLowerCase()));
+    return NAMED.filter((it) => it.key.includes(q) && !held.has(it.key)).slice(0, 8);
+  });
+
+  function mute(name) {
+    // Both channels at once, because the reason to reach for this list is that
+    // the item is noise; untick whichever half is wanted back.
+    settings.muted = [...muted, { name, sound: true, flourish: true }];
+    mutedQuery = '';
+    save();
+  }
+
+  const unmute = (name) => {
+    settings.muted = muted.filter((m) => m.name !== name);
+    save();
+  };
+
+  function muteChannel(name, channel) {
+    settings.muted = muted.map((m) => (m.name === name ? { ...m, [channel]: !m[channel] } : m));
+    save();
+  }
+
   function removeItem(name) {
     current.items = current.items.filter((n) => n !== name);
     save();
@@ -1081,7 +1192,23 @@
           <div class="items">
             {#each shown as name}
               {@const it = facts(name)}
-              <div class="row {rarityCls[it.rarity] ?? ''}">
+              <!-- The row opens the panel, rather than a button at the end of
+                   it: the row is the item, and hunting for a word to click on
+                   each of a hundred of them is work the list can do itself.
+                   The × still belongs to itself, so it stops the click. -->
+              <div
+                class="row {rarityCls[it.rarity] ?? ''}"
+                class:open={dressing === name}
+                role="button"
+                tabindex="0"
+                onclick={() => (dressing = dressing === name ? null : name)}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    dressing = dressing === name ? null : name;
+                  }
+                }}
+              >
                 <span class={rarityCls[it.rarity] ?? ''}>{shownName(name)}</span>
                 {#if clashWith(name)}
                   <span class="clash" title={say('also in {list} — only the list that comes first will sound', { list: clashWith(name) })}>?</span>
@@ -1090,8 +1217,81 @@
                   <span class="letter">{tierLabel(it.tier)}</span>
                   <span class="odds" title={it.rate ? '' : NO_ODDS()}>{odds(it.rate)}</span>
                 </span>
-                <button class="del" onclick={() => removeItem(name)} title={t("Remove")} aria-label={t("remove")}>×</button>
+                <!-- The swatch is the state, and the only thing the row needs
+                     to say about it: a player with a hundred items has to see
+                     which of them they have dressed without opening each one. -->
+                <i
+                  class="swatch"
+                  class:set={isCustom(lookOf(name))}
+                  style:background={accentOf(lookOf(name), tintOf(name))}
+                  title={t("How this item is painted when the pillar announces it")}
+                ></i>
+                <button
+                  class="del"
+                  onclick={(e) => { e.stopPropagation(); removeItem(name); }}
+                  title={t("Remove")}
+                  aria-label={t("remove")}
+                >×</button>
               </div>
+              {#if dressing === name}
+                {@const look = lookOf(name)}
+                <div class="look" style:border-image-source="url({art('chip_dark')})">
+                  <div class="dressrow">
+                    <span class="llab">{t("Colour effect")}</span>
+                    <select value={look.effect} onchange={(e) => setLook(name, { effect: e.currentTarget.value })}>
+                      {#each EFFECTS as [id, word]}<option value={id}>{t(word)}</option>{/each}
+                    </select>
+                    {#if look.effect !== 'rarity'}
+                      <span class="llab">{t("Colour")}</span>
+                      <input type="color" value={look.color || tintOf(name)}
+                             oninput={(e) => setLook(name, { color: e.currentTarget.value })} />
+                    {/if}
+                    {#if look.effect === 'gradient'}
+                      <span class="llab">{t("Second colour")}</span>
+                      <input type="color" value={look.color2 || look.color || tintOf(name)}
+                             oninput={(e) => setLook(name, { color2: e.currentTarget.value })} />
+                    {/if}
+                    <span class="llab">{t("Glow")}</span>
+                    <input class="glow" type="range" min="0" max={GLOW_MAX} step="5" value={look.glow}
+                           oninput={(e) => setLook(name, { glow: Number(e.currentTarget.value) })} />
+                    <b class="pct">{look.glow}%</b>
+                  </div>
+
+                  <!-- The same call the pillar itself makes, so what is drawn
+                       here is what a drop will draw. See src/look.js. -->
+                  <div class="lpreview">
+                    <span class="dressname" style={nameStyle(look, tintOf(name))}>{shownName(name)}</span>
+                  </div>
+
+                  <div class="dressrow">
+                    <button class="lbtn" onclick={() => previewLook(name)}>{t("Preview")}</button>
+                    <button class="lbtn" onclick={() => resetLook(name)}>{t("Default appearance")}</button>
+                    {#if themes.length}
+                      <select value="" onchange={(e) => { applyTheme(name, e.currentTarget.value); e.currentTarget.value = ''; }}>
+                        <option value="">{t("Apply a theme…")}</option>
+                        {#each themes as th (th.id)}<option value={th.id}>{th.name}</option>{/each}
+                      </select>
+                    {/if}
+                    <input class="tname" placeholder={t("Save as theme…")} bind:value={themeName}
+                           onkeydown={(e) => e.key === 'Enter' && saveTheme(name)} />
+                    <button class="lbtn" onclick={() => saveTheme(name)}>{t("Save")}</button>
+                  </div>
+
+                  <div class="lnote">{t("0% turns the glow off, 100% is the default. An appearance follows the item into every list.")}</div>
+
+                  {#if themes.length}
+                    <div class="themes">
+                      {#each themes as th (th.id)}
+                        <span class="theme">
+                          <i class="swatch" style:background={accentOf(th.look, '#f4e6bb')}></i>
+                          {th.name}
+                          <button class="del" onclick={() => dropTheme(th.id)} aria-label={t("remove")}>×</button>
+                        </span>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             {:else}
               <div class="empty">
                 {#if listQuery.trim()}
@@ -1111,6 +1311,48 @@
         <div class="empty">{t("this watchlist has no lists yet — press “+ list”")}</div>
       {/if}
       </div>
+    </div>
+
+    <!-- Folded away by default. It is the exception and not the subject, and
+         unfolded it would push the lists it qualifies off the screen. -->
+    <div class="ignored">
+      <button class="ighead" onclick={() => (ignoring = !ignoring)}>
+        <span class="igcaret">{ignoring ? '▾' : '▸'}</span>
+        {t("Ignored items")}
+        {#if muted.length}<span class="count">{muted.length}</span>{/if}
+      </button>
+      {#if ignoring}
+        <div class="igbody">
+          <div class="note">{t("These never sound and never take the pillar, however the rarity switches are set. A list still wins, and so does a find the server announces.")}</div>
+          <input
+            class="find"
+            style:border-image-source="url({art('chip_dark')})"
+            placeholder={t("Find an item to ignore…")}
+            bind:value={mutedQuery}
+          />
+          {#if mutedHits.length}
+            <div class="ighits">
+              {#each mutedHits as it (it.key)}
+                <button class="ighit" onclick={() => mute(it.name)}>{shownName(it)}</button>
+              {/each}
+            </div>
+          {:else if mutedQuery.trim().length >= 2}
+            <div class="note">{say('nothing matches “{name}”.', { name: mutedQuery.trim() })}</div>
+          {/if}
+          {#each muted as m (m.name)}
+            <div class="igrow">
+              <span class="igname">{shownName(m.name)}</span>
+              <button class="igtog" class:off={!m.sound} onclick={() => muteChannel(m.name, 'sound')}
+                      title={t("No chime and no drop list for it")}>{t("Sound")}</button>
+              <button class="igtog" class:off={!m.flourish} onclick={() => muteChannel(m.name, 'flourish')}
+                      title={t("No announcement pillar for it")}>{t("Pillar")}</button>
+              <button class="del" onclick={() => unmute(m.name)} aria-label={t("remove")}>×</button>
+            </div>
+          {:else}
+            <div class="empty">{t("nothing ignored — search above and click an item")}</div>
+          {/each}
+        </div>
+      {/if}
     </div>
   {:else}
     <div class="empty"> {t("No watchlist yet. Press “+ New” for an empty one, or")} <button class="prose" onclick={generate}>{t("start from the drop rates")}</button> {t("— S and SS split into the items you see often, the ones you do not, and the chase pieces, each ready for a sound of its own.")} </div>
@@ -1511,6 +1753,180 @@
   /* a setting that is on but cannot act yet says so where it is set */
   .note.warn { color: var(--gold, #e8c860); }
   .notice { color: #45c15a; font-size: 10px; }
+
+  /* ── the items the rarity alerts leave alone ────────────────────────── */
+  .ignored { margin-top: 8px; }
+  .ighead {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 5px 8px;
+    color: var(--dim-2);
+    background: none;
+    border: 0;
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ighead:hover { color: var(--bone-6); }
+  .igcaret { color: var(--gold-2); }
+  .igbody { display: grid; gap: 6px; padding: 0 8px 8px; }
+  .ighits { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ighit, .igtog {
+    padding: 2px 7px;
+    color: var(--dim-2);
+    background: #180d13;
+    border: 1px solid var(--edge);
+    border-radius: 5px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .ighit:hover, .igtog:hover { color: var(--bone-6); border-color: var(--gold-2); }
+  .igrow { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .igname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Lit is silenced: a row here exists to be muted, so the loud state is the
+     odd one and says so by being struck through. */
+  .igtog { color: var(--gold-2); border-color: var(--gold-2); }
+  .igtog.off { color: var(--dim-1); border-color: var(--edge); text-decoration: line-through; }
+
+  /* ── how an item is painted ─────────────────────────────────────────── */
+  /* The whole row is the control now, so it says so on hover and stays lit
+     while its panel is open. */
+  .row[role='button'] { cursor: pointer; }
+  .row.open { background: rgba(var(--pick-rgb), 0.3); }
+  .row:focus-visible { outline: 1px solid var(--gold-2); outline-offset: -1px; }
+  /* Dressed or not, at a glance, without opening it: a ring round the swatch
+     is the difference between "this is its rarity" and "somebody chose this". */
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: none;
+  }
+  .swatch.set { box-shadow: 0 0 0 1px var(--gold-2); }
+
+  .look {
+    margin: 2px 0 6px;
+    padding: 9px 11px;
+    border: 6px solid transparent;
+    border-image-slice: 6 fill;
+    border-image-width: 6px;
+    image-rendering: pixelated;
+    display: grid;
+    gap: 8px;
+  }
+  .dressrow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+  }
+  .llab { color: var(--dim-2); }
+  .look select, .lbtn, .tname {
+    padding: 3px 7px;
+    color: var(--bone-6);
+    background: #180d13;
+    border: 1px solid var(--edge);
+    border-radius: 5px;
+    font: inherit;
+    font-size: 12px;
+  }
+  .lbtn, .look select { cursor: pointer; }
+  .lbtn:hover, .look select:hover { border-color: var(--gold-2); }
+  .tname { width: 11em; }
+  /* A colour well with no chrome around it: the browser's own control draws a
+     bevel that reads as a raised button next to these flat plates. */
+  .look input[type='color'] {
+    width: 30px;
+    height: 21px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--edge);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  /* The browser's own range control is a raised grey bevel that sits on these
+     flat plates like a sticker. Drawn here instead: a groove and a round grip,
+     both in the panel's palette. Both vendor tracks are written out because
+     neither engine accepts the other's selector, and a rule they cannot parse
+     takes the whole block with it. */
+  .glow {
+    width: 170px;
+    height: 16px;
+    margin: 0;
+    background: none;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+  }
+  .glow::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--edge), var(--gold-2));
+  }
+  .glow::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--edge), var(--gold-2));
+  }
+  .glow::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 13px;
+    height: 13px;
+    margin-top: -4.5px;
+    border-radius: 50%;
+    background: var(--bone-6);
+    border: 1px solid #000;
+  }
+  .glow::-moz-range-thumb {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--bone-6);
+    border: 1px solid #000;
+  }
+  .glow:focus-visible { outline: none; }
+  .glow:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--gold-2); }
+  .pct {
+    color: var(--gold-2);
+    font-variant-numeric: tabular-nums;
+    min-width: 3.2em;
+  }
+
+  /* The name as the pillar will draw it. Dark, because the pillar is drawn over
+     a game and a swatch on paper would flatter every colour equally. */
+  .lpreview {
+    display: grid;
+    place-items: center;
+    padding: 14px 8px;
+    background: radial-gradient(ellipse at center, #14171a 0%, #0b0d0f 75%);
+    border-radius: 6px;
+  }
+  .dressname {
+    font-size: 26px;
+    line-height: 1.15;
+    text-align: center;
+  }
+
+  .lnote { color: var(--dim-2); font-size: 11px; }
+  .themes { display: flex; flex-wrap: wrap; gap: 6px; }
+  .theme {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 4px 2px 6px;
+    color: var(--dim-2);
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    font-size: 11px;
+  }
 
   .empty {
     color: var(--dim-2);
