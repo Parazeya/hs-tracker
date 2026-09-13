@@ -645,7 +645,25 @@ const MAIL_FIELDS: &[&str] = &["newMail", "new_mail", "mail"];
 const ITEM_WRAPPER_FIELDS: &[&str] = &["addedItemObject", "added_item_object"];
 const ITEM_SIGNATURE_FIELDS: &[&str] = &["seed", "a", "itemId", "item_id", "gid"];
 const ITEM_NAMED_SIGNATURE_FIELDS: &[&str] = &["seed", "itemId", "item_id", "gid"];
+/// The fields whose presence says "this object is an item". `d` is among them:
+/// every item carries it, so it is good evidence that an object IS one.
 const ITEM_RARITY_FIELDS: &[&str] = &["rarity", "itemRarity", "item_rarity", "d"];
+
+/// The fields a rarity is actually READ from. `d` is not one of them.
+///
+/// It was, for as long as this parser has existed, and it was wrong the whole
+/// time. Across one two-hour capture `d` took every value from 1 to 15 — 11,
+/// 12 and 15 are off the ten-point scale altogether — and on the scale it read
+/// as 684 Unholy and 65 Angelic finds, which is not how uniques fall. It is a
+/// different number with a coincidental range, and believed as a rarity it
+/// chimed Angelic for items that were never Angelic and were never on the
+/// floor.
+///
+/// Twice it had been refused one case at a time — Odyssey items, which all
+/// carry 7, and ordinary bases — and the case left over was every item these
+/// tables have not heard of. The explicit fields below do carry real rarities
+/// where they appear, and they are few: that is what a rarity looks like.
+const ITEM_RARITY_VALUE_FIELDS: &[&str] = &["rarity", "itemRarity", "item_rarity"];
 const SATANIC_ZONE_FIELDS: &[&str] = &["satanicZoneName", "satanic_zone_name"];
 const REGION_ID_FIELDS: &[&str] =
     &["crossregion_identifier", "crossRegionIdentifier", "cross_region_identifier"];
@@ -1311,7 +1329,7 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     // is claimed about it: the drop is still seen, it simply has no rarity.
     // A capture of 12 Odyssey and 38 seasonal pickups splits on `h` exactly.
     let odyssey = has(obj, &["h"]);
-    let claimed = field(obj, ITEM_RARITY_FIELDS).unwrap_or(Value::Number(0.into()));
+    let claimed = field(obj, ITEM_RARITY_VALUE_FIELDS).unwrap_or(Value::Null);
     // An ordinary base cannot carry a named item's rarity, and `c` is the
     // game's own flag for which id space an item came from — the ground path
     // already keeps only `c == 1`.
@@ -1388,9 +1406,32 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     let resource = SELF_NUMBERED.contains(&item_type);
     let worth_naming = crate::stats::rarity_from_packet(&rarity)
         .is_some_and(|r| crate::stats::JOURNAL_RARITIES.contains(&r.as_str()));
+    // A named item does not state its grade. The tables fix one per item, and
+    // over a capture of 661 named items with a known grade not one packet sent
+    // a grade at all — see `GameStats`, which looks it up by name instead.
+    //
+    // So a packet that carries the named-item flag AND a grade the tables
+    // contradict is not describing the item those tables would name. It is
+    // another item on the same triple: the game numbers uniques and ordinary
+    // bases in two spaces that overlap, and 3:9:6 is both St. Draxis' Pigstick
+    // (Angelic, SS) and a plain Battle Lance. A Battle Lance came in flagged
+    // named and graded A, was called the Pigstick, and was chimed and counted
+    // as a one-in-4.6-million Angelic find with nothing Angelic on the floor.
+    //
+    // Only a contradiction is refused, not any grade at all, so a named item
+    // that one day does send its grade — and sends the right one — is kept.
+    let table_tier = crate::items::item_name(item_type, item_id, weapon_type)
+        .map(crate::items::tier_by_name)
+        .unwrap_or(0);
+    let contradicted =
+        named_flag && claimed_tier > 0 && table_tier > 0 && claimed_tier != table_tier;
     let name = if !explicit_name.is_empty() {
         explicit_name
-    } else if named_flag || worth_naming || resource || is_entry_codex(item_type, item_id, "") {
+    } else if (named_flag && !contradicted)
+        || worth_naming
+        || resource
+        || is_entry_codex(item_type, item_id, "")
+    {
         crate::items::item_name(item_type, item_id, weapon_type).unwrap_or_default().to_string()
     } else {
         String::new()
@@ -2329,8 +2370,12 @@ mod tests {
             })
             .collect();
         // fingerprint suffix carries the item type; `b` is then the id-in-category
-        assert!(parsed.contains(&("6".into(), true, 1, 71)), "a named item keeps its claim");
-        // and the base beside it does not: 9 is Heroic, which no base is
+        //
+        // Neither carries `d` across as a rarity, the named item included: `d`
+        // is not one. Read as one over a capture of 511 named items whose real
+        // rarity the tables know, it agreed with none of them. A named item's
+        // rarity comes from the tables by its identity — see `resolve_rarity`.
+        assert!(parsed.contains(&("null".into(), true, 1, 71)), "d is not passed on as a rarity");
         assert!(parsed.contains(&("null".into(), false, 6, 8)));
     }
 
@@ -2695,13 +2740,19 @@ named things, by what the tracker made of them:");
         let ordinary = json!({"a": 1, "b": 8, "c": 0, "d": 9, "e": 10, "j": 0, "sh": "cb"});
         assert_eq!(pickup(ordinary), Some(Value::Null), "nor is a base Heroic");
 
-        // the grades a base really can carry are still believed
+        // Nor a named item, whatever `d` says. The field takes every value from
+        // 1 to 15 and matched none of 511 named items with a known rarity, so a
+        // 7 in it is a 7 and not an Angelic find — which is what put an Angelic
+        // chime on a player's screen with nothing on the floor.
         let white = json!({"a": 1, "b": 8, "c": 0, "d": 2, "e": 10, "j": 0, "sh": "cb"});
-        assert_eq!(pickup(white), Some(json!(2)), "Superior on a base is its own");
-
-        // and a named item keeps its own claim, Angelic included
+        assert_eq!(pickup(white), Some(Value::Null), "a base's d is not a rarity either");
         let named = json!({"a": 1, "b": 71, "c": 1, "d": 7, "e": 10, "j": 0, "sh": "cb"});
-        assert_eq!(pickup(named), Some(json!(7)), "a named item may be Angelic");
+        assert_eq!(pickup(named), Some(Value::Null), "and a named item's d is no Angelic claim");
+
+        // An explicit rarity field is still believed where one is sent. They
+        // are few, and they fall at the rate uniques fall.
+        let said = json!({"a": 1, "b": 71, "c": 1, "d": 11, "rarity": 6, "e": 10, "j": 0, "sh": "cb"});
+        assert_eq!(pickup(said), Some(json!(6)), "a rarity the packet names is its own");
     }
 
     #[test]
@@ -2782,6 +2833,7 @@ named things, by what the tracker made of them:");
         assert_eq!(graded, vec![5], "S is a grade a base can be, and it was thrown away");
     }
 
+    #[test]
     fn an_odyssey_pickup_claims_no_rarity() {
         // straight out of a capture: every pickup on an Odyssey character, all
         // of them ordinary, arrives with d = 7 — which on the seasonal scale
@@ -2797,7 +2849,11 @@ named things, by what the tracker made of them:");
         let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
         assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Unknown", "its scale is not ours to read");
 
-        // the seasonal shape of the same capture keeps working
+        // The seasonal shape of the same capture claims nothing either, and for
+        // the same reason: all it carries is `d`, and `d` is no rarity on any
+        // scale. This once expected "Superior" here and was never run — it had
+        // lost its `#[test]` — so nothing noticed that it contradicted the
+        // Odyssey half of itself.
         let seasonal = json!({
             "status": 1,
             "message": "Success on inventory update ext",
@@ -2807,7 +2863,7 @@ named things, by what the tracker made of them:");
         });
         let events = events_from_messages(std::slice::from_ref(&seasonal));
         let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
-        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Superior");
+        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Unknown");
     }
 
     #[test]
@@ -2823,7 +2879,10 @@ named things, by what the tracker made of them:");
         let events = events_from_messages(std::slice::from_ref(&payload));
         let GameEvent::ItemAdded { name, rarity, unscaled, .. } = &events[0] else { panic!("not an item") };
         assert_eq!(name, "", "an ordinary base is nameless; the table knows only uniques");
-        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Superior", "and it keeps the rarity it was sent with");
+        // Unknown, not Superior: the only thing it was sent with is `d`, and
+        // `d` is not a rarity. Nothing counts or announces a base, so the
+        // word costs nothing; a wrong one elsewhere cost an Angelic chime.
+        assert_eq!(resolve_rarity(rarity, name, *unscaled, NO_IDENTITY), "Unknown", "a base claims nothing from d");
 
         // the same slot, flagged by the game as a named item, still resolves
         let named = json!({

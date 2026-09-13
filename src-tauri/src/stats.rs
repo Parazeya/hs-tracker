@@ -2555,6 +2555,93 @@ mod tests {
         assert_eq!(snap.items["Common"].total, 0);
     }
 
+    /// An item the tables have never heard of is not an Angelic find.
+    ///
+    /// The case reported as a chime with nothing on the floor: an Angelic
+    /// sound, the Angelic counter up by one, and no name for it anywhere — not
+    /// on the drop list, not in the run. No name is the tell. With nothing to
+    /// look up, the rarity came straight out of the packet's `d`, which is not
+    /// a rarity; a 7 in it read as Angelic, the item was counted and chimed,
+    /// and there was nothing to show because it was never an Angelic item.
+    ///
+    /// The test above covers the items the tables DO know, whose identity
+    /// overrules `d`. This is the one they do not, where nothing did.
+    #[test]
+    fn an_item_the_tables_do_not_know_is_not_an_angelic_find() {
+        let unknown = crate::parser::events_from_messages(&[json!({
+            "status": 1,
+            "message": "ok",
+            "itemGenHash": "abc",
+            "operationTime": 1,
+            "itemData": {
+                // type 3, and an id no weapon in the tables has
+                "7-4964607-65a04f84c51d8ffff-3": {"a": 61067529, "b": 9999, "c": 1, "d": 7,
+                                                  "e": 0, "gd": {"pos": [11, 0]}, "j": 0,
+                                                  "sh": "a1b2c3d4e5f6"}
+            }
+        })]);
+
+        let mut s = GameStats::default();
+        s.set_filter(vec!["Angelic".into()], 0);
+        s.set_flourish_filter(vec!["Angelic".into()], 1);
+        let heard = unknown.iter().filter_map(|e| s.apply(e)).next();
+        assert!(
+            heard.is_none(),
+            "no chime and no pillar for a rarity nobody sent, got {:?}",
+            heard.map(|d| (d.name, d.rarity))
+        );
+
+        let snap = s.snapshot(String::new());
+        assert_eq!(snap.items["Angelic"].total, 0, "and it is not counted as one");
+    }
+
+    /// An ordinary item on a unique's triple is not that unique.
+    ///
+    /// Reported as two Angelic finds, both grade A, both named, neither ever on
+    /// the floor: St. Draxis' Pigstick and St. Nimo's Lightbringer, at one in
+    /// 4.6 and 8.25 million, in one run of three and a half hours. The tables
+    /// put a plain Battle Lance on 3:9:6 beside the Pigstick, and the game's
+    /// two numberings overlap there.
+    ///
+    /// What gave it away is the grade. A named item never states one — 661 of
+    /// 661 in a capture sent none — and the Pigstick is SS in the tables; a
+    /// packet flagged named and graded A is saying it is some other item.
+    #[test]
+    fn a_base_on_a_uniques_triple_is_not_that_unique() {
+        let lance = |shape: serde_json::Value, sh: &str| {
+            let mut item = shape;
+            item["sh"] = json!(sh);
+            crate::parser::events_from_messages(&[json!({
+                "status": 1,
+                "message": "ok",
+                "itemGenHash": "abc",
+                "operationTime": 1,
+                "itemData": { format!("7-4964607-65a04f84c51d8{sh}-3"): item }
+            })])
+        };
+
+        let mut s = GameStats::default();
+        s.set_filter(vec!["Angelic".into()], 0);
+        s.set_flourish_filter(vec!["Angelic".into()], 1);
+
+        // flagged named, graded A: the grade the Pigstick can never have
+        let base = lance(json!({"a": 1, "b": 9, "c": 1, "d": 11, "e": 0,
+                                "gd": {"pos": [1, 0]}, "j": 6, "n": 4}), "a1");
+        let heard = base.iter().filter_map(|e| s.apply(e)).next();
+        assert!(
+            heard.is_none(),
+            "a Battle Lance is not St. Draxis' Pigstick, got {:?}",
+            heard.map(|d| (d.name, d.rarity, d.tier))
+        );
+        assert_eq!(s.snapshot(String::new()).items["Angelic"].total, 0, "nor is it counted");
+
+        // and the real one, which states no grade, is still the real one
+        let real = lance(json!({"a": 1, "b": 9, "c": 1, "d": 11, "e": 0,
+                                "gd": {"pos": [1, 0]}, "j": 6}), "b2");
+        let found = real.iter().filter_map(|e| s.apply(e)).next().expect("the Pigstick is news");
+        assert_eq!((found.name.as_str(), found.rarity.as_str()), ("St. Draxis' Pigstick", "Angelic"));
+    }
+
     /// A vault can be listed by the rarity it came in.
     ///
     /// Seven Essence Vaults share one display name, so a list naming it fired

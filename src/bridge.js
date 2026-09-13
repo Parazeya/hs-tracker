@@ -59,6 +59,13 @@ export function remember(key, value) {
 /// no window to speak of, so it gets one that politely does nothing.
 const NOTHING = {
   minimize() {},
+  toggleMaximize() {},
+  isMaximized() {
+    return Promise.resolve(false);
+  },
+  onResized() {
+    return Promise.resolve(() => {});
+  },
   hide() {},
   setFocus() {},
   startDragging() {},

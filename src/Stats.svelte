@@ -3,6 +3,7 @@
   let { embedded = false } = $props();
 
   import { invoke } from './bridge.js';
+  import { save, startSettings, store } from './settings.svelte.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
   import { buffInfo, debuffInfo, zoneAct, zoneName } from './buffs.js';
@@ -48,9 +49,7 @@
         drawGraph();
       })
       .catch(() => {});
-    invoke('get_settings').then((s) => (settings = s));
     const unsubs = [
-      listen('settings-changed', (e) => (settings = e.payload)),
       listen('stats', (e) => received(e.payload)),
       listen('stats-extra', (e) => {
         extra = e.payload;
@@ -385,7 +384,9 @@
 
   // A drop worth hearing next time is easiest to add the moment it lands, so
   // the timeline can push a name straight into a list of the active filter.
-  let settings = $state(null);
+  // The shared copy — see src/settings.svelte.js. This tab only adds to it.
+  startSettings();
+  let settings = $derived(store.settings);
   let adding = $state(null);
 
   /// Bring a just-opened popup fully into the scroller it lives in.
@@ -407,7 +408,7 @@
     adding = null;
     if (!name || list.items.some((n) => n.toLowerCase() === name.toLowerCase())) return;
     list.items = [...list.items, name].sort((a, b) => a.localeCompare(b));
-    invoke('save_settings', { settings: $state.snapshot(settings) }).catch(() => {});
+    save();
     added = `${name} → ${list.name}`;
     clearTimeout(addedTimer);
     addedTimer = setTimeout(() => (added = null), 2500);

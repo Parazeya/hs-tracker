@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.13 — 2026-09-13
+
+### Added
+
+- Streaming keeps the drop list's window on screen between drops, so OBS can
+  list it and capture it.
+- A button beside minimize fills the screen and restores the window.
+
+### Changed
+
+- The dashboard's pages are grouped by what they are for, and Overlay,
+  Announcement and Streaming are pages of their own. Every setting sits on the
+  one page that answers for it.
+
+### Fixed
+
+- A setting changed from the tray, a hotkey or the overlay is no longer undone
+  by an edit waiting to be saved on Alerts, Watchlist or Statistics.
+- An ordinary item that shares its number with a unique is no longer
+  announced and counted as that unique.
+- An item the tables do not know is no longer given a unique's rarity out of a
+  packet field that is not a rarity, which could chime Angelic for nothing.
+
 ## 1.1.12 — 2026-09-12
 
 ### Fixed

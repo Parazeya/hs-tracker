@@ -6,6 +6,11 @@
   import { ITEMS } from './items.js';
   import { RARITIES, soundUrl, play } from './audio.js';
   import { ALL_BUFFS } from './buffs.js';
+  import { save, startSettings, store } from './settings.svelte.js';
+
+  /// Which part of the page this tab is: 'alerts' for what makes a sound,
+  /// 'announcement' for the pillar. See SECTIONS in Dashboard.svelte.
+  let { view = 'alerts' } = $props();
 
   const ALERT_RARITIES = ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'];
 
@@ -28,8 +33,10 @@
   ];
   const rarityCls = { Satanic: 'c-sat', Set: 'c-set', Heroic: 'c-her', Angelic: 'c-ang', Unholy: 'c-unh' };
 
-  let settings = $state(null);
-  let saveTimer;
+
+  // The shared copy, loaded, followed and saved in src/settings.svelte.js.
+  startSettings();
+  let settings = $derived(store.settings);
 
   // Whether a rarity alerts, how loud, and with which file are one question, so
   // they are asked once, on one row each, rather than split across two tabs.
@@ -217,20 +224,18 @@
   }
 
   $effect(() => {
-    invoke('get_settings').then((s) => (settings = s));
     refreshSounds();
-    const unsubs = [
-      listen('settings-changed', (e) => ((settings = e.payload), (picking = null))),
-      listen('sounds-changed', () => refreshSounds()),
-    ];
-    return () => unsubs.forEach((u) => u.then((f) => f()));
+    const unsub = listen('sounds-changed', () => refreshSounds());
+    return () => unsub.then((f) => f());
   });
 
-  function save() {
-    clearTimeout(saveTimer);
-    const snapshot = $state.snapshot(settings);
-    saveTimer = setTimeout(() => invoke('save_settings', { settings: snapshot }).catch(() => {}), 150);
-  }
+  // Replaced from outside — a tray change, an import — so whether the buff
+  // picker is open goes back to being answered by the list itself. See
+  // `picking` above.
+  $effect(() => {
+    store.changed;
+    picking = null;
+  });
 
   /// Whether a rarity makes a sound at all — the first control on this panel.
   ///
@@ -275,11 +280,30 @@
 
 </script>
 
-<div class="panel two" style:--rname-w="{rnameWidth}px">
+<!-- Two tabs out of one component: Alerts is what makes a sound, the
+     Announcement is the pillar over the screen. They were one page, and the
+     pillar — the thing a player is most likely to come looking for — was the
+     last section on it, under three others. See SECTIONS in Dashboard.svelte. -->
+<div class="panel" class:two={view === 'alerts'} style:--rname-w="{rnameWidth}px">
+{#if view === 'alerts'}
   <div class="col">
   {#if settings}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="sechead" data-tauri-drag-region>{t("Rarity alerts — what makes a sound at all")}</div>
+      <!-- When a chime sounds, before which ones do: it decides the moment for
+           every alert on this page and on the Watchlist alike, so it stands
+           first rather than being found at the bottom of Settings, where it
+           used to be. -->
+      <div class="line" data-tauri-drag-region>
+        <button
+          class="check"
+          onclick={() => { settings.sound_on_ground = !settings.sound_on_ground; save(); }}
+          aria-label={t("sound on ground")}
+        >
+          <img src={settings.sound_on_ground ? art('check_on') : art('check_off')} alt="" />
+        </button>
+        <span class="opt">{t("Alert when the item drops (off = when picked up)")}</span>
+      </div>
       {#each ALERT_RARITIES as rarity}
         {@const key = SOUND_KEY[rarity]}
         {@const on = (settings.alerts ?? []).includes(rarity)}
@@ -566,7 +590,11 @@
       {/if}
     </div>
 
-    {#if canAnnounce}
+  {/if}
+  </div>
+{:else if view === 'announcement'}
+  <div class="col">
+  {#if settings && canAnnounce}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
         <div class="sechead" data-tauri-drag-region>{t("Announcement — the loot pillar over the screen")}</div>
         <div class="line">
@@ -669,12 +697,10 @@
           </div>
 
           {#if overlay}
-            <div class="line">
-              <button class="check" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }} aria-label={t("flourish always")}>
-                <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
-              </button>
-              <span class="opt" title={t("It draws nothing between drops, but OBS can only capture a window that is there")}> {t("Keep its window on screen so OBS can capture it")} </span>
-            </div>
+            <!-- Keeping the window up for OBS moved to the Streaming tab,
+                 beside the same switch for the drop list: the two do one job
+                 for two windows, and on two pages a player found one of them
+                 and never the other. -->
             <div class="line">
               <button
                 class="btn wide"
@@ -698,13 +724,11 @@
           {/if}
         {/if}
       </div>
-    {/if}
-
-    <!-- A feature that moves without a sign left behind reads as one that was
-         deleted. The custom filter was here. -->
-    <div class="note pointer"> {t("Named items, and a sound of their own, live on the Watchlist tab.")} </div>
+  {:else if settings}
+    <div class="note">{t("The announcement is a window over the game, and this session cannot put one there.")}</div>
   {/if}
   </div>
+{/if}
 </div>
 
 <style>
