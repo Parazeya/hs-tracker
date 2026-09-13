@@ -228,6 +228,8 @@ static TICKER_BUSY: AtomicBool = AtomicBool::new(false);
 static FLOURISH: AtomicBool = AtomicBool::new(false);
 /// leave the announcement window up so a capture has something to hold on to
 static FLOURISH_ALWAYS: AtomicBool = AtomicBool::new(false);
+/// keep the drop list's window up between drops, for the same reason
+static TICKER_ALWAYS: AtomicBool = AtomicBool::new(false);
 /// Whether a rotation gets the pillar. Read on the pusher's thread, which has
 /// no settings of its own.
 static FLOURISH_ZONE: AtomicBool = AtomicBool::new(true);
@@ -555,6 +557,13 @@ pub struct Settings {
     /// appears for a few seconds and is gone again. Off by default: a window
     /// held open is a window the compositor keeps blending, empty or not.
     pub flourish_always: bool,
+    /// The same for the drop list. It is up only while it has rows to show —
+    /// seconds at a time, then gone — so the window OBS is told to capture was
+    /// never in OBS's list to begin with: a player adding a Window Capture
+    /// found "Overlay" and "Announcement" and no third window at all. Off by
+    /// default for the reason above; the list is click-through and draws
+    /// nothing while it is empty, so on screen it costs blending and no more.
+    pub ticker_always: bool,
     /// show the run in Discord while the game is open. Off unless asked for:
     /// it puts what the player is doing in front of everyone on their list.
     pub discord: bool,
@@ -652,6 +661,7 @@ impl Default for Settings {
             // pillar in the way. On, for the same reason the announcement is.
             flourish_zone: true,
             flourish_always: false,
+            ticker_always: false,
             discord: false,
             compact: false,
             ghost: ghost_default(),
@@ -1303,9 +1313,14 @@ fn spawn_ticker_glue(app: AppHandle) {
             else {
                 continue;
             };
+            // Busy, or held open for a capture. Still behind the overlay being
+            // up and the list being switched on: holding open a window the
+            // player turned off, or one hanging under an overlay that is
+            // hidden, would be a transparent box over the game with no reason
+            // to be there.
             let visible = main.is_visible().unwrap_or(false)
                 && TICKER.load(Ordering::Relaxed)
-                && TICKER_BUSY.load(Ordering::Relaxed);
+                && (TICKER_BUSY.load(Ordering::Relaxed) || TICKER_ALWAYS.load(Ordering::Relaxed));
             if !visible {
                 if shown {
                     let _ = ticker.hide();
@@ -1836,6 +1851,7 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     presence::set_enabled(settings.discord);
     FLOURISH.store(settings.flourish, Ordering::Relaxed);
     FLOURISH_ALWAYS.store(settings.flourish_always, Ordering::Relaxed);
+    TICKER_ALWAYS.store(settings.ticker_always, Ordering::Relaxed);
     FLOURISH_ZONE.store(settings.flourish_zone, Ordering::Relaxed);
     ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
     if let Some(w) = app.get_webview_window("main") {

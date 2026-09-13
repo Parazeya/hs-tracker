@@ -4,6 +4,7 @@
   import { BY_ID, GROUP_BY_NAME, GROUP_TYPE, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
   import { GROUP_LABEL, locale, nameOf, say, t, typeLabel } from './say.svelte.js';
   import { DEFAULT_LOOK, EFFECTS, GLOW_MAX, RARITY_TINT, accentOf, isCustom, lookFor, nameStyle } from './look.js';
+  import { flush, save, startSettings, store } from './settings.svelte.js';
   import { BUILT_IN, soundUrl, play } from './audio.js';
 
   // Only named items can be listed. The parser leaves an ordinary pickup
@@ -251,10 +252,11 @@
     (a.weapon ?? null) === (b.weapon ?? null) &&
     (a.group ?? null) === (b.group ?? null);
 
-  let settings = $state(null);
+  // The shared copy, loaded, followed and saved in src/settings.svelte.js.
+  startSettings();
+  let settings = $derived(store.settings);
   let selected = $state(0);
   let status = $state({});
-  let saveTimer;
 
   // Two boxes, not one: a single field cannot both add an item and narrow the
   // list below without a label explaining which it is doing. What the single
@@ -445,12 +447,8 @@
   let listKey = $derived(`list:${current?.id}`);
 
   $effect(() => {
-    invoke('get_settings').then((s) => (settings = s));
-    const unsubs = [
-      listen('settings-changed', (e) => (settings = e.payload)),
-      listen('sounds-changed', (e) => refreshStatus(e.payload)),
-    ];
-    return () => unsubs.forEach((u) => u.then((f) => f()));
+    const unsub = listen('sounds-changed', (e) => refreshStatus(e.payload));
+    return () => unsub.then((f) => f());
   });
 
   let known = '';
@@ -470,11 +468,6 @@
     status[key] = name;
   }
 
-  function save() {
-    clearTimeout(saveTimer);
-    const snapshot = $state.snapshot(settings);
-    saveTimer = setTimeout(() => invoke('save_settings', { settings: snapshot }).catch(() => {}), 150);
-  }
 
   // What a blank cell means, said instead of left blank. The tables carry a
   // chance only for items the game states one for, and an empty cell reads as a
@@ -795,13 +788,15 @@
     try {
       const imported = await invoke('import_filter');
       if (!imported) return;
+      // Anything still waiting to be written goes first, so what is read back
+      // off disk includes it; then the import is added to that and written at
+      // once. The backend's broadcast of the result brings the shared copy
+      // into step — there is no second copy here to set by hand.
+      await flush();
       const base = (await invoke('get_settings').catch(() => null)) ?? $state.snapshot(settings);
       base.filters = [...(base.filters ?? []), imported];
       base.filter = imported.id;
-      clearTimeout(saveTimer);
-      saveTimer = null;
       await invoke('save_settings', { settings: base });
-      settings = base;
       selected = 0;
       notify(say('imported {name} — {n} lists', { name: imported.name, n: imported.lists.length }));
     } catch (e) {
@@ -868,9 +863,9 @@
            is now, and it says it in both states, because "off" is the one a
            player arrives in. -->
       {#if settings.use_filter}
-        <div class="note"> {t("A listed item plays its list's sound instead of its rarity's. Everything you have not listed carries on exactly as the Alerts tab says.")} </div>
+        <div class="note"> {t("A listed item plays its list's sound instead of its rarity's. Anything you have not listed sounds by its rarity, as before.")} </div>
       {:else}
-        <div class="note warn">{t("Nothing here makes a sound. The rarity alerts on the Alerts tab still do.")}</div>
+        <div class="note warn">{t("Switched off: the lists here make no sound. Items still sound by their rarity.")}</div>
       {/if}
     </div>
   </div>

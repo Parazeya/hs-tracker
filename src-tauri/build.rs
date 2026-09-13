@@ -5,7 +5,14 @@ fn main() {
     // The build script itself always runs on the host, so the target platform
     // has to be read from the environment rather than from cfg!.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("npcap-sdk/Lib/x64");
+        // Read when the build script RUNS, not baked in when it was compiled.
+        // `env!` fixes the checkout the script binary was first built in, and
+        // that binary is cached and reused: built once for a second copy of the
+        // repository sharing this target directory, it went on pointing the
+        // linker at that copy after it was deleted, and every build failed on
+        // a wpcap.lib that was sitting right here.
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+        let sdk = std::path::Path::new(&manifest).join("npcap-sdk/Lib/x64");
         println!("cargo:rustc-link-search=native={}", sdk.display());
         println!("cargo:rustc-link-arg=/DELAYLOAD:wpcap.dll");
         println!("cargo:rustc-link-lib=delayimp");

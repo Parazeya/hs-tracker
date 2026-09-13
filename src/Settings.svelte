@@ -3,9 +3,18 @@
   import { art, wearTheme } from './skin.svelte.js';
   import { READINGS, slotsOf } from './panel.js';
   import { LANGUAGES, t } from './say.svelte.js';
-  import { listen } from './bridge.js';
 
-  let settings = $state(null);
+  import { flush, save, startSettings, store } from './settings.svelte.js';
+
+  /// Which part of the page this tab is — 'overlay', 'streaming' or 'general'.
+  /// Three tabs out of one component, so the controls and their styles stay in
+  /// one copy. See SECTIONS in Dashboard.svelte.
+  let { view = 'general' } = $props();
+
+  // The shared copy — see src/settings.svelte.js, which also does the loading,
+  // the following along and the saving that this tab used to do for itself.
+  startSettings();
+  let settings = $derived(store.settings);
 
   // Where no overlay can exist, the settings that only steer it say so instead
   // of pretending to work. Nothing is drawn until the backend answers: guessing
@@ -32,54 +41,13 @@
   let notice = $state('');
   async function restart(x11) {
     // a pending edit would die with this process
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-      await invoke('save_settings', { settings: $state.snapshot(settings) }).catch(() => {});
-    }
+    await flush();
     try {
       await invoke('restart_backend', { x11 });
     } catch (e) {
       notice = String(e);
     }
   }
-
-  // Settings are shared: a hotkey, the tray or another section can change them
-  // while this one is open. Without following along, the next save here would
-  // write back the copy loaded on open and undo them.
-  $effect(() => {
-    invoke('get_settings').then((s) => {
-      settings = s;
-      base = JSON.parse(JSON.stringify(s));
-    });
-    const unsubs = [
-      listen('settings-changed', (e) => {
-        // A change from the tray, a hotkey or another panel, arriving while
-        // this one has an unsaved edit of its own.
-        //
-        // Taking it whole would undo the edit. Throwing it away — which is what
-        // this did — loses the other change for good, because nothing sends it
-        // again; the window was only 150ms wide, but a tray toggle lands inside
-        // it easily enough and then reads as a switch that did not stick.
-        //
-        // So every field is taken except the ones edited here, and "edited
-        // here" is whatever now differs from the copy the backend last handed
-        // over. That needs nothing from the controls themselves, which is the
-        // point: there are forty of them and any one that forgot to say would
-        // be the bug back again.
-        if (!saveTimer || !settings || !base) {
-          settings = e.payload;
-          base = JSON.parse(JSON.stringify(e.payload));
-          return;
-        }
-        const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-        for (const [k, v] of Object.entries(e.payload)) {
-          if (same(settings[k], base[k])) settings[k] = v;
-        }
-      }),
-    ];
-    return () => unsubs.forEach((u) => u.then((f) => f()));
-  });
 
   // Import replaces everything, so it asks once — the second click does it.
   let armedBundle = $state(false);
@@ -99,35 +67,6 @@
     } catch (e) {
       notice = String(e);
     }
-  }
-
-  let saveTimer = null;
-  /// The settings as the backend last handed them over. Anything that differs
-  /// from this is an edit made here and not yet written.
-  let base = null;
-  function save() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      // Taken here and not when the edit was made.
-      //
-      // The listener above spends these 150ms merging changes from the tray, a
-      // hotkey or the strip into `settings`, precisely so they are not lost —
-      // and a snapshot taken before the wait was written over the top of every
-      // one of them. The merge reached the screen, the file kept the older
-      // copy, and the next broadcast put the older copy back on the screen too:
-      // a lock toggled from the strip while this page had an unsaved edit came
-      // straight back on.
-      const snapshot = $state.snapshot(settings);
-      base = JSON.parse(JSON.stringify(snapshot));
-      // Swallowed for a long time, and it cost somebody an evening: installed
-      // where the folder will not take a write — under Program Files — every
-      // save fails, so no setting on this page does anything and nothing says
-      // why. The answer was "run it as administrator", found by guesswork.
-      invoke('save_settings', { settings: snapshot }).catch((e) => {
-        notice = `${t('Settings could not be saved')}: ${e}`;
-      });
-    }, 150);
   }
 
   /// Sliders fire `input` while the DOM settles, which would persist a value
@@ -198,8 +137,12 @@
     <p class="warn">{t('Nothing on this page can be saved: the app cannot write to its own folder. Move it out of Program Files, or run it as administrator.')}</p>
   {/if}
   {#if settings && session}
-    <div class="section" style:border-image-source="url({art('chip_dark')})">
-      {#if overlay && advanced}
+    {#if view === 'overlay' && overlay}
+      <!-- The overlay's own settings, which lived at the top of the general
+           page behind "More settings" — the four a player is most likely to
+           want, folded away by default. -->
+      <div class="section" style:border-image-source="url({art('chip_dark')})">
+        <div class="sechead" data-tauri-drag-region>{t("Overlay")}</div>
         <div class="line" data-tauri-drag-region>
           <span class="name">{t("Opacity")}</span>
           <input
@@ -241,7 +184,17 @@
             {t('Enable transparent overlay while locked')}{smears ? t(' (can create artifacts)') : ''}
           </span>
         </div>
-      {/if}
+        <div class="line" data-tauri-drag-region>
+          <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label={t("ticker")}>
+            <img src={settings.ticker ? art('check_on') : art('check_off')} alt="" />
+          </button>
+          <span class="opt">{t("Drop ticker under the overlay")}</span>
+        </div>
+      </div>
+    {/if}
+
+    {#if view === 'general'}
+    <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="line" data-tauri-drag-region>
         <span class="name">{t("Language")}</span>
         <select
@@ -316,22 +269,6 @@
         </button>
         <span class="opt" title={t("Zone, difficulty, the drops so far and how long the run has been going")}> {t("Show the run in Discord while the game is open")} </span>
       </div>
-      <!-- The announcement moved to the Alerts page: what is worth telling
-           you about and how you are told are one decision, and asking them on
-           two different tabs is what made the announcement look inert. -->
-      <div class="line" data-tauri-drag-region>
-        <button
-          class="check"
-          onclick={() => { settings.sound_on_ground = !settings.sound_on_ground; save(); }}
-          aria-label={t("sound on ground")}
-        >
-          <img src={settings.sound_on_ground ? art('check_on') : art('check_off')} alt="" />
-        </button>
-        <span class="opt">{t("Alert when the item drops (off = when picked up)")}</span>
-      </div>
-      <!-- The OBS browser sources are gone: one route into OBS, and it is the
-           one that needs no address, no port and no local server — capture the
-           announcement window, which stays on screen for exactly that. -->
       <!-- Everything in one file: switches, filters, lists and the sound
            files themselves, which live outside settings.json and would
            otherwise arrive as silence on the other machine. -->
@@ -358,14 +295,6 @@
         {advanced ? '▾' : '▸'} {t('More settings')}
       </button>
 
-      {#if advanced && overlay}
-        <div class="line" data-tauri-drag-region>
-          <button class="check" onclick={() => { settings.ticker = !settings.ticker; save(); }} aria-label={t("ticker")}>
-            <img src={settings.ticker ? art('check_on') : art('check_off')} alt="" />
-          </button>
-          <span class="opt">{t("Drop ticker under the overlay")}</span>
-        </div>
-      {/if}
       {#if advanced}
       <div class="line" data-tauri-drag-region>
         <button
@@ -416,9 +345,12 @@
         </div>
       {/if}
       {#if notice}<div class="notice">{notice}</div>{/if}
+
     </div>
 
-    {#if overlay}
+    {/if}
+
+    {#if view === 'streaming' && overlay}
       <!-- Everything OBS needs, in the app rather than only in the README.
            Three support rounds went on the same three facts: the window has to
            be picked by name, the announcement is not a window between drops,
@@ -432,15 +364,33 @@
           {/each}
         </div>
         <div class="note">{t("Capture Method must be “Windows 10 (1903 and up)”. Every window here is transparent, and the older method captures nothing from one.")}</div>
-        <div class="note">{t("The announcement is only a window while it is announcing something. Tick “Keep its window on screen” on the Alerts page, or OBS never lists it.")}</div>
+        <!-- Both the announcement and the drop list are up only while they
+             have something to show, so neither is in OBS's list when a Window
+             Capture is being added. The drop list's switch is here, where the
+             capture is being set up; the announcement's sits with the rest of
+             the announcement on Alerts, and this says where. -->
+        <div class="note">{t("The announcement and the drop list are only windows while they are showing something, and OBS lists only windows that are there. Keep them up while you add the capture:")}</div>
+        <!-- Both here, one under the other: they are the same job for two
+             windows. Apart, on two tabs, a player setting up a capture found
+             the announcement's and was left with no drop list in OBS's list at
+             all, and a note on each page pointing at the other. -->
+        <button class="secopt" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }}>
+          <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
+          <span>{t("Keep the announcement's window on screen")}</span>
+        </button>
+        <button class="secopt" onclick={() => { settings.ticker_always = !settings.ticker_always; save(); }}>
+          <img src={settings.ticker_always ? art('check_on') : art('check_off')} alt="" />
+          <span>{t("Keep the drop list's window on screen")}</span>
+        </button>
+        <div class="note">{t("Each draws nothing while it waits, but OBS can only capture a window that is there.")}</div>
         <div class="note">{t("A black picture means OBS is being refused, not that the window is empty: do not run HS Tracker as administrator unless OBS runs that way too, and put both on the same graphics card.")}</div>
       </div>
     {/if}
 
-    <!-- Not behind "advanced": arranging the panel is the answer to the
-         commonest question this app gets — "can I hide the things I do not
-         use" — and a setting nobody finds answers nobody. -->
-    {#if overlay}
+    <!-- On the Overlay tab, under the overlay's own switches: arranging the
+         panel is the answer to the commonest question this app gets — "can I
+         hide the things I do not use". -->
+    {#if view === 'overlay' && overlay}
       <div class="section" style:border-image-source="url({art('chip_dark')})">
         <div class="sechead" data-tauri-drag-region>{t("Overlay panel")}</div>
         <div class="note">{t("Each row of the panel holds three readings. Pick what goes where; a row you empty is not drawn.")}</div>

@@ -12,6 +12,7 @@
   import About from './About.svelte';
   import { update, lookForUpdate } from './update.svelte.js';
   import Codex from './Codex.svelte';
+  import { startSettings, store } from './settings.svelte.js';
 
   // Steam in a sandbox is a Linux problem and naming it on Windows sends a
   // player looking for something that cannot be there.
@@ -29,16 +30,37 @@
     sw: 'SouthWest',
   };
 
+  // One tab, one question, grouped by what a player is doing when they ask it.
+  //
+  // The tabs grew one feature at a time and the features landed where there was
+  // room, so a single idea ended up in two places joined by a note saying "see
+  // the other tab": the two windows OBS captures were switched on from two
+  // different pages, and the announcement was set up on one tab and dressed on
+  // another. The test for this list is that no page has to point at another.
+  //
+  // `view` is which part of a component a tab shows. Settings and Alerts each
+  // carry several of these, rather than being split into new files, so the
+  // controls, their helpers and their styles stay in one copy — splitting them
+  // would have put a third and fourth copy of the same checkbox styles into the
+  // app, free to drift apart.
   const SECTIONS = [
-    { id: 'stats', label: 'Statistics', component: Stats },
-    { id: 'runs', label: 'Runs', component: Runs },
-    { id: 'filter', label: 'Alerts', component: SoundFilter },
-    { id: 'watchlist', label: 'Watchlist', component: Watchlist },
-    { id: 'codex', label: 'Items', component: Codex },
-    { id: 'shop', label: 'Shopping List', component: Shop },
-    { id: 'settings', label: 'Settings', component: Settings },
-    { id: 'about', label: 'About', component: About },
+    { id: 'stats', group: 'Session', label: 'Statistics', component: Stats },
+    { id: 'runs', group: 'Session', label: 'Runs', component: Runs },
+    { id: 'overlay', group: 'On screen', label: 'Overlay', component: Settings, view: 'overlay', needsOverlay: true },
+    { id: 'announcement', group: 'On screen', label: 'Announcement', component: SoundFilter, view: 'announcement' },
+    { id: 'alerts', group: 'Drops', label: 'Alerts', component: SoundFilter, view: 'alerts' },
+    { id: 'watchlist', group: 'Drops', label: 'Watchlist', component: Watchlist },
+    { id: 'codex', group: 'Game', label: 'Items', component: Codex },
+    { id: 'shop', group: 'Game', label: 'Shopping List', component: Shop },
+    { id: 'streaming', group: 'App', label: 'Streaming', component: Settings, view: 'streaming', needsOverlay: true },
+    { id: 'settings', group: 'App', label: 'Settings', component: Settings, view: 'general' },
+    { id: 'about', group: 'App', label: 'About', component: About },
   ];
+
+  /// Where a tab went when it was renamed or split, so a player who left the
+  /// app on it comes back to the page that now holds what they were looking at
+  /// rather than to the first tab.
+  const MOVED = { filter: 'alerts' };
 
   // the section survives a hide/show, which is what makes the sidebar feel
   // like one window rather than four
@@ -57,16 +79,22 @@
     lookForUpdate();
   });
 
-  const remembered = recall('section');
+  const remembered = MOVED[recall('section')] ?? recall('section');
   let section = $state(
     SECTIONS.some((s) => s.id === remembered) ? remembered : 'stats'
   );
 
   // the backend pushes the heavy statistics payload only while it is the
   // section on screen, so it has to be told which one that is
+  //
+  // The tab actually on screen, not the one asked for: a tab remembered from a
+  // session with an overlay is not offered in one without, and Statistics is
+  // shown in its place. Told the remembered name, the backend kept the
+  // statistics payload switched off while Statistics was the page in front of
+  // the player, and its timeline and graph sat still.
   $effect(() => {
-    remember('section', section);
-    invoke('viewing', { section }).catch(() => {});
+    remember('section', current.id);
+    invoke('viewing', { section: current.id }).catch(() => {});
   });
 
   // a Wayland session cannot host the overlay, so the way into it is not shown
@@ -77,7 +105,34 @@
       .catch(() => {});
   });
 
-  let Current = $derived((SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]).component);
+  /// Whether the dashboard fills the screen, so the button can show which way
+  /// a click will go. Asked again whenever the window is resized, because the
+  /// system can maximize it too — a double-click on a snap edge, Win+Up — and a
+  /// button that still offered "maximize" on a maximized window would be lying.
+  // Started here as well as in the tabs, so a failed save is caught and shown
+  // whichever tab happens to be open when it fails.
+  startSettings();
+
+  let maximized = $state(false);
+  $effect(() => {
+    const win = appWindow();
+    const ask = () => win.isMaximized().then((m) => (maximized = m)).catch(() => {});
+    ask();
+    const off = win.onResized(ask);
+    return () => off.then((f) => f()).catch(() => {});
+  });
+
+  /// The tabs this session can use. A session that cannot put a window over
+  /// the game — Wayland without XWayland — has no overlay to set up and no
+  /// window for OBS to capture, and a tab that opens onto an empty page is the
+  /// most confusing thing a sidebar can offer. Compact mode is hidden there for
+  /// the same reason. The Announcement stays: it says why it cannot run.
+  let visible = $derived(SECTIONS.filter((s) => overlay || !s.needsOverlay));
+
+  // A tab remembered from a session that had an overlay may not be offered in
+  // this one; the first that is takes its place rather than an empty page.
+  let current = $derived(visible.find((s) => s.id === section) ?? visible[0]);
+  let Current = $derived(current.component);
 
   // Why the numbers are not moving, said out loud. The overlay has always had a
   // coloured dot with a tooltip for this; on a Wayland session there is no
@@ -269,6 +324,20 @@
     <img src={art('minimize_hover')} alt="" class="min-hover" />
   </button>
 
+  <!-- Drawn rather than taken from the skin: the game has a minimize and a
+       close sprite and nothing for this, and a borrowed icon from elsewhere in
+       the art would sit beside those two looking like it came from another
+       game. Two squares, as every window manager draws the restore glyph. -->
+  <button
+    class="max"
+    class:on={maximized}
+    onclick={() => appWindow().toggleMaximize()}
+    title={maximized ? t("Restore the window") : t("Fill the screen")}
+    aria-label={maximized ? t("restore") : t("maximize")}
+  >
+    <i class="glyph"></i>
+  </button>
+
   <button class="close" onclick={() => invoke('hide_dashboard')} title={t("Close to tray")} aria-label={t("close")}>
     <img src={art('close')} alt="" class="close-normal" />
     <img src={art('close_hover')} alt="" class="close-hover" />
@@ -280,8 +349,11 @@
 
   <div class="body">
     <nav class="nav" data-tauri-drag-region>
-      {#each SECTIONS as s}
-        <button class="tab" class:on={s.id === section} onclick={() => (section = s.id)}>
+      {#each visible as s, i (s.id)}
+        {#if s.group !== visible[i - 1]?.group}
+          <div class="group">{t(s.group)}</div>
+        {/if}
+        <button class="tab" class:on={s.id === current.id} onclick={() => (section = s.id)}>
           {t(s.label)}
           {#if s.id === 'about' && update.found}<i class="dot" title={update.found.version}></i>{/if}
         </button>
@@ -314,13 +386,27 @@
           {/if}
         </div>
       {/if}
+      <!-- A failed save, said on whichever tab is open. Installed where the
+           folder refuses a write, every control in the app did nothing and the
+           only place that ever said so was one corner of Settings. -->
+      {#if store.error}
+        <div class="trouble bad">
+          <div class="tt">{t('Settings could not be saved')}</div>
+          <div class="td">{store.error}</div>
+        </div>
+      {/if}
       <!-- One section that throws must not take the window with it.
            Without this the sidebar, Compact mode and the close button go down
            with whatever panel failed, and the window is transparent, so what is
            left on screen is nothing at all. -->
       <div class="content">
-        <svelte:boundary onerror={(e) => invoke('report', { level: 'error', message: `${section}: ${e?.stack ?? e}` }).catch(() => {})}>
-          <Current />
+        <svelte:boundary onerror={(e) => invoke('report', { level: 'error', message: `${current.id}: ${e?.stack ?? e}` }).catch(() => {})}>
+          <!-- Keyed by the tab and not by the component: Overlay and Settings
+               are the same component, and without a key moving between them
+               would keep the one instance and only change its view. -->
+          {#key current.id}
+            <Current view={current.view} />
+          {/key}
           {#snippet failed(error, reset)}
             <div class="broke">
               <div class="tt">{t("This panel stopped working.")}</div>
@@ -437,6 +523,54 @@
      wear the same frame and a reskin moves them together. It carried a
      hand-drawn border before, which under a season's colours was the one thing
      on the window that did not belong to it. */
+  /* The same 22px cell as minimize and close, one step further left, and the
+     same hover: a plate lighting up rather than a colour change, so the three
+     read as one set. */
+  .max {
+    position: absolute;
+    top: 2px;
+    right: 50px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    z-index: 5;
+    display: grid;
+    place-items: center;
+  }
+  .glyph {
+    position: relative;
+    width: 10px;
+    height: 9px;
+    border: 2px solid var(--bone-4);
+    border-top-width: 3px;
+    box-sizing: border-box;
+  }
+  /* Restore: a second square set behind and up to the right, the way every
+     window manager draws it, so the button says what a click will do. */
+  .max.on .glyph {
+    width: 8px;
+    height: 7px;
+    transform: translate(-2px, 2px);
+  }
+  .max.on .glyph::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 8px;
+    height: 7px;
+    border: 2px solid var(--bone-4);
+    border-top-width: 3px;
+    border-left: none;
+    border-bottom: none;
+    box-sizing: border-box;
+  }
+  .max:hover .glyph,
+  .max:hover .glyph::before { border-color: var(--gold-2); }
+
   .min {
     position: absolute;
     top: 2px;
@@ -489,6 +623,19 @@
     cursor: pointer;
     text-shadow: 0 1px 0 var(--ground-1);
   }
+  /* A heading over each group of tabs. Small and dim, so it reads as a label
+     over the tabs and never as a tab itself; the gap above it is what makes
+     eleven tabs read as five short lists instead of one long one. */
+  .group {
+    margin: 8px 0 1px 4px;
+    color: var(--dim-2);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+  .group:first-child { margin-top: 0; }
+
   /* a new version is waiting behind this tab */
   .dot {
     display: inline-block;
