@@ -1,5 +1,5 @@
 <script>
-  import { locale, say, t } from './say.svelte.js';
+  import { locale, nameOf, say, t } from './say.svelte.js';
   import { appWindow, invoke, recall, remember } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { listen } from './bridge.js';
@@ -12,6 +12,7 @@
   import About from './About.svelte';
   import { update, lookForUpdate } from './update.svelte.js';
   import Codex from './Codex.svelte';
+  import Collection from './Collection.svelte';
   import { startSettings, store } from './settings.svelte.js';
 
   // Steam in a sandbox is a Linux problem and naming it on Windows sends a
@@ -51,6 +52,7 @@
     { id: 'alerts', group: 'Drops', label: 'Alerts', component: SoundFilter, view: 'alerts' },
     { id: 'watchlist', group: 'Drops', label: 'Watchlist', component: Watchlist },
     { id: 'codex', group: 'Game', label: 'Items', component: Codex },
+    { id: 'collection', group: 'Game', label: 'Collection', component: Collection },
     { id: 'shop', group: 'Game', label: 'Shopping List', component: Shop },
     { id: 'streaming', group: 'App', label: 'Streaming', component: Settings, view: 'streaming', needsOverlay: true },
     { id: 'settings', group: 'App', label: 'Settings', component: Settings, view: 'general' },
@@ -61,6 +63,18 @@
   /// app on it comes back to the page that now holds what they were looking at
   /// rather than to the first tab.
   const MOVED = { filter: 'alerts' };
+
+  // A restored tab can sit below the fold in a short window. Keep it visible
+  // without moving the fixed Compact mode control or the page beside it.
+  function keepSelectedVisible(node, selected) {
+    const show = (on) => {
+      if (on) requestAnimationFrame(() => {
+        if (node.isConnected) node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      });
+    };
+    show(selected);
+    return { update: show };
+  }
 
   // the section survives a hide/show, which is what makes the sidebar feel
   // like one window rather than four
@@ -139,6 +153,22 @@
   // overlay, so a player watching zeros had nothing to read at all — twice now
   // that has cost a round of questions to work out what the app already knew.
   let snap = $state(null);
+  let collectionNotice = $state('');
+  let collectionMilestone = $state(false);
+  let collectionNoticeTimer;
+  $effect(() => {
+    const off = listen('collection-new', (e) => {
+      const item = e.payload;
+      collectionNotice = nameOf(item.name, item.item_type, item.item_id, item.weapon_type);
+      collectionMilestone = !!item.milestone;
+      clearTimeout(collectionNoticeTimer);
+      collectionNoticeTimer = setTimeout(() => collectionNotice = '', 6000);
+    });
+    return () => {
+      off.then((f) => f());
+      clearTimeout(collectionNoticeTimer);
+    };
+  });
   // the path to paste into setcap: guessing it is the user's job otherwise
   let binary = $state('');
   // ...except from an AppImage, where that line does not help and does harm
@@ -349,28 +379,35 @@
 
   <div class="body">
     <nav class="nav" data-tauri-drag-region>
-      {#each visible as s, i (s.id)}
-        {#if s.group !== visible[i - 1]?.group}
-          <div class="group">{t(s.group)}</div>
-        {/if}
-        <button class="tab" class:on={s.id === current.id} onclick={() => (section = s.id)}>
-          {t(s.label)}
-          {#if s.id === 'about' && update.found}<i class="dot" title={update.found.version}></i>{/if}
-        </button>
-      {/each}
-
-      <div class="spacer"></div>
-
+      <div class="nav-list">
+        {#each visible as s, i (s.id)}
+          {#if s.group !== visible[i - 1]?.group}
+            <div class="group">{t(s.group)}</div>
+          {/if}
+          <button class="tab" class:on={s.id === current.id} use:keepSelectedVisible={s.id === current.id} onclick={() => (section = s.id)}>
+            {t(s.label)}
+            {#if s.id === 'about' && update.found}<i class="dot" title={update.found.version}></i>{/if}
+          </button>
+        {/each}
+      </div>
       {#if overlay}
-        <button
-          class="btn"
-          onclick={() => invoke('compact_mode')}
-          title={t("Shrink to the overlay that sits on top of the game")}
-        > {t("Compact mode")} </button>
+        <div class="nav-footer">
+          <button
+            class="btn compact"
+            onclick={() => invoke('compact_mode')}
+            title={t("Shrink to the overlay that sits on top of the game")}
+          >{t("Compact mode")}</button>
+        </div>
       {/if}
     </nav>
 
     <div class="pane" style:border-image-source="url({art('chip_dark')})">
+      {#if collectionNotice}
+        <div class="trouble" class:milestone={collectionMilestone}>
+          <div class="tt">{collectionMilestone ? t('Satanic collection · 666 unique items') : t('+1 item in collection')}</div>
+          <div class="td">{collectionNotice}</div>
+        </div>
+      {/if}
       {#if trouble}
         <div class="trouble" class:bad={trouble.bad}>
           <div class="tt">{trouble.title}</div>
@@ -597,11 +634,27 @@
 
   .nav {
     flex: none;
-    width: 116px;
+    box-sizing: border-box;
+    width: 168px;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    padding-right: 6px;
+    border-right: 1px solid var(--plain-sep, var(--ground-10));
   }
+  .nav-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    padding-right: 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .nav-footer { flex: none; padding: 8px 7px 0 0; }
+  .nav-footer .compact { width: 100%; white-space: nowrap; }
 
   /* The sidebar keeps the panel's own darkness — the grey chip art belongs to
      rows of data, not to navigation. The section you are in wears the game's
@@ -611,7 +664,7 @@
     box-sizing: border-box;
     display: flex;
     align-items: center;
-    min-height: 30px;
+    min-height: 28px;
     font: inherit;
     font-size: 12px;
     color: var(--bone-4);
@@ -627,7 +680,7 @@
      over the tabs and never as a tab itself; the gap above it is what makes
      eleven tabs read as five short lists instead of one long one. */
   .group {
-    margin: 8px 0 1px 4px;
+    margin: 6px 0 1px 4px;
     color: var(--dim-2);
     font-size: 10px;
     letter-spacing: 0.08em;
@@ -659,8 +712,6 @@
   }
   .tab.on:hover { border-image-source: var(--btn-hover); }
   .tab.on:active { border-image-source: var(--btn-down); }
-
-  .spacer { flex: 1 1 auto; }
 
   .btn {
     box-sizing: border-box;
@@ -766,8 +817,13 @@
     border-left-color: #ca1717;
     background: rgba(var(--pick-rgb), 0.18);
   }
+  .trouble.milestone {
+    border-left-color: var(--rar-satanic, #e8423f);
+    background: linear-gradient(90deg, rgba(140, 15, 20, 0.22), rgba(140, 15, 20, 0.05));
+  }
   .trouble .tt { font-size: 13px; color: var(--gold-2); }
   .trouble.bad .tt { color: #ff7a7a; }
+  .trouble.milestone .tt { color: var(--rar-satanic, #ff6a6a); }
   .trouble .td { font-size: 11px; color: var(--bone-7); line-height: 1.45; margin-top: 2px; }
   /* The banner is where the reader already is when the app is not working;
      making them find the same switch in Settings is one step too many. */

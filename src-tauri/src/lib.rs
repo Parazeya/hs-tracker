@@ -1,4 +1,6 @@
 mod items;
+mod collection;
+mod checklist;
 mod log;
 mod parser;
 mod presence;
@@ -1166,6 +1168,156 @@ fn carried_path() -> PathBuf {
     data_dir().join("carried.json")
 }
 
+fn collection_path() -> PathBuf {
+    data_dir().join("collection.json")
+}
+
+#[tauri::command]
+fn get_collection(app: AppHandle) -> collection::CollectionView {
+    let current = app.state::<Shared>().stats().character();
+    let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    guard.view(current.as_ref())
+}
+
+/// Download the named Google workbook and inspect its Check List tab. A
+/// preview is returned; nothing is written until import_checklist_items.
+#[tauri::command]
+async fn preview_checklist_url(url: String) -> Result<checklist::ChecklistPreview, String> {
+    let bytes = checklist::download_workbook(&url).await?;
+    tauri::async_runtime::spawn_blocking(move || checklist::parse_workbook(bytes, url))
+        .await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command(async)]
+fn preview_checklist_file(app: AppHandle) -> Result<Option<checklist::ChecklistPreview>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app.dialog().file()
+        .add_filter("Excel workbook", &["xlsx"])
+        .blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let source = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    checklist::parse_workbook(bytes, source).map(Some)
+}
+
+#[derive(serde::Serialize)]
+struct ChecklistImportResult { added_to_character: usize, new_to_collection: usize }
+
+#[tauri::command]
+fn import_checklist_items(app: AppHandle, key: String, rows: Vec<checklist::CheckedItem>) -> Result<ChecklistImportResult, String> {
+    if rows.is_empty() || rows.len() > 3000 { return Err("No valid checklist items selected".into()); }
+    let mut accepted = std::collections::BTreeSet::new();
+    for row in rows {
+        let canonical = checklist::resolve_checked_item(&row)
+            .ok_or_else(|| format!("Checklist item no longer matches the catalogue: {}", row.name))?;
+        accepted.insert(canonical.to_lowercase());
+    }
+    let current = app.state::<Shared>().stats().character();
+    let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let identity = current.as_ref()
+        .map(collection::CollectionIdentity::from)
+        .filter(|identity| identity.key == key)
+        .or_else(|| guard.characters.get(&key).map(|c| collection::CollectionIdentity {
+            key: key.clone(), name: c.name.clone(), season: c.season, hardcore: c.hardcore,
+        }))
+        .ok_or_else(|| "Character is not known yet".to_string())?;
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64).unwrap_or(0);
+    let mut next = guard.clone();
+    let names = accepted.into_iter().collect::<Vec<_>>();
+    let (added_to_character, new_to_collection) = next.import_items(&identity, &names, ts_ms);
+    if added_to_character > 0 {
+        let json = serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())?;
+        write_atomic(&collection_path(), &json).map_err(|e| e.to_string())?;
+        *guard = next;
+    }
+    drop(guard);
+    if added_to_character > 0 { let _ = app.emit("collection-changed", ()); }
+    Ok(ChecklistImportResult { added_to_character, new_to_collection })
+}
+
+#[tauri::command]
+fn set_collection_enabled(app: AppHandle, key: String, enabled: bool) -> Result<(), String> {
+    let current = app.state::<Shared>().stats().character();
+    let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let identity = current.as_ref()
+        .map(collection::CollectionIdentity::from)
+        .filter(|identity| identity.key == key)
+        .or_else(|| guard.characters.get(&key).map(|c| collection::CollectionIdentity {
+            key: key.clone(), name: c.name.clone(), season: c.season, hardcore: c.hardcore,
+        }))
+        .ok_or_else(|| "Character is not known yet".to_string())?;
+    let mut next = guard.clone();
+    next.set_enabled(&identity, enabled);
+    let json = serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())?;
+    write_atomic(&collection_path(), &json).map_err(|e| e.to_string())?;
+    *guard = next;
+    let wanted = guard.any_enabled();
+    drop(guard);
+    let settings = read_settings();
+    ensure_flourish(&app, settings.flourish || wanted, settings.flourish_scale.clamp(0.5, 2.0) as f64);
+    let _ = app.emit("collection-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn edit_collection(app: AppHandle, action: collection::CollectionEdit, key: Option<String>) -> Result<(), String> {
+    let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let mut next = guard.clone();
+    next.edit(action, key.as_deref()).map_err(str::to_string)?;
+    let json = serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())?;
+    write_atomic(&collection_path(), &json).map_err(|e| e.to_string())?;
+    *guard = next;
+    let wanted = guard.any_enabled();
+    drop(guard);
+    let settings = read_settings();
+    ensure_flourish(&app, settings.flourish || wanted, settings.flourish_scale.clamp(0.5, 2.0) as f64);
+    let _ = app.emit("collection-changed", ());
+    Ok(())
+}
+
+/// The shared count is returned only for a first find, so callers can suppress
+/// the ordinary drop sound and pillar when that find hits the 666 milestone.
+pub(crate) fn record_collection(app: &AppHandle, sighting: &stats::CollectionSighting) -> Option<usize> {
+    let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let identity = collection::CollectionIdentity::from(&sighting.character);
+    let name_key = sighting.name.trim().to_lowercase();
+    if !guard.characters.get(&identity.key).is_some_and(|c| c.enabled && !c.items.contains_key(&name_key)) {
+        return None;
+    }
+    let mut next = guard.clone();
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64).unwrap_or(0);
+    let Some(first_for_collection) = next.record(sighting, ts_ms) else { return None };
+    let shared_count = first_for_collection.then(|| next.unique_count());
+    let Ok(json) = serde_json::to_vec(&next) else { return None };
+    if let Err(e) = write_atomic(&collection_path(), &json) {
+        log::error(format!("cannot save collection: {e}"));
+        return None;
+    }
+    *guard = next;
+    drop(guard);
+    let _ = app.emit("collection-changed", ());
+    if let Some(count) = shared_count {
+        let _ = app.emit("collection-new", serde_json::json!({
+            "name": sighting.name,
+            "item_type": sighting.item_type,
+            "item_id": sighting.item_id,
+            "weapon_type": sighting.weapon_type,
+            "milestone": count == 666,
+        }));
+        maybe_collection_flourish(app, sighting, count == 666);
+    }
+    shared_count
+}
+
 /// Bank balance, experience and kills as of the last run. The game only sends
 /// them when it saves, so without this a restart shows zeros until the next
 /// save — which can be a whole farming run away.
@@ -1853,7 +2005,9 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     FLOURISH_ALWAYS.store(settings.flourish_always, Ordering::Relaxed);
     TICKER_ALWAYS.store(settings.ticker_always, Ordering::Relaxed);
     FLOURISH_ZONE.store(settings.flourish_zone, Ordering::Relaxed);
-    ensure_flourish(app, settings.flourish, settings.flourish_scale.clamp(0.5, 2.0) as f64);
+    let collection_store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let collecting = collection_store.lock().unwrap_or_else(|e| e.into_inner()).any_enabled();
+    ensure_flourish(app, settings.flourish || collecting, settings.flourish_scale.clamp(0.5, 2.0) as f64);
     if let Some(w) = app.get_webview_window("main") {
         // Click-through is deliberately NOT set here: the poller is its only
         // writer.
@@ -2347,6 +2501,22 @@ pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
     }
     let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", drop);
+    show_flourish(app, &w);
+}
+
+fn maybe_collection_flourish(app: &AppHandle, sighting: &stats::CollectionSighting, milestone: bool) {
+    let Some(w) = app.get_webview_window("flourish") else { return };
+    let payload = serde_json::json!({
+        "kind": if milestone { "collection_milestone" } else { "collection_find" },
+        "collection_new": true,
+        "name": sighting.name,
+        "rarity": sighting.rarity,
+        "item_type": sighting.item_type,
+        "item_id": sighting.item_id,
+        "weapon_type": sighting.weapon_type,
+        "tier": sighting.tier,
+    });
+    let _ = app.emit_to("flourish", "flourish-play", payload);
     show_flourish(app, &w);
 }
 
@@ -3040,6 +3210,10 @@ struct ExportedSettings {
     version: u32,
     kind: String,
     settings: Settings,
+    /// Present in backups made after collection mode was added. Old backups
+    /// leave the current collection untouched when imported.
+    #[serde(default)]
+    collection: Option<collection::CollectionStore>,
     /// sound key -> the file, so a restore is not missing its audio
     sounds: std::collections::HashMap<String, ExportedSound>,
 }
@@ -3082,6 +3256,11 @@ fn export_settings(app: AppHandle) -> Result<Option<String>, String> {
         kind: "settings".into(),
         sounds: all_sounds(&settings),
         settings,
+        collection: Some({
+            let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+            let saved = store.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            saved
+        }),
     };
     let json = serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
@@ -3119,7 +3298,16 @@ fn import_settings(app: AppHandle) -> Result<Option<String>, String> {
     let mut imported = exported.settings;
     migrate_notable(&mut imported);
     migrate_lists(&mut imported);
-    save_settings(app, imported)?;
+    save_settings(app.clone(), imported)?;
+    if let Some(collection) = exported.collection {
+        let json = serde_json::to_vec_pretty(&collection).map_err(|e| e.to_string())?;
+        write_atomic(&collection_path(), &json).map_err(|e| e.to_string())?;
+        let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+        *store.lock().unwrap_or_else(|e| e.into_inner()) = collection;
+        let settings = read_settings();
+        ensure_flourish(&app, settings.flourish || store.lock().unwrap_or_else(|e| e.into_inner()).any_enabled(), settings.flourish_scale.clamp(0.5, 2.0) as f64);
+        let _ = app.emit("collection-changed", ());
+    }
     Ok(Some(name))
 }
 
@@ -3794,10 +3982,17 @@ pub fn run() {
                 .build(),
         )
         .manage(Shared::default())
+        .manage(std::sync::Mutex::new(read_json_or_default::<collection::CollectionStore>(&collection_path())))
         .invoke_handler(tauri::generate_handler![
             set_words,
             snapshot,
             get_extra,
+            get_collection,
+            preview_checklist_url,
+            preview_checklist_file,
+            import_checklist_items,
+            set_collection_enabled,
+            edit_collection,
             reset_stats,
             finish_run,
             start_run,

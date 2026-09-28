@@ -95,10 +95,13 @@
       // Except the rotation, which is not evictable by a drop. It happens once
       // an hour and a boss hands over three things at once, so first-in-first-out
       // spends the rare announcement to make room for the common one.
-      const i = waiting.findIndex((e) => e.kind !== 'zone');
-      waiting.splice(i < 0 ? 0 : i, 1);
+      const i = waiting.findIndex((e) => e.kind !== 'zone' && e.kind !== 'collection_milestone');
+      if (i < 0 && entry.kind !== 'collection_milestone') return;
+      waiting.splice(i < 0 ? waiting.length - 1 : i, 1);
     }
-    waiting.push(entry);
+    // The one-time milestone should be next, even when a boss filled the queue.
+    if (entry.kind === 'collection_milestone') waiting.unshift(entry);
+    else waiting.push(entry);
     if (!playing) advance();
   }
 
@@ -124,7 +127,7 @@
       // alternating, so both layouts are seen in the one loop
       if (placing) waiting.push(next.kind === 'zone' ? SAMPLE : ZONE_SAMPLE);
       advance();
-    }, runMs);
+    }, next.kind === 'collection_milestone' ? Math.max(6000, runMs) : runMs);
   }
 
   function isCodex(entry) {
@@ -135,6 +138,7 @@
   }
 
   let isZone = $derived(drop?.kind === 'zone');
+  let isMilestone = $derived(drop?.kind === 'collection_milestone');
   /// What the plate lists, capped, with the overflow kept as a count rather
   /// than dropped silently.
   let zbuffs = $derived.by(() => {
@@ -192,7 +196,7 @@
   style:--scale={scale}
   style:--in="{IN_MS}ms"
   style:--out="{OUT_MS}ms"
-  style:--hold="{Math.max(0, runMs - OUT_MS)}ms"
+  style:--hold="{Math.max(0, (isMilestone ? Math.max(6000, runMs) : runMs) - OUT_MS)}ms"
   style:--shade={shade}
   style:--sparks="url({art('fx_sparks')})"
   style:--glow="url({art('fx_glow')})"
@@ -243,6 +247,17 @@
           </div>
         </div>
       </div>
+    {:else if isMilestone}
+      <div class="mfx" class:playing>
+        <div class="mveil"></div>
+        <div class="msigil"><img src={art('satanic_star')} alt="" /></div>
+        <div class="mbody">
+          <div class="mkicker">{t('Satanic collection')}</div>
+          <div class="mnumber">666</div>
+          <div class="msub">{t('Unique items')}</div>
+          <div class="mitem">{label}</div>
+        </div>
+      </div>
     {:else}
     <div class="fx" class:playing>
       <!-- The shading is a pool of shadow rather than a panel: the window is
@@ -264,11 +279,11 @@
           {#if stacked}
             <div class="rarline">
               <i class="rule"></i>
-              <span class="rar">{kind}</span>
+              <span class="rar">{drop.collection_new ? t('+1 item in collection') : kind}</span>
               <i class="rule"></i>
             </div>
           {:else}
-            <span class="rar">{kind}</span>
+            <span class="rar">{drop.collection_new ? t('+1 item in collection') : kind}</span>
           {/if}
           <span class="name" style="font-size:{stacked ? nameSize : 19}px;{nameStyle(look, tint)}">{label}</span>
           {#if drop.tier > 0}<span class="grade">{tierLabel(drop.tier)}</span>{/if}
@@ -301,6 +316,102 @@
     overflow: hidden;
     user-select: none;
     -webkit-user-select: none;
+  }
+
+  /* The 666th distinct piece gets its own mark instead of reusing a drop
+     pillar. All light fades into the transparent window, so the game remains
+     visible behind it. The game's Satanic star keeps the art in the same world. */
+  .mfx {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    transform: scale(var(--scale));
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .mveil {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 48% 60% at center, rgba(125, 0, 12, 0.55), rgba(44, 0, 8, 0.34) 55%, transparent 100%);
+    opacity: 0;
+  }
+  .msigil {
+    position: absolute;
+    width: 176px;
+    height: 176px;
+    display: grid;
+    place-items: center;
+    opacity: 0;
+    filter: drop-shadow(0 0 22px #d4001b);
+  }
+  .msigil img {
+    width: 150px;
+    height: 150px;
+    image-rendering: pixelated;
+    opacity: 0.32;
+    animation: milestone-turn 16s linear infinite;
+  }
+  .mbody {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    opacity: 0;
+    text-shadow: 0 2px 1px #080000, 0 0 12px #180000;
+  }
+  .mkicker {
+    color: #ff8d78;
+    font-size: 14px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+  .mnumber {
+    margin: 2px 0 0;
+    color: #ff313d;
+    font-size: 72px;
+    line-height: 0.95;
+    letter-spacing: 0.06em;
+    text-shadow: 0 3px 0 #390000, 0 0 18px rgba(255, 25, 35, 0.9), 0 0 38px rgba(180, 0, 0, 0.8);
+  }
+  .msub {
+    margin-top: 3px;
+    color: #f7c5a6;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .mitem {
+    max-width: 480px;
+    margin-top: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #f7e0c9;
+    font-size: 15px;
+  }
+  .mfx.playing .mveil,
+  .mfx.playing .msigil {
+    animation: appear var(--in) ease-out forwards, vanish var(--out) ease-in var(--hold) forwards;
+  }
+  .mfx.playing .mbody {
+    animation: rise 650ms cubic-bezier(0.18, 1, 0.3, 1) forwards, vanish var(--out) ease-in var(--hold) forwards;
+  }
+  .mfx.playing .mnumber { animation: milestone-pulse 1.1s ease-in-out infinite alternate; }
+  :global(html[data-os='linux']) .mfx.playing .mveil {
+    animation: none;
+    opacity: 1;
+  }
+  @keyframes milestone-pulse {
+    to { color: #ff8d77; text-shadow: 0 3px 0 #390000, 0 0 26px #ff3434, 0 0 52px #c90018; }
+  }
+  @keyframes milestone-turn { to { transform: rotate(360deg); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .msigil img,
+    .mfx.playing .mnumber { animation: none; }
   }
 
   .stage {

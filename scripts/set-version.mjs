@@ -1,6 +1,6 @@
-// package.json is the single source of the version. This copies it into the two
-// files that also carry one: src-tauri/tauri.conf.json (stamps the binary and
-// names the installer) and src-tauri/Cargo.toml (what the crate reports).
+// package.json is the single source of the version. This copies it into the
+// lockfile, src-tauri/tauri.conf.json (stamps the binary and names the
+// installer) and src-tauri/Cargo.toml (what the crate reports).
 //
 // Tauri can point at a package.json itself, but it resolves that path against
 // the current working directory rather than the config file, so it depends on
@@ -78,6 +78,14 @@ const touched = [];
 if (version !== current) {
   patch(pkgPath, /("version"\s*:\s*")[^"]+(")/, `$1${version}$2`);
   touched.push('package.json');
+}
+const lockPath = join(root, 'package-lock.json');
+const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+if (lock.version !== version || lock.packages?.['']?.version !== version) {
+  lock.version = version;
+  lock.packages[''].version = version;
+  writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+  touched.push('package-lock.json');
 }
 // the top-level "version" sits right under productName — the first match, and
 // the only key in the file shaped like this

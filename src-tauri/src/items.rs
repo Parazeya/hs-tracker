@@ -5079,6 +5079,37 @@ pub fn item_name(item_type: i64, id: i64, weapon_type: i64) -> Option<&'static s
     lookup(item_type, id, weapon_type).or_else(|| lookup(item_type, id, 0))
 }
 
+/// The first catalogue identity for a name-only chat find. A few names are
+/// shared; the catalogue uses their first entry too.
+pub fn catalogue_entry(name: &str) -> Option<(&'static str, i64, i64, i64)> {
+    let english = ITEMS.iter().find(|(_, known)| known.eq_ignore_ascii_case(name.trim()));
+    let &(key, english) = if let Some(found) = english {
+        found
+    } else {
+        let lower = name.trim().to_lowercase();
+        let at = ALIASES.partition_point(|(alias, _)| *alias < lower.as_str());
+        let (_, key) = ALIASES.get(at).filter(|(alias, _)| *alias == lower.as_str())?;
+        ITEMS.get(ITEMS.binary_search_by_key(key, |(packed, _)| *packed).ok()?)?
+    };
+    Some((english, (key >> 24) as i64, ((key >> 8) & 0xffff) as i64, (key & 0xff) as i64))
+}
+
+/// A chat line has only a name. If it names several identities, only an item
+/// packet can tell whether it was gear or a jewel/relic with the same name.
+pub fn catalogue_name_is_ambiguous(name: &str) -> bool {
+    let Some((english, ..)) = catalogue_entry(name) else { return false };
+    if ITEMS.iter().filter(|(_, known)| known.eq_ignore_ascii_case(english)).take(2).count() > 1 {
+        return true;
+    }
+    let lower = name.trim().to_lowercase();
+    let at = ALIASES.partition_point(|(alias, _)| *alias < lower.as_str());
+    let mut matches = ALIASES[at..].iter().take_while(|(alias, _)| *alias == lower.as_str());
+    if let Some((_, first)) = matches.next() {
+        return matches.any(|(_, key)| key != first);
+    }
+    false
+}
+
 fn lookup(item_type: i64, id: i64, weapon_type: i64) -> Option<&'static str> {
     let key = packed(item_type, id, weapon_type)?;
     ITEMS.binary_search_by_key(&key, |(k, _)| *k).ok().map(|i| ITEMS[i].1)

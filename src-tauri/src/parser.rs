@@ -2794,7 +2794,6 @@ named things, by what the tracker made of them:");
         assert_eq!(grade_of(&pickup(json!({"a": 1, "c": 1, "d": 2, "e": 10, "n": 6, "sh": "x"}))), 6);
     }
 
-    #[test]
     /// A nameless base claiming the top grade is refused whatever mode it came
     /// from. The tables grade every ordinary base D through S, so the claim
     /// describes an item that does not exist — and believing it put four SS in

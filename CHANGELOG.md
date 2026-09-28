@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.14 — 2026-09-28
+
+### Added
+
+- Collection tracks unique equipment and charms across selected characters, with rarity totals, item locations and drop chances.
+- Import checked finds from a Google Sheets Check List link or an `.xlsx` file.
+- New collection finds appear in announcements; the 666th find has its own sound and effect.
+
+### Changed
+
+- Collection and navigation controls now follow the active theme. Character and collection history can be cleared separately.
+
+### Fixed
+
+- New drops update the collection, Check List preview no longer freezes the app, and the displayed season matches the game.
+
 ## 1.1.13 — 2026-09-13
 
 ### Added

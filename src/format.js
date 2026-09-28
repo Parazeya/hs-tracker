@@ -76,14 +76,21 @@ export const RARITY_RANK = {
 /// The five the app counts, in the order every panel lists them.
 export const RARITIES = ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'];
 
+/// Account packets number seasonal characters one ahead of the public season:
+/// season 9 reports 10, and season 10 reports 11. Keep the packet value for
+/// character identity and saved data; translate it only when presenting a name.
+export function publicSeason(packetSeason) {
+  return packetSeason > 0 ? Math.max(1, packetSeason - 1) : 0;
+}
+
 /// What the game calls the difficulty a character is on.
 ///
 /// Falls back to `D<n>` rather than guessing. Season 10 (21 August 2026) retires
 /// Nightmare and splits Hell into five grades, so these numbers will come to
 /// mean different names — which is deliberately not written in yet: the packets
-/// carry a season number whose relation to the season's public name is not
-/// established (a character playing season 9 reports 10), and a wrong name looks
-/// like the app understood where `D4` does not.
+/// carry a season number one above the public name. The changed difficulty
+/// numbers are not mapped here yet; a wrong name would imply certainty where
+/// `D4` does not.
 export function difficulty(n, hellSub = 0) {
   if (n == null) return null;
   const name = ['Normal', 'Nightmare', 'Hell', 'Inferno'][n] ?? `D${n}`;

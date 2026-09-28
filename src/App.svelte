@@ -6,6 +6,7 @@
   import { listen, native } from './bridge.js';
   import { buffInfo, defaultBuffIcon, zoneAct, zoneName, icon } from './buffs.js';
   import { RARITIES, soundUrl, play } from './audio.js';
+  import collection666Wav from './assets/sounds/collection_666.wav';
   import { fmt } from './format.js';
 
   let snap = $state(null);
@@ -95,6 +96,11 @@
         mailTimer = setTimeout(() => (mailFresh = false), 20000);
       }),
       listen('item-drop', (e) => playSound(...(Array.isArray(e.payload) ? e.payload : [e.payload]))),
+      // The 666th shared find uses its own sound, even when ordinary drop
+      // alerts are muted or use a custom chime.
+      listen('collection-new', (e) => {
+        if (e.payload?.milestone) play(collection666Wav, 0.8);
+      }),
       // The rotation, from the backend, which fires only for a real one — not
       // for the zone this app has just learned about, and not for one whose
       // buffs the player did not ask about. That filtering lives there rather

@@ -55,6 +55,10 @@ const RESOURCES: &[(i64, &str)] = &[(12, "keys"), (13, "collectibles"), (14, "ma
 /// dropped.
 const GEAR: [i64; 11] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 18];
 
+pub(crate) fn collection_eligible(item_type: i64, rarity: &str) -> bool {
+    GEAR.contains(&item_type) && JOURNAL_RARITIES.contains(&rarity)
+}
+
 /// The relic type. Relics are not gear and not a resource — they reach no
 /// counter at all — so this is here for the one thing that asks about them:
 /// whether a drop is a relic the player ticked. See `hunted_relic`.
@@ -217,6 +221,20 @@ pub struct CharacterInfo {
     pub hell_sub: i64,
     pub hardcore: bool,
     pub season: i64,
+}
+
+/// A named find accepted by the same deduplication and ownership checks as
+/// the session counters. Collection storage decides whether this character is
+/// collecting; the session engine only reports the sighting.
+#[derive(Clone)]
+pub struct CollectionSighting {
+    pub character: CharacterInfo,
+    pub name: String,
+    pub rarity: String,
+    pub item_type: i64,
+    pub item_id: i64,
+    pub weapon_type: i64,
+    pub tier: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -458,6 +476,7 @@ pub struct GameStats {
     account: Option<String>,
     announced_at: HashMap<String, Instant>,
     character: Option<CharacterInfo>,
+    collection_sightings: Vec<CollectionSighting>,
     drops: VecDeque<DropEntry>,
     series: Vec<SeriesPoint>,
     /// bumped by every change, so the pusher can skip unchanged snapshots
@@ -666,6 +685,7 @@ impl Default for GameStats {
             account: None,
             announced_at: HashMap::new(),
             character: None,
+            collection_sightings: Vec::new(),
             drops: VecDeque::new(),
             series: Vec::new(),
             revision: 0,
@@ -1092,6 +1112,14 @@ impl GameStats {
 
     pub fn extra_revision(&self) -> u64 {
         self.extra_rev
+    }
+
+    pub fn character(&self) -> Option<CharacterInfo> {
+        self.character.clone()
+    }
+
+    pub fn take_collection_sightings(&mut self) -> Vec<CollectionSighting> {
+        std::mem::take(&mut self.collection_sightings)
     }
 
     /// Which list this drop is on, if any.
@@ -1766,6 +1794,46 @@ impl GameStats {
                     }
                 }
                 let rarity_key = crate::parser::resolve_rarity(rarity, name, *unscaled, id);
+                // Only named unique gear belongs in the collection. Resolve
+                // the catalogue identity before checking its type: chat finds
+                // carry a placeholder type of zero, even for jewels and relics.
+                // Alerts and display settings do not affect collection finds.
+                if first && !*unscaled {
+                    let identity_name = crate::items::item_name(*item_type, *item_id, *weapon_type)
+                        .filter(|english| crate::items::same_item(name, english, *item_type, *item_id, *weapon_type));
+                    if let (Some(character), Some((english, catalogue_type, catalogue_id, catalogue_weapon))) = (
+                        self.character.clone(),
+                        crate::items::catalogue_entry(identity_name.unwrap_or(name)),
+                    ) {
+                        let (resolved_type, resolved_id, resolved_weapon) =
+                            if identity_name.is_some() && !*announced {
+                                (*item_type, *item_id, *weapon_type)
+                            } else {
+                                (catalogue_type, catalogue_id, catalogue_weapon)
+                            };
+                        // Names shared by different items cannot identify a
+                        // chat announcement. A packet identity can.
+                        if !(*announced && (crate::items::muddled(name)
+                            || crate::items::catalogue_name_is_ambiguous(name))) {
+                            let known = crate::items::known_by_identity(resolved_type, resolved_id, resolved_weapon);
+                            let collection_rarity = known.as_ref().map_or_else(
+                                || crate::items::rarity_by_name(english).unwrap_or(rarity_key.as_str()),
+                                |item| item.rarity,
+                            );
+                            if collection_eligible(resolved_type, collection_rarity) {
+                                self.collection_sightings.push(CollectionSighting {
+                                    character,
+                                    name: english.to_string(),
+                                    rarity: collection_rarity.to_string(),
+                                    item_type: resolved_type,
+                                    item_id: resolved_id,
+                                    weapon_type: resolved_weapon,
+                                    tier: known.as_ref().map_or_else(|| crate::items::tier_by_name(english), |item| item.tier),
+                                });
+                            }
+                        }
+                    }
+                }
                 let is_resource =
                     RESOURCES.iter().any(|(t, _)| t == item_type) || is_container(name);
                 // A sighting counts once, whichever of the two got here first:
@@ -2713,6 +2781,63 @@ mod tests {
     }
 
     #[test]
+    fn collection_sees_first_named_find_even_when_alerts_are_off() {
+        let mut s = GameStats::default();
+        s.apply(&account(CURRENT_SEASON, 0, 0));
+        s.set_filter(Vec::new(), 6);
+        let sighting = |ground: bool| GameEvent::ItemAdded {
+            rarity: json!(6), unscaled: false, mf: false, tier: 0,
+            item_type: 0, item_id: 0, weapon_type: 0, seed: 0,
+            name: "Герб Арлекина".into(), announced: false, amount: 1,
+            fingerprint: "7-1-2-0".into(), hash: "one-item".into(), ground,
+        };
+        assert!(s.apply(&sighting(true)).is_none());
+        let finds = s.take_collection_sightings();
+        assert_eq!(finds.len(), 1);
+        assert_eq!(finds[0].name, "Harlequinn's Crest");
+        assert_eq!(finds[0].character.name, "Test");
+        assert!(s.apply(&sighting(false)).is_none());
+        assert!(s.take_collection_sightings().is_empty());
+    }
+
+    #[test]
+    fn a_translated_chat_find_reaches_the_collection_by_catalogue_name() {
+        let mut s = GameStats::default();
+        s.apply(&account(CURRENT_SEASON, 0, 0));
+        s.apply(&GameEvent::Found { finder: "Test".into(), name: "Gevatter".into() });
+        let finds = s.take_collection_sightings();
+        assert_eq!(finds.len(), 1);
+        assert_eq!(finds[0].name, "Godfather");
+        assert_eq!((finds[0].item_type, finds[0].item_id, finds[0].weapon_type), (3, 0, 1));
+    }
+
+    #[test]
+    fn collection_accepts_unique_gear_but_not_jewels_or_relics() {
+        let mut s = GameStats::default();
+        s.apply(&account(CURRENT_SEASON, 0, 0));
+        let drop = |item_type, item_id, name: &str| GameEvent::ItemAdded {
+            rarity: json!(6), unscaled: false, mf: false, tier: 0,
+            item_type, item_id, weapon_type: 0, seed: 0,
+            name: name.into(), announced: false, amount: 1,
+            fingerprint: format!("{item_type}-{item_id}-1-0"),
+            hash: name.into(), ground: true,
+        };
+
+        s.apply(&drop(15, 112, "Goblin")); // Heroic socketable
+        s.apply(&GameEvent::Found { finder: "Test".into(), name: "Runeforge".into() });
+        s.apply(&GameEvent::Found { finder: "Test".into(), name: "Shrunken Head".into() });
+        s.apply(&drop(16, 28, "Shrunken Head")); // shares a name with a charm
+        assert!(s.take_collection_sightings().is_empty());
+
+        s.apply(&drop(10, 0, "Raider's Torch"));
+        let finds = s.take_collection_sightings();
+        assert_eq!(finds.len(), 1);
+        assert_eq!(finds[0].name, "Raider's Torch");
+        assert_eq!(finds[0].item_type, 10);
+        assert_eq!(finds[0].rarity, "Satanic");
+    }
+
+    #[test]
     fn notable_drops_are_counted_by_name() {
         let mut s = GameStats::default();
         s.apply(&notable_item("Angelic Key", 12, 2));
@@ -3073,7 +3198,7 @@ mod tests {
             unscaled: false,
             mf: false,
             tier: 6, // SS
-            item_type: 18, // Vial: not a resource, and not gear either
+            item_type: 18, // equipped vial
             item_id: 5,
             weapon_type: 0,
             seed: 1,

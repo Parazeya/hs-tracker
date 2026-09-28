@@ -45,6 +45,10 @@ src/skin-preview.png
 
 dist-linux/
 
+# Local browser profile and UI review screenshots
+/.chrome-preview/
+/previews/
+
 # machine-specific paths; see .env.example
 .env
 

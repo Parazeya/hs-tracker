@@ -1161,12 +1161,17 @@ fn handle_flush(
     }
     // the engine dedupes and resolves rarities, so it also decides what the
     // ticker and the sounds react to
-    let fresh: Vec<_> = {
+    let (fresh, sightings) = {
         let mut stats = stats.lock().unwrap_or_else(|e| e.into_inner());
-        events.iter().filter_map(|e| stats.apply(e)).collect()
+        let fresh = events.iter().filter_map(|e| stats.apply(e)).collect::<Vec<_>>();
+        (fresh, stats.take_collection_sightings())
     };
+    let newly_collected: std::collections::HashMap<String, usize> = sightings.iter()
+        .filter_map(|s| crate::record_collection(app, s).map(|count| (s.name.to_lowercase(), count)))
+        .collect();
     for drop in fresh {
-        if let Some(key) = &drop.sound {
+        let milestone = newly_collected.get(&drop.name.to_lowercase()) == Some(&666);
+        if let Some(key) = drop.sound.as_ref().filter(|_| !milestone) {
             // the rarity travels along as a fallback: a list with no sound of
             // its own still gets announced
             let _ = app.emit("item-drop", (key, &drop.rarity));
@@ -1176,7 +1181,7 @@ fn handle_flush(
         if drop.announce {
             let _ = app.emit("drop-entry", &drop);
         }
-        if drop.flourish {
+        if drop.flourish && !newly_collected.contains_key(&drop.name.to_lowercase()) {
             crate::maybe_flourish(app, &drop);
         }
     }

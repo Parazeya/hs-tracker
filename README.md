@@ -24,19 +24,19 @@
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.13/HS.Tracker_1.1.13_x64-setup.exe">HS.Tracker_1.1.13_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.14/HS.Tracker_1.1.14_x64-setup.exe">HS.Tracker_1.1.14_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.13/HS.Tracker_1.1.13_amd64.AppImage">HS.Tracker_1.1.13_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.14/HS.Tracker_1.1.14_amd64.AppImage">HS.Tracker_1.1.14_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.13/HS.Tracker_1.1.13_amd64.deb">HS.Tracker_1.1.13_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.14/HS.Tracker_1.1.14_amd64.deb">HS.Tracker_1.1.14_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.13/HS.Tracker-1.1.13-1.x86_64.rpm">HS.Tracker-1.1.13-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.14/HS.Tracker-1.1.14-1.x86_64.rpm">HS.Tracker-1.1.14-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
@@ -59,6 +59,7 @@
 | **Announcement** | A drop lands and the game's own loot pillar plays over the screen, wherever you have put it. It can follow the rarity switches or simply announce whatever your custom filter lists. |
 | **Satanic Zone** | The rotation gets a chime and an announcement of its own — a rift that opens across the screen with the new zone and the buffs it rolled, drawn so it is never mistaken for a drop. Tick the buffs worth leaving a fight for and the rest pass in silence; tick none and every rotation is announced. |
 | **Items** | Every named item, its drop chance, and the places it rolls better in. Search by name, rarity or kind. |
+| **Collection** | Add characters to one shared collection by turning tracking on for each of them. Browse unique equippable gear, including charms and flasks; filter found and missing items, see totals by rarity, and open an item to see its drop chances and locations. A popup announces each new name. Jewels, relics and other non-equipment are excluded. Turning a character off keeps the progress. |
 | **Runs** | Every finished session kept — the rates, the finds, where the time went. **Copy card** turns one into a picture you can paste into a chat. |
 | **Pause** | By hand, or by itself after five quiet minutes, so a break does not end up in the per-hour figures. |
 | **OBS** | The announcement window can stay on screen between drops, so OBS can capture it as a window source. |
@@ -236,6 +237,25 @@ Counting starts once the game reports your character, a moment after you enter a
 zone. Gold, experience and kills only travel when the game saves, so between
 saves those three sit still while drops keep arriving — that is the game, not a
 stuck counter.
+
+Open **Collection** after the game reports your character and switch tracking
+on for it. Add other characters the same way when you play them. Their finds
+build one shared collection; the character rows can be expanded to see each
+one's contributions. Only unique equippable gear is counted. Finds are stored
+in `collection.json` beside the other app data and included in settings
+backups. Items found before tracking was
+switched on cannot be reconstructed from the game's traffic later.
+To bring in older finds, use **Import Check List**. Paste a viewable Google
+Sheets link to your copy of the hcjobo checklist, or download it as an `.xlsx`
+file and choose that file. Review the matched and skipped names, select a
+character, then import. Matching checks the item's name, rarity and equipment
+slot against Tracker's catalogue. Existing finds are kept; importing again
+does not duplicate them or turn live tracking on.
+Click an item in the collection to see its general and location-specific drop
+chances and the places where it can drop.
+Use **Clear history** to reset finds while keeping the characters and their
+tracking switches. Expand a character to clear only their finds or remove them
+from the collection. **Remove all characters** clears the roster and its finds.
 
 ## Streaming it
 

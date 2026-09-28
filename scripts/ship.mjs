@@ -124,18 +124,17 @@ if (!pending && !heading?.includes(version) && !flag('--skip-notes')) {
 // ── the plan ──────────────────────────────────────────────────────────────────
 const dirty = git('status', '--porcelain');
 console.log(`\n  ${current} → ${version}   on ${branch}\n`);
-console.log(`    version   package.json, tauri.conf.json, Cargo.toml`);
+console.log(`    version   package.json, package-lock.json, tauri.conf.json, Cargo.toml`);
 // This is the one command that makes something public, and it runs
 // `git add -A`. Naming the files is the difference between reviewing a commit
 // and trusting one.
-// The three version files are written by the step after this one, so they are
-// not dirty yet and were being left out of the count — "no file(s)" for a
-// commit that was about to carry three.
+// The version files are written by the step after this one, so they are not
+// dirty yet and were being left out of the count.
 const files = dirty ? dirty.split('\n').filter(Boolean) : [];
-console.log(`    commit    ${files.length + 3} file(s)  —  "${note ?? version}"`);
+console.log(`    commit    ${files.length + 4} file(s)  —  "${note ?? version}"`);
 for (const line of files.slice(0, 20)) console.log(`              ${line}`);
 if (files.length > 20) console.log(`              … and ${files.length - 20} more`);
-console.log(`               M the three version files above`);
+console.log(`               M the version files above`);
 console.log(`    tag       ${tag}`);
 console.log(`    push      origin ${branch}, then ${tag}  →  a marker; publishing is separate`);
 console.log(`    notes     ${pending ? `"Unreleased" → ${version}` : heading?.trim()}\n`);
