@@ -1,6 +1,6 @@
 {
   "name": "hs-tracker",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "description": "HS Tracker — Hero Siege session tracker with a pinned on-screen overlay.",
   "private": true,
   "type": "module",
@@ -21,7 +21,9 @@
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.11.0"
+    "@tauri-apps/plugin-updater": "^2.11.0",
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^4.0.0",

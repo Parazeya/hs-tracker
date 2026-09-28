@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.15 — 2026-09-28
+
+### Added
+
+- Collection items can be added for a character or removed from all characters manually, with confirmation.
+
+### Fixed
+
+- Check List import recognizes known spelling variants, items with shared names, and Heroic gear missing packet IDs.
+- About renders release notes as formatted Markdown.
+
 ## 1.1.14 — 2026-09-28
 
 ### Added

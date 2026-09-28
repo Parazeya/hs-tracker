@@ -1,5 +1,7 @@
 <script>
   import { relaunch } from '@tauri-apps/plugin-process';
+  import DOMPurify from 'dompurify';
+  import { marked } from 'marked';
   import { t, locale } from './say.svelte.js';
   import { invoke } from './bridge.js';
   import { update, lookForUpdate } from './update.svelte.js';
@@ -18,6 +20,7 @@
   /// date and the notes — which are this release's own section of the
   /// changelog, put there by `npm run publish`.
   const ready = $derived(update.found);
+  const notesHtml = $derived(ready?.body ? DOMPurify.sanitize(marked.parse(ready.body)) : '');
   /// Downloading. `got` and `total` are bytes, and `total` is what the server
   /// said the download would be — nothing is drawn from it until it arrives.
   let installing = $state(false);
@@ -180,7 +183,7 @@
         </div>
         <!-- What changed, before anything is downloaded. It is the release's own
              section of the changelog, carried in the manifest. -->
-        {#if ready.body}<pre class="notes">{ready.body}</pre>{/if}
+        {#if notesHtml}<div class="notes">{@html notesHtml}</div>{/if}
         <div class="line">
           <button class="btn wide" disabled={installing} onclick={install}>
             {installing
@@ -287,7 +290,7 @@
   .good, .ok, .bad { margin-top: 8px; font-size: 11px; line-height: 1.5; }
   .good { color: var(--gold-2); }
   .ok { color: var(--bone-3); }
-  /* the release notes, as they were written */
+  /* Rendered changelog notes follow the active theme. */
   .notes {
     max-height: 180px;
     margin: 6px 0 0;
@@ -299,8 +302,19 @@
     font: inherit;
     font-size: 11px;
     line-height: 1.45;
-    white-space: pre-wrap;
   }
+  .notes :global(h2), .notes :global(h3) {
+    color: var(--gold-2);
+    font-size: 12px;
+    font-weight: normal;
+    margin: 8px 0 4px;
+  }
+  .notes :global(h2:first-child), .notes :global(h3:first-child) { margin-top: 0; }
+  .notes :global(p) { margin: 4px 0; }
+  .notes :global(ul), .notes :global(ol) { margin: 4px 0 8px; padding-left: 19px; }
+  .notes :global(li) { margin: 3px 0; }
+  .notes :global(code) { color: var(--bone-11); font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; }
+  .notes :global(a) { color: var(--gold-2); }
 
   .bad { color: #e06a6a; }
 </style>

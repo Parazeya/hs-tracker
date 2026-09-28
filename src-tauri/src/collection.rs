@@ -80,6 +80,23 @@ impl CollectionStore {
         (added, self.unique_count() - shared_before)
     }
 
+    /// Manual edits update the saved collection without changing live tracking
+    /// or announcing a drop. Removing a name clears it from every character,
+    /// so the shared row becomes Missing immediately.
+    pub fn add_item(&mut self, identity: &CollectionIdentity, name: &str, ts_ms: u64) -> bool {
+        let character = self.characters.entry(identity.key.clone()).or_insert_with(|| CollectionCharacter::new(identity));
+        match character.items.entry(name.to_lowercase()) {
+            std::collections::btree_map::Entry::Vacant(entry) => { entry.insert(ts_ms); true }
+            std::collections::btree_map::Entry::Occupied(_) => false,
+        }
+    }
+
+    pub fn remove_item(&mut self, name: &str) -> usize {
+        let key = name.to_lowercase();
+        self.characters.values_mut().map(|character| character.items.remove(&key).is_some())
+            .filter(|removed| *removed).count()
+    }
+
     /// Unique finds across characters, including finds saved before a toggle
     /// was turned off. This is the same union the collection page shows.
     pub fn unique_count(&self) -> usize {
@@ -248,5 +265,21 @@ mod tests {
         assert!(!store.characters[&a.key].enabled);
         assert_eq!(store.import_items(&b, &["hat".into()], 300), (1, 0));
         assert_eq!(store.unique_count(), 3);
+    }
+
+    #[test]
+    fn manual_edit_can_add_for_a_disabled_character_and_remove_from_all() {
+        let a = CollectionIdentity::from(&character("Alice", 10));
+        let b = CollectionIdentity::from(&character("Bob", 10));
+        let mut store = CollectionStore::default();
+        assert!(store.add_item(&a, "Angel", 10));
+        assert!(!store.characters[&a.key].enabled);
+        assert!(!store.add_item(&a, "Angel", 20));
+        assert!(store.add_item(&b, "Angel", 30));
+        assert_eq!(store.unique_count(), 1);
+        assert_eq!(store.remove_item("Angel"), 2);
+        assert_eq!(store.unique_count(), 0);
+        assert_eq!(store.remove_item("Angel"), 0);
+        assert_eq!(store.characters.len(), 2);
     }
 }

@@ -1240,6 +1240,40 @@ fn import_checklist_items(app: AppHandle, key: String, rows: Vec<checklist::Chec
 }
 
 #[tauri::command]
+fn edit_collection_item(app: AppHandle, name: String, add: bool, key: Option<String>) -> Result<(), String> {
+    let canonical = checklist::collection_item(&name)
+        .ok_or_else(|| "Item is not unique equipment in the catalogue".to_string())?;
+    let current = app.state::<Shared>().stats().character();
+    let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let mut next = guard.clone();
+    let changed = if add {
+        let key = key.as_deref().ok_or("Character is required")?;
+        let identity = current.as_ref()
+            .map(collection::CollectionIdentity::from)
+            .filter(|identity| identity.key == key)
+            .or_else(|| guard.characters.get(key).map(|c| collection::CollectionIdentity {
+                key: key.to_string(), name: c.name.clone(), season: c.season, hardcore: c.hardcore,
+            }))
+            .ok_or("Character is not known yet")?;
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64).unwrap_or(0);
+        next.add_item(&identity, &canonical, ts_ms)
+    } else {
+        next.remove_item(&canonical) > 0
+    };
+    if changed {
+        let json = serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())?;
+        write_atomic(&collection_path(), &json).map_err(|e| e.to_string())?;
+        *guard = next;
+    }
+    drop(guard);
+    if changed { let _ = app.emit("collection-changed", ()); }
+    Ok(())
+}
+
+#[tauri::command]
 fn set_collection_enabled(app: AppHandle, key: String, enabled: bool) -> Result<(), String> {
     let current = app.state::<Shared>().stats().character();
     let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
@@ -3991,6 +4025,7 @@ pub fn run() {
             preview_checklist_url,
             preview_checklist_file,
             import_checklist_items,
+            edit_collection_item,
             set_collection_enabled,
             edit_collection,
             reset_stats,

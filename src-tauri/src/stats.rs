@@ -1801,9 +1801,11 @@ impl GameStats {
                 if first && !*unscaled {
                     let identity_name = crate::items::item_name(*item_type, *item_id, *weapon_type)
                         .filter(|english| crate::items::same_item(name, english, *item_type, *item_id, *weapon_type));
+                    let catalogue = crate::items::catalogue_entry(identity_name.unwrap_or(name))
+                        .or_else(|| crate::checklist::extra_item(name).map(|item|
+                            (item.name.as_str(), item.item_type, -1, item.weapon)));
                     if let (Some(character), Some((english, catalogue_type, catalogue_id, catalogue_weapon))) = (
-                        self.character.clone(),
-                        crate::items::catalogue_entry(identity_name.unwrap_or(name)),
+                        self.character.clone(), catalogue,
                     ) {
                         let (resolved_type, resolved_id, resolved_weapon) =
                             if identity_name.is_some() && !*announced {
@@ -2809,6 +2811,18 @@ mod tests {
         assert_eq!(finds.len(), 1);
         assert_eq!(finds[0].name, "Godfather");
         assert_eq!((finds[0].item_type, finds[0].item_id, finds[0].weapon_type), (3, 0, 1));
+    }
+
+    #[test]
+    fn identityless_heroic_weapon_reaches_the_collection_by_name() {
+        let mut s = GameStats::default();
+        s.apply(&account(CURRENT_SEASON, 0, 0));
+        s.apply(&GameEvent::Found { finder: "Test".into(), name: "Ethereal Musket".into() });
+        let finds = s.take_collection_sightings();
+        assert_eq!(finds.len(), 1);
+        assert_eq!(finds[0].name, "Ethereal Musket");
+        assert_eq!(finds[0].item_type, 3);
+        assert_eq!(finds[0].rarity, "Heroic");
     }
 
     #[test]

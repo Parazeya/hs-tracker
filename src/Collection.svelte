@@ -1,7 +1,8 @@
 <script>
-  import { DROP_CHASE, DROP_PLACES, DROP_RATE, DROP_ZONES, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, tierLabel } from './items.js';
+  import { BY_ID, DROP_CHASE, DROP_PLACES, DROP_RATE, DROP_ZONES, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, tierLabel } from './items.js';
+  import EXTRA_GEAR from './collection-extras.json';
   import { publicSeason } from './format.js';
-  import { itemName, locale, nameOf, placeLabel, say, t, typeLabel } from './say.svelte.js';
+  import { itemName, language, locale, placeLabel, say, t, typeLabel } from './say.svelte.js';
   import { invoke, listen } from './bridge.js';
   import { art } from './skin.svelte.js';
 
@@ -10,21 +11,32 @@
   const GEAR = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 18]);
   const CATALOGUE = (() => {
     const seen = new Set();
-    return Object.entries(ITEMS).flatMap(([key, name]) => {
+    const identified = Object.entries(ITEMS).flatMap(([key, name]) => {
       const [type, id, weapon] = key.split(':').map(Number);
       const lower = name.toLowerCase();
-      const rarity = RARITY_BY_NAME[lower] ?? '';
+      const known = BY_ID[key];
+      const rarity = known?.[1] ?? RARITY_BY_NAME[lower] ?? '';
       if (!GEAR.has(type) || !UNIQUE_RARITIES.includes(rarity) || seen.has(lower)) return [];
       seen.add(lower);
-      return [{ key: lower, name, type, id, weapon, rarity, tier: TIER_BY_NAME[lower] ?? 0,
-        rate: DROP_RATE[lower] ?? 0, chase: DROP_CHASE[lower] ?? 0,
+      return [{ key: lower, name, type, id, weapon, rarity, tier: known?.[2] ?? TIER_BY_NAME[lower] ?? 0,
+        rate: known?.[3] ?? DROP_RATE[lower] ?? 0, chase: DROP_CHASE[lower] ?? 0,
         places: (DROP_PLACES[lower] ?? []).filter(Boolean), zones: DROP_ZONES[lower] ?? [] }];
     });
+    const extra = EXTRA_GEAR.filter((it) => !seen.has(it.name.toLowerCase())).map((it) => {
+      const lower = it.name.toLowerCase();
+      return { key: lower, name: it.name, names: it.names, type: it.type, id: -1, weapon: it.weapon,
+        rarity: it.rarity, tier: it.tier, rate: DROP_RATE[lower] ?? 0, chase: DROP_CHASE[lower] ?? 0,
+        places: (DROP_PLACES[lower] ?? []).filter(Boolean), zones: DROP_ZONES[lower] ?? [] };
+    });
+    return [...identified, ...extra];
   })();
   const CATALOGUE_BY_NAME = new Map(CATALOGUE.map((it) => [it.key, it]));
   const RARITY_TOTALS = Object.fromEntries(UNIQUE_RARITIES.map((r) => [r, CATALOGUE.filter((it) => it.rarity === r).length]));
   const PAGE_SIZE = 100;
   const COLORS = { Satanic: 'c-sat', Set: 'c-set', Heroic: 'c-her', Angelic: 'c-ang', Unholy: 'c-unh' };
+  const displayItem = (it) => it.id < 0
+    ? (it.names?.[language()] || it.name)
+    : (itemName(it.type, it.id, it.weapon) ?? it.name);
 
   let data = $state({ current: null, characters: {}, items: {} });
   let expanded = $state('');
@@ -61,6 +73,13 @@
     modalTrigger = event.currentTarget;
     selected = null;
     pendingEdit = { action, key, name };
+  }
+
+  function askItemEdit(event, item) {
+    modalTrigger = event.currentTarget;
+    selected = null;
+    pendingEdit = { action: owned[item.key] === undefined ? 'add_item' : 'remove_item',
+      item, key: data.current?.key ?? roster[0]?.[0] ?? '' };
   }
 
   function closeEdit() { if (!saving) pendingEdit = null; }
@@ -127,7 +146,10 @@
   }
 
   function editTitle(edit) {
+    const displayName = edit.item && displayItem(edit.item);
     switch (edit.action) {
+      case 'add_item': return say('Add {name} to the collection?', { name: displayName });
+      case 'remove_item': return say('Remove {name} from the collection?', { name: displayName });
       case 'clear_history': return t('Clear collection history?');
       case 'clear_character': return say('Clear finds for {name}?', { name: edit.name });
       case 'remove_character': return say('Remove {name} from the collection?', { name: edit.name });
@@ -137,6 +159,8 @@
 
   function editDescription(edit) {
     switch (edit.action) {
+      case 'add_item': return t('Save this item for the selected character. Collection mode stays unchanged.');
+      case 'remove_item': return t('This item will be removed from every character in the collection.');
       case 'clear_history': return t('All recorded finds will be deleted. Collection mode stays on for enabled characters.');
       case 'clear_character': return t('Only this character’s finds will be deleted. Finds saved by other characters remain.');
       case 'remove_character': return t('The character and all their finds will be deleted. They can be added again later.');
@@ -150,7 +174,11 @@
     saving = 'edit';
     error = '';
     try {
-      await invoke('edit_collection', { action: edit.action, key: edit.key });
+      if (edit.action === 'add_item' || edit.action === 'remove_item') {
+        await invoke('edit_collection_item', { name: edit.item.name, add: edit.action === 'add_item', key: edit.key });
+      } else {
+        await invoke('edit_collection', { action: edit.action, key: edit.key });
+      }
       importResult = null;
       if (edit.action === 'remove_all_characters' || (edit.action === 'remove_character' && expanded === edit.key)) expanded = '';
       pendingEdit = null;
@@ -221,7 +249,7 @@
     const q = query.trim().toLocaleLowerCase(locale());
     return CATALOGUE.filter((it) => {
       const has = owned[it.key] !== undefined;
-      return (!q || it.name.toLowerCase().includes(q) || String(itemName(it.type, it.id, it.weapon)).toLocaleLowerCase(locale()).includes(q))
+      return (!q || it.name.toLowerCase().includes(q) || displayItem(it).toLocaleLowerCase(locale()).includes(q))
         && (!rarity || it.rarity === rarity)
         && (filter === 'all' || (filter === 'owned') === has);
     }).sort((a, b) => a.name.localeCompare(b.name));
@@ -280,7 +308,7 @@
       {#if expanded === key}
         <div class="character-finds">
           {#each characterFinds(c) as [name] (name)}
-            <button class="find-chip {COLORS[CATALOGUE_BY_NAME.get(name).rarity]}" onclick={(event) => openDetails(event, CATALOGUE_BY_NAME.get(name))}>{nameOf(name)}</button>
+            <button class="find-chip {COLORS[CATALOGUE_BY_NAME.get(name).rarity]}" onclick={(event) => openDetails(event, CATALOGUE_BY_NAME.get(name))}>{displayItem(CATALOGUE_BY_NAME.get(name))}</button>
           {:else}
             <span class="dim">{t('No finds recorded for this character yet.')}</span>
           {/each}
@@ -320,15 +348,20 @@
   <div class="box" style:border-image-source="url({art('chip_dark')})">
     <div class="rows" role="list">
       {#each found.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) as it (it.key)}
-        <div role="listitem">
+        <div class="item-line" role="listitem">
           <button class="row" class:has={owned[it.key] !== undefined} onclick={(event) => openDetails(event, it)} title={t('Drop location')}>
             <span class="mark">{owned[it.key] !== undefined ? '✓' : '·'}</span>
-            <span class="name {COLORS[it.rarity] ?? ''}">{itemName(it.type, it.id, it.weapon) ?? it.name}</span>
+            <span class="name {COLORS[it.rarity] ?? ''}">{displayItem(it)}</span>
             <span class="kind">{typeLabel(it.type, it.weapon)}</span>
             <span class="grade">{tierLabel(it.tier) || '—'}</span>
             <span class="status">{owned[it.key] !== undefined ? t('Found') : t('Missing')}</span>
             <span class="open" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="m6 3.5 4 4.5-4 4.5" /></svg></span>
           </button>
+          <button class="pick manual-item" class:danger={owned[it.key] !== undefined}
+            disabled={!!saving || (owned[it.key] === undefined && !roster.length)}
+            aria-label={owned[it.key] !== undefined ? t('Remove from collection') : t('Add to collection')}
+            title={owned[it.key] !== undefined ? t('Remove from collection') : t('Add to collection')}
+            onclick={(event) => askItemEdit(event, it)}>{owned[it.key] !== undefined ? '−' : '+'}</button>
         </div>
       {:else}
         <div class="empty">{t('nothing matches that')}</div>
@@ -346,11 +379,11 @@
 
   {#if selected}
     <div class="detail-scrim" role="presentation" onclick={closeDetails}></div>
-    <div class="detail-card menu" role="dialog" aria-modal="true" aria-label={itemName(selected.type, selected.id, selected.weapon) ?? selected.name} tabindex="-1" use:focusDetails style:border-image-source="url({art('chip_dark')})">
+    <div class="detail-card menu" role="dialog" aria-modal="true" aria-label={displayItem(selected)} tabindex="-1" use:focusDetails style:border-image-source="url({art('chip_dark')})">
       <button class="pick detail-close" onclick={closeDetails} aria-label={t('close')} title={t('close')}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4 12 12M12 4 4 12" /></svg>
       </button>
-      <div class="detail-name {COLORS[selected.rarity]}">{itemName(selected.type, selected.id, selected.weapon) ?? selected.name}</div>
+      <div class="detail-name {COLORS[selected.rarity]}">{displayItem(selected)}</div>
       <div class="detail-kind">{typeLabel(selected.type, selected.weapon)} · {t(selected.rarity)}{selected.tier ? ` · ${tierLabel(selected.tier)}` : ''}</div>
       <div class="detail-odds" class:solo={!(showGeneralRate(selected) && showPlaceRate(selected))}>
         {#if showGeneralRate(selected)}
@@ -378,9 +411,18 @@
     <div class="detail-card confirm-card menu" role="alertdialog" aria-modal="true" aria-label={editTitle(pendingEdit)} tabindex="-1" use:focusDetails style:border-image-source="url({art('chip_dark')})">
       <div class="confirm-title">{editTitle(pendingEdit)}</div>
       <div class="confirm-description">{editDescription(pendingEdit)}</div>
+      {#if pendingEdit.action === 'add_item'}
+        <label class="import-label" for="manual-character">{t('Add for character')}</label>
+        <select id="manual-character" class="picker import-character" bind:value={pendingEdit.key}>
+          {#each roster as [key, c] (key)}<option value={key}>{c.name} · {mode(c)}</option>{/each}
+        </select>
+      {/if}
       <div class="confirm-actions">
         <button class="pick" disabled={!!saving} onclick={closeEdit}>{t('Cancel')}</button>
-        <button class="pick danger confirm-delete" disabled={!!saving} onclick={confirmEdit}>{pendingEdit.action.startsWith('remove') ? t('Remove') : t('Clear')}</button>
+        <button class="pick confirm-delete" class:danger={pendingEdit.action !== 'add_item'}
+          disabled={!!saving || (pendingEdit.action === 'add_item' && !pendingEdit.key)} onclick={confirmEdit}>
+          {pendingEdit.action === 'add_item' ? t('Add') : pendingEdit.action.startsWith('remove') ? t('Remove') : t('Clear')}
+        </button>
       </div>
     </div>
   {/if}
@@ -406,7 +448,7 @@
           {#if importMatch.matched.length}
             <div class="import-matches" role="list">
               {#each importMatch.matched as { item } (item.key)}
-                <span role="listitem" class={COLORS[item.rarity]}>{item.name}</span>
+                <span role="listitem" class={COLORS[item.rarity]}>{displayItem(item)}</span>
               {/each}
             </div>
           {/if}
@@ -486,8 +528,10 @@
   .error { color: var(--rar-satanic); }
   .box { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
   .rows { min-height: 0; flex: 1; overflow-y: auto; }
-  .row { box-sizing: border-box; width: 100%; min-height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 4px; color: inherit; background: none; border: 0; border-bottom: 1px solid var(--plain-sep, var(--ground-10)); font: inherit; text-align: left; cursor: pointer; }
+  .item-line { display: flex; align-items: center; border-bottom: 1px solid var(--plain-sep, var(--ground-10)); }
+  .row { box-sizing: border-box; flex: 1; min-width: 0; min-height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 4px; color: inherit; background: none; border: 0; font: inherit; text-align: left; cursor: pointer; }
   .row:hover { background: var(--plain-rowhover, rgba(var(--pick-rgb), .08)); }
+  .manual-item { flex: none; width: 26px; min-width: 26px; height: 24px; margin: 1px 4px 1px 2px; padding: 0; font-size: 16px; line-height: 1; color: var(--gold-2); }
   .mark { width: 14px; flex: none; color: var(--gold-2); font-size: 16px; }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kind { width: 94px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bone-3); }

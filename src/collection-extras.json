@@ -1,0 +1,62 @@
+[
+  {
+    "name": "Ethereal Musket",
+    "rarity": "Heroic",
+    "type": 3,
+    "weapon": 14,
+    "tier": 6,
+    "tkey": "w_gun_ethereal_musket",
+    "names": {
+      "pt": "Mosquete Etéreo",
+      "ru": "Эфирный мушкет",
+      "zh": "缥缈火枪",
+      "ja": "幽玄のマスケット",
+      "ko": "에테르 머스킷",
+      "de": "Ätherische Muskete",
+      "fr": "Mousquet éthéré",
+      "sp": "Mosquete Etéreo",
+      "pl": "Eteryczny muszkiet",
+      "tw": "縹緲火槍"
+    }
+  },
+  {
+    "name": "Conjured Tentacle",
+    "rarity": "Heroic",
+    "type": 3,
+    "weapon": 10,
+    "tier": 6,
+    "tkey": "w_spell_conjured_tentacle",
+    "names": {
+      "pt": "Tentáculo Conjurado",
+      "ru": "Вызванное щупальце",
+      "zh": "召唤触手",
+      "ja": "召喚された触手",
+      "ko": "소환된 촉수",
+      "de": "Heraufbeschworenes Tentakel",
+      "fr": "Tentacule invoqué",
+      "sp": "Tentáculo Conjurado",
+      "pl": "Przywołana macka",
+      "tw": "召喚觸手"
+    }
+  },
+  {
+    "name": "Leviathan´s Spine",
+    "rarity": "Heroic",
+    "type": 3,
+    "weapon": 9,
+    "tier": 6,
+    "tkey": "w_spell_leviathans_spine",
+    "names": {
+      "pt": "Espinha do Leviatã",
+      "ru": "Хребет Левиафана",
+      "zh": "利维坦之脊",
+      "ja": "リヴァイアサンの背骨",
+      "ko": "리바이어던의 최후",
+      "de": "Leviathans Rückgrat",
+      "fr": "Épine dorsale du Léviathan",
+      "sp": "Columna del Leviatán",
+      "pl": "Kręgosłup Lewiatana",
+      "tw": "利維坦之脊"
+    }
+  }
+]

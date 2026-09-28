@@ -19,6 +19,63 @@ the community has a channel for it and the game ships no column.
 """
 
 SAID = {
+    'Add to collection': {
+        'de': 'Zur Sammlung hinzufügen', 'sp': 'Añadir a la colección', 'fi': 'Lisää kokoelmaan',
+        'fr': 'Ajouter à la collection', 'pl': 'Dodaj do kolekcji', 'pt': 'Adicionar à coleção',
+        'ru': 'Добавить в коллекцию', 'zh': '加入收藏', 'tw': '加入收藏',
+        'ja': 'コレクションに追加', 'ko': '컬렉션에 추가',
+    },
+    'Remove from collection': {
+        'de': 'Aus Sammlung entfernen', 'sp': 'Quitar de la colección', 'fi': 'Poista kokoelmasta',
+        'fr': 'Retirer de la collection', 'pl': 'Usuń z kolekcji', 'pt': 'Remover da coleção',
+        'ru': 'Удалить из коллекции', 'zh': '从收藏中移除', 'tw': '從收藏中移除',
+        'ja': 'コレクションから削除', 'ko': '컬렉션에서 제거',
+    },
+    'Add {name} to the collection?': {
+        'de': '{name} zur Sammlung hinzufügen?', 'sp': '¿Añadir {name} a la colección?',
+        'fi': 'Lisätäänkö {name} kokoelmaan?', 'fr': 'Ajouter {name} à la collection?',
+        'pl': 'Dodać {name} do kolekcji?', 'pt': 'Adicionar {name} à coleção?',
+        'ru': 'Добавить {name} в коллекцию?', 'zh': '将{name}加入收藏？', 'tw': '將{name}加入收藏？',
+        'ja': '{name}をコレクションに追加しますか？', 'ko': '{name}을(를) 컬렉션에 추가할까요?',
+    },
+    'Remove {name} from the collection?': {
+        'de': '{name} aus der Sammlung entfernen?', 'sp': '¿Quitar {name} de la colección?',
+        'fi': 'Poistetaanko {name} kokoelmasta?', 'fr': 'Retirer {name} de la collection?',
+        'pl': 'Usunąć {name} z kolekcji?', 'pt': 'Remover {name} da coleção?',
+        'ru': 'Удалить {name} из коллекции?', 'zh': '从收藏中移除{name}？', 'tw': '從收藏中移除{name}？',
+        'ja': '{name}をコレクションから削除しますか？', 'ko': '{name}을(를) 컬렉션에서 제거할까요?',
+    },
+    'Save this item for the selected character. Collection mode stays unchanged.': {
+        'de': 'Diesen Gegenstand für den gewählten Charakter speichern. Der Sammlungsmodus bleibt unverändert.',
+        'sp': 'Guarda este objeto para el personaje elegido. El modo colección no cambia.',
+        'fi': 'Tallenna esine valitulle hahmolle. Kokoelmatila ei muutu.',
+        'fr': 'Enregistrer cet objet pour le personnage choisi. Le mode collection reste inchangé.',
+        'pl': 'Zapisz przedmiot dla wybranej postaci. Tryb kolekcji się nie zmieni.',
+        'pt': 'Salvar este item para o personagem escolhido. O modo coleção não muda.',
+        'ru': 'Предмет будет записан за выбранным персонажем. Режим коллекции не изменится.',
+        'zh': '为所选角色保存此物品。收藏模式保持不变。', 'tw': '為所選角色儲存此物品。收藏模式維持不變。',
+        'ja': '選択したキャラクターの所持品として保存します。コレクションモードは変更されません。',
+        'ko': '선택한 캐릭터의 아이템으로 저장합니다. 컬렉션 모드는 변경되지 않습니다.',
+    },
+    'This item will be removed from every character in the collection.': {
+        'de': 'Dieser Gegenstand wird bei allen Charakteren aus der Sammlung entfernt.',
+        'sp': 'Este objeto se quitará de todos los personajes de la colección.',
+        'fi': 'Esine poistetaan kokoelman kaikilta hahmoilta.',
+        'fr': 'Cet objet sera retiré de tous les personnages de la collection.',
+        'pl': 'Przedmiot zostanie usunięty u wszystkich postaci w kolekcji.',
+        'pt': 'Este item será removido de todos os personagens da coleção.',
+        'ru': 'Предмет будет удалён у всех персонажей коллекции.',
+        'zh': '此物品将从收藏中的所有角色移除。', 'tw': '此物品將從收藏中的所有角色移除。',
+        'ja': 'コレクション内のすべてのキャラクターからこのアイテムを削除します。',
+        'ko': '컬렉션의 모든 캐릭터에서 이 아이템을 제거합니다.',
+    },
+    'Add for character': {
+        'de': 'Für Charakter hinzufügen', 'sp': 'Añadir para el personaje',
+        'fi': 'Lisää hahmolle', 'fr': 'Ajouter pour le personnage',
+        'pl': 'Dodaj dla postaci', 'pt': 'Adicionar para o personagem',
+        'ru': 'Добавить персонажу', 'zh': '添加给角色', 'tw': '新增給角色',
+        'ja': '追加するキャラクター', 'ko': '추가할 캐릭터',
+    },
     'Import Check List': {
         'de': 'Check List importieren', 'sp': 'Importar Check List', 'fi': 'Tuo Check List',
         'fr': 'Importer la Check List', 'pl': 'Importuj Check List', 'pt': 'Importar Check List',

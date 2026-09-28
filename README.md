@@ -24,19 +24,19 @@
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.14/HS.Tracker_1.1.14_x64-setup.exe">HS.Tracker_1.1.14_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.15/HS.Tracker_1.1.15_x64-setup.exe">HS.Tracker_1.1.15_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.14/HS.Tracker_1.1.14_amd64.AppImage">HS.Tracker_1.1.14_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.15/HS.Tracker_1.1.15_amd64.AppImage">HS.Tracker_1.1.15_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.14/HS.Tracker_1.1.14_amd64.deb">HS.Tracker_1.1.14_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.15/HS.Tracker_1.1.15_amd64.deb">HS.Tracker_1.1.15_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.14/HS.Tracker-1.1.14-1.x86_64.rpm">HS.Tracker-1.1.14-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.15/HS.Tracker-1.1.15-1.x86_64.rpm">HS.Tracker-1.1.15-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
@@ -251,6 +251,8 @@ file and choose that file. Review the matched and skipped names, select a
 character, then import. Matching checks the item's name, rarity and equipment
 slot against Tracker's catalogue. Existing finds are kept; importing again
 does not duplicate them or turn live tracking on.
+Use the `+` or `−` button beside an item to add it for a chosen character or
+remove it from the shared collection. Each manual edit asks for confirmation.
 Click an item in the collection to see its general and location-specific drop
 chances and the places where it can drop.
 Use **Clear history** to reset finds while keeping the characters and their

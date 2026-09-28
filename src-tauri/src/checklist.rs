@@ -1,4 +1,4 @@
-use std::{io::Cursor, time::Duration};
+use std::{io::Cursor, sync::OnceLock, time::Duration};
 
 use calamine::{open_workbook_auto_from_rs, Data, Range, Reader};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,78 @@ pub struct CheckedItem {
 pub struct ChecklistPreview {
     pub source: String,
     pub checked: Vec<CheckedItem>,
+}
+
+/// Three current Heroic weapons have no packet identity in the game's item
+/// data. Keep them in the collection catalogue without inventing game IDs.
+#[derive(Deserialize)]
+pub struct ExtraItem {
+    pub name: String,
+    pub rarity: String,
+    #[serde(rename = "type")]
+    pub item_type: i64,
+    pub weapon: i64,
+}
+
+fn extra_items() -> &'static [ExtraItem] {
+    static ITEMS: OnceLock<Vec<ExtraItem>> = OnceLock::new();
+    ITEMS.get_or_init(|| serde_json::from_str(include_str!("../../src/collection-extras.json"))
+        .expect("collection extras are valid JSON"))
+}
+
+/// Fold harmless spelling differences in the community checklist. Exact
+/// rarity and equipment slot are still checked before an item is accepted.
+fn name_key(name: &str) -> String {
+    let mut key = String::new();
+    for ch in name.trim().to_lowercase().chars() {
+        let folded = match ch {
+            'à' | 'á' | 'â' | 'ä' | 'ã' | 'å' => 'a',
+            'è' | 'é' | 'ê' | 'ë' => 'e',
+            'ì' | 'í' | 'î' | 'ï' => 'i',
+            'ò' | 'ó' | 'ô' | 'ö' | 'õ' | 'ø' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            c => c,
+        };
+        if folded.is_alphanumeric() { key.push(folded); }
+    }
+    key
+}
+
+fn checklist_name_key(name: &str) -> String {
+    let key = name_key(name);
+    match key.as_str() {
+        // The source checklist has these three old spellings. Each maps to
+        // one gear name after rarity and slot are checked below.
+        "metalvolcalistsleathermask" => "metalvocalistsleathermask".into(),
+        "aracnistswrath" => "arcanistswrath".into(),
+        "graxysmomlure" => "graxysluckylure".into(),
+        _ => key,
+    }
+}
+
+fn catalogue() -> impl Iterator<Item = (&'static str, i64, &'static str)> {
+    items::catalogue_items()
+        .map(|(name, item_type, _, _, rarity)| (name, item_type, rarity))
+        .chain(extra_items().iter().map(|item| (item.name.as_str(), item.item_type, item.rarity.as_str())))
+}
+
+pub fn extra_item(name: &str) -> Option<&'static ExtraItem> {
+    let key = name_key(name);
+    extra_items().iter().find(|item| name_key(&item.name) == key)
+}
+
+/// Validate a manually edited item against the same equippable catalogue.
+pub fn collection_item(name: &str) -> Option<String> {
+    let key = name_key(name);
+    let mut found = None;
+    for (canonical, item_type, rarity) in catalogue() {
+        if name_key(canonical) != key || !stats::collection_eligible(item_type, rarity) { continue; }
+        if found.as_deref().is_some_and(|previous: &str| previous != canonical) { return None; }
+        found = Some(canonical.to_lowercase());
+    }
+    found
 }
 
 fn cell(range: &Range<Data>, row: u32, col: u32) -> String {
@@ -57,16 +129,22 @@ fn slot_matches(slot: &str, item_type: i64) -> bool {
 }
 
 fn resolve(name: &str, rarity: &str, slot: &str) -> Option<String> {
-    let normalized = name.trim().replace('‘', "'").replace('’', "'");
-    if items::catalogue_name_is_ambiguous(&normalized) {
-        return None;
+    let key = checklist_name_key(name);
+    let mut found = None;
+    for (canonical, item_type, known_rarity) in catalogue() {
+        if name_key(canonical) != key
+            || !stats::collection_eligible(item_type, known_rarity)
+            || !slot_matches(slot, item_type)
+        { continue; }
+        // This one row calls Voodoo Doll Set; the game calls the sole charm of
+        // that name Heroic. The name and slot still identify it exactly.
+        let old_voodoo_rarity = key == "voodoodoll" && rarity.trim().eq_ignore_ascii_case("Set")
+            && known_rarity == "Heroic";
+        if !known_rarity.eq_ignore_ascii_case(rarity.trim()) && !old_voodoo_rarity { continue; }
+        if found.as_deref().is_some_and(|previous: &str| previous != canonical) { return None; }
+        found = Some(canonical.to_string());
     }
-    let (canonical, item_type, _, _) = items::catalogue_entry(&normalized)?;
-    let known_rarity = items::rarity_by_name(canonical)?;
-    (known_rarity.eq_ignore_ascii_case(rarity.trim())
-        && stats::collection_eligible(item_type, known_rarity)
-        && slot_matches(slot, item_type))
-    .then(|| canonical.to_string())
+    found
 }
 
 pub fn resolve_checked_item(item: &CheckedItem) -> Option<String> {
@@ -228,6 +306,37 @@ mod tests {
     }
 
     #[test]
+    fn collector_checklist_spelling_and_identity_matches() {
+        for (name, rarity, slot) in [
+            ("Voodoo Doll", "Set", "Charm"),
+            ("Metal Volcalist's Leather Mask", "Set", "Helmet"),
+            ("Angel", "Set", "Weapon"),
+            ("Death's Scythe", "Set", "Weapon"),
+            ("Mevius Mighty Helmet", "Set", "Helmet"),
+            ("Shrunken Head", "Satanic", "Charm"),
+            ("Surstromming", "Satanic", "Potion"),
+            ("Sarcasters Coffee Mug", "Satanic", "Potion"),
+            ("Leviathan´s Spine", "Heroic", "Weapon"),
+            ("Grimtide's Necklace", "Heroic", "Amulet"),
+            ("Komodos Bloodstrap", "Heroic", "Belt"),
+            ("Ethereal Musket", "Heroic", "Weapon"),
+            ("Sahkopuimuri", "Heroic", "Weapon"),
+            ("Ghostplunderer's Marchers", "Heroic", "Boot"),
+            ("Graxy's Mom Lure", "Heroic", "Charm"),
+            ("Captain's Anchor", "Heroic", "Charm"),
+            ("Aracnist's Wrath", "Heroic", "Chest"),
+            ("Conjured Tentacle", "Heroic", "Weapon"),
+        ] {
+            assert!(resolve(name, rarity, slot).is_some(), "{name} should match");
+        }
+        assert_eq!(resolve("Angel", "Set", "Weapon"), Some("Angel".into()));
+        assert!(resolve("Angel", "Heroic", "Weapon").is_none());
+        assert!(resolve("Voodoo Doll", "Set", "Helmet").is_none());
+        assert!(collection_item("Conjured Tentacle").is_some());
+        assert!(collection_item("Uncut Jewel").is_none());
+    }
+
+    #[test]
     #[ignore = "requires access to the public Google Sheets template"]
     fn preview_template_inside_async_runtime() {
         tauri::async_runtime::block_on(async {
@@ -236,6 +345,20 @@ mod tests {
             let preview = parse_workbook(bytes, url.into()).unwrap();
             assert!(!preview.checked.is_empty());
             assert!(preview.checked.iter().any(|item| item.canonical.is_some()));
+        });
+    }
+
+    #[test]
+    #[ignore = "set HS_CHECKLIST_TEST_URL to a viewable Google Sheets copy"]
+    fn collector_copy_matches_checked_gear_inside_async_runtime() {
+        tauri::async_runtime::block_on(async {
+            let url = std::env::var("HS_CHECKLIST_TEST_URL").expect("set HS_CHECKLIST_TEST_URL");
+            let bytes = download_workbook(&url).await.unwrap();
+            let preview = parse_workbook(bytes, url).unwrap();
+            assert!(!preview.checked.is_empty());
+            let skipped = preview.checked.iter().filter(|item| item.canonical.is_none())
+                .map(|item| item.name.as_str()).collect::<Vec<_>>();
+            assert!(skipped.is_empty(), "unmatched checked gear: {skipped:?}");
         });
     }
 }
