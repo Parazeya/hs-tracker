@@ -6,7 +6,7 @@
 
 - Collection tracks unique equipment and charms across selected characters, with rarity totals, item locations and drop chances.
 - Import checked finds from a Google Sheets Check List link or an `.xlsx` file.
-- New collection finds appear in announcements; the 666th find has its own sound and effect.
+- New collection finds appear in announcements.
 
 ### Changed
 
