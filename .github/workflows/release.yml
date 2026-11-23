@@ -71,7 +71,8 @@ jobs:
   # cutting a release. The .rpm is built in a Fedora job of its own below,
   # because a binary linked here asks for a libpcap Fedora does not ship.
   linux:
-    runs-on: ubuntu-24.04
+    # Match the local release image and its glibc floor for the DEB and AppImage.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
