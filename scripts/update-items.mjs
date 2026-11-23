@@ -1,81 +1,89 @@
-// `npm run items` — rebuild the item tables from the game itself.
-//
-// Until today this started with a download: tools/fetch_items.py asked a
-// datamining site for rarities, grades and identities, and a season could not
-// be tracked until someone else had datamined it. All of that now comes out of
-// Hero_Siege.exe and translationsItem.csv, read by the extractor next door, so
-// the only thing standing between a game patch and correct tables is this
-// command.
-//
-//   npm run items                 # read the game, regenerate the tables
-//   npm run items -- --dry        # write the item file, do not touch the repo
-//
-// The extractor lives outside this repository because it is a tool for reading
-// the game, not part of the tracker. Point HS_EXTRACTOR at it if it is not
-// beside this checkout.
-
+// Export one game build, generate into staging, then promote the complete set.
+// A failed export cannot reuse an earlier output. --dry validates and generates
+// without replacing installed data or source files.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { BUNDLE, EXTRACTOR, EXTRACTOR_BIN, GAME, PYTHON, REPO } from './paths.mjs';
+import {
+  generatedEntries, publishItemUpdate, recoverItemUpdate,
+  stageBundle, validateBundle, withItemUpdateLock,
+} from './item-bundle.mjs';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const dry = process.argv.includes('--dry');
-
-import { EXTRACTOR, GAME } from './paths.mjs';
-
-const home = EXTRACTOR;
-if (!existsSync(join(home, 'target', 'release', 'hse-extractor.exe'))) {
-  console.error(
-    `\n  No built extractor at\n    ${home}\n` +
-      '  Set HS_EXTRACTOR in .env (see .env.example), and build it there first.\n'
-  );
-  process.exit(1);
+export async function updateItemTables({
+  root = REPO, game = GAME, extractor = EXTRACTOR_BIN,
+  extractorHome = EXTRACTOR, bundle = BUNDLE,
+  dry = false, run = execFileSync,
+} = {}) {
+  return withItemUpdateLock(root, async () => {
+    if (recoverItemUpdate(root)) console.log('Recovered the previous interrupted item update.');
+    const data = join(root, 'tools', 'data');
+    mkdirSync(data, { recursive: true });
+    const staging = mkdtempSync(join(data, '.item-stage-'));
+    const exported = join(staging, 'export');
+    const prepared = join(staging, 'helper');
+    const generated = join(staging, 'generated');
+    mkdirSync(generated, { recursive: true });
+    try {
+      let incoming = bundle;
+      if (!incoming) {
+        if (!existsSync(extractor)) throw new Error(`No built Extractor at ${extractor}. Set HS_EXTRACTOR_BIN or build ${extractorHome}.`);
+        if (!game || !existsSync(join(game, 'data.win'))) throw new Error('No game installation found. Set HERO_SIEGE_BIN or HS_DATA_BUNDLE.');
+        console.log(`Extracting ${game}`);
+        run(extractor, ['--export', exported], {
+          cwd: extractorHome, stdio: 'inherit',
+          env: { ...process.env, HERO_SIEGE: game, HERO_SIEGE_BIN: game },
+        });
+        incoming = exported;
+      }
+      const checkGame = game && existsSync(join(game, 'data.win')) ? game : '';
+      const verified = await validateBundle(incoming, { game: checkGame });
+      stageBundle(verified, prepared);
+      const staged = await validateBundle(prepared, { game: checkGame });
+      console.log(`Validated build ${staged.manifest.game.build_id ?? staged.manifest.game.fingerprint.slice(0, 12)}.`);
+      const partial = Object.entries(staged.manifest.datasets).filter(([, d]) => d.status === 'partial').map(([name]) => name);
+      if (partial.length) console.log(`Partial extraction: ${partial.join(', ')}. The manifest retains the unresolved fields.`);
+      run(PYTHON, [join(root, 'tools', 'gen_items.py')], {
+        cwd: root, stdio: 'inherit',
+        env: {
+          ...process.env, HERO_SIEGE: game || '', HERO_SIEGE_BIN: game || '',
+          HS_DATA_BUNDLE: prepared, HS_ITEMS_INPUT: staged.files.get('items'),
+          HS_ITEMS_OUT_JS: join(generated, 'items.js'),
+          HS_ITEMS_OUT_RS: join(generated, 'items.rs'),
+          HS_ITEMS_LANG_OUT: join(generated, 'lang'),
+        },
+      });
+      const outputs = generatedEntries(generated);
+      for (const output of outputs) {
+        if (!existsSync(output.source) || !readFileSync(output.source).length) throw new Error(`Generator did not write ${output.source}.`);
+      }
+      // Steam or the input package may have changed during generation.
+      await validateBundle(prepared, { game: checkGame });
+      if (dry) {
+        console.log(`Dry run complete. Validated outputs are at ${staging}`);
+        return { staging, manifest: staged.manifest, installed: false };
+      }
+      publishItemUpdate(root, [{ source: prepared, target: 'tools/data/helper' }, ...outputs]);
+      console.log(`Installed items, talents, manifest and generated tables for ${staged.manifest.game.fingerprint.slice(0, 12)}.`);
+      rmSync(staging, { recursive: true, force: true });
+      return { manifest: staged.manifest, installed: true };
+    } catch (error) {
+      // Retained staging is evidence, never an input to the next invocation.
+      throw new Error(`${error.message}\nStaging retained at ${staging}`, { cause: error });
+    }
+  });
 }
 
-const exe = join(home, 'target', 'release', 'hse-extractor.exe');
-const staged = join(home, 'out', 'items.json');
-const target = join(root, 'tools', 'data', 'helper', 'items.json');
-
-// Run it from its own folder: it looks for data/ beside itself.
-console.log(`\n  $ hse-extractor --update  (in ${home})\n`);
-execFileSync(exe, ['--update', staged], { cwd: home, stdio: 'inherit' });
-
-if (!existsSync(staged)) {
-  console.error('\n  The extractor exited without writing the file.\n');
-  process.exit(1);
-}
-
-// A file this much smaller than the one it replaces is a decode that went wrong
-// rather than a game that shed half its items, and it is not worth finding that
-// out from a table of blanks.
-if (existsSync(target)) {
-  const [was, now] = [statSync(target).size, statSync(staged).size];
-  if (now < was * 0.5) {
-    console.error(
-      `\n  Refusing to install: ${(now / 1024) | 0} KB against the previous ${(was / 1024) | 0} KB.` +
-        `\n  The file is at ${staged} if you want to look at it.\n`
-    );
-    process.exit(1);
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const unknown = process.argv.slice(2).filter((arg) => arg !== '--dry');
+  if (unknown.length) {
+    console.error(`Unknown arguments: ${unknown.join(' ')}. Use --dry or set HS_DATA_BUNDLE.`);
+    process.exitCode = 1;
+  } else {
+    updateItemTables({ dry: process.argv.includes('--dry') }).catch((error) => {
+      console.error(error.message);
+      process.exitCode = 1;
+    });
   }
 }
-
-if (dry) {
-  console.log(`\n  --dry, so nothing was installed. The file is at\n    ${staged}\n`);
-  process.exit(0);
-}
-
-copyFileSync(staged, target);
-console.log(`\n  installed ${target}\n`);
-
-// The generator reads the game too — for the translated names and the stat
-// labels — and it looks for it in the environment, which is not where this
-// checkout keeps that path. Told nothing it looked at a folder that does not
-// exist on this machine and fell back to the datamined names without failing,
-// so a season of renamed items would have gone in under last season's names.
-console.log('  $ python tools/gen_items.py\n');
-execFileSync('python', [join(root, 'tools', 'gen_items.py')], {
-  cwd: root,
-  stdio: 'inherit',
-  env: { ...process.env, HERO_SIEGE_BIN: GAME },
-});

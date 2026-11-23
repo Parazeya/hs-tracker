@@ -324,6 +324,17 @@ pub struct SeriesPoint {
     pub xp: i64,
 }
 
+/// One unconfirmed cumulative observation. No magnitude is accepted from a
+/// single save, and time alone never promotes it into earnings.
+#[derive(Default)]
+struct XpCandidate {
+    value: i64,
+    credit_here: bool,
+    rollover_cover: i64,
+    lower_explicit: i64,
+    lower_matched_here: i64,
+}
+
 pub struct GameStats {
     pub(crate) start: Instant,
     /// wall clock for the same moment, so a finished run can say when it was
@@ -349,6 +360,12 @@ pub struct GameStats {
     gold_earned: i64,
     total_xp: i64,
     xp_earned: i64,
+    xp_candidate: Option<XpCandidate>,
+    xp_anchor: Option<i64>,
+    xp_pending_step: i64,
+    xp_pending_since: Option<Instant>,
+    xp_unseen: i64,
+    xp_hero_level: Option<i64>,
     total_kills: i64,
     kills_earned: i64,
     items: HashMap<&'static str, ItemCount>,
@@ -643,6 +660,12 @@ impl Default for GameStats {
             gold_earned: 0,
             total_xp: 0,
             xp_earned: 0,
+            xp_candidate: None,
+            xp_anchor: None,
+            xp_pending_step:0,
+            xp_pending_since:None,
+            xp_unseen: 0,
+            xp_hero_level: None,
             total_kills: 0,
             kills_earned: 0,
             items: RARITIES.iter().map(|(_, name)| (*name, ItemCount::default())).collect(),
@@ -714,6 +737,10 @@ impl GameStats {
     /// Character, zone and the diff baselines survive a session reset — only
     /// the earned counters restart, so the next packet still yields a diff.
     pub fn reset(&mut self) {
+        self.close_xp_epoch();
+        let mut xp_candidate=self.xp_candidate.take();
+        if let Some(candidate)=xp_candidate.as_mut() {candidate.credit_here=false;}
+        let xp_baseline=(self.xp_anchor,self.xp_unseen,self.xp_hero_level,self.xp_pending_step,self.xp_pending_since);
         let revision = self.revision;
         let extra_rev = self.extra_rev;
         // These travel with `satanic` below rather than in the carry tuple,
@@ -789,6 +816,8 @@ impl GameStats {
             self.baseline_for.take(),
         );
         *self = Self::default();
+        self.xp_candidate=xp_candidate;
+        (self.xp_anchor,self.xp_unseen,self.xp_hero_level,self.xp_pending_step,self.xp_pending_since)=xp_baseline;
         (
             self.character,
             self.satanic,
@@ -1012,6 +1041,7 @@ impl GameStats {
     pub fn set_finished(&mut self, on: bool) {
         self.finished = on;
         if on {
+            self.close_xp_epoch();
             self.hold(Instant::now(), true);
         } else {
             self.release();
@@ -1375,10 +1405,10 @@ impl GameStats {
     /// Returns the journal entry when this event produced a new tracked drop.
     pub fn apply(&mut self, event: &GameEvent) -> Option<DropEntry> {
         // A run closed by hand stays closed until the next one is started.
-        // Nothing counts, nothing sounds, and the clock does not move — which
-        // is the whole point of the button: what happens between two runs is
-        // not part of either.
-        if self.finished {
+        // Live financial/account marks still move while earnings and alerts
+        // are frozen. Otherwise starting the next run books the idle interval.
+        if self.finished && !matches!(event,GameEvent::Account{..}|GameEvent::Gold(_)
+            |GameEvent::XpGain(_)|GameEvent::WhoseAccount(_)) {
             return None;
         }
         self.revision += 1;
@@ -1422,14 +1452,7 @@ impl GameStats {
             // read was a guild share to scale up or a quest reward to take as
             // it stands. Account totals later correct any drift upwards.
             GameEvent::XpGain(xp) => {
-                let gained = *xp;
-                if gained > 0 {
-                    // Saturating, like every counter here: a wrapped total is a
-                    // negative one, and it stays negative for the session.
-                    self.total_xp = self.total_xp.saturating_add(gained);
-                    self.xp_earned = self.xp_earned.saturating_add(gained);
-                    self.progressed();
-                }
+                self.apply_xp_gain(*xp);
             }
             GameEvent::Account {
                 experience,
@@ -1464,6 +1487,12 @@ impl GameStats {
                 if switched {
                     self.stale_save = true;
                     self.xp_authoritative = false;
+                    self.xp_candidate=None;
+                    self.xp_anchor=None;
+                    self.xp_pending_step=0;
+                    self.xp_pending_since=None;
+                    self.xp_unseen=0;
+                    self.xp_hero_level=None;
                     self.total_kills = 0;
                     self.tally_base.clear();
                     // The purse travels with the character too, and two of them
@@ -1480,37 +1509,19 @@ impl GameStats {
                 if *has_experience && !name.is_empty() {
                     self.baseline_for = Some(name.clone());
                 }
-                if self.stale_save && *has_experience && *experience > 0 {
+                if self.stale_save && *has_experience && *experience >= 0 {
                     self.total_xp = *experience;
+                    self.xp_candidate=None;
+                    self.xp_anchor=Some(*experience);
+                    self.xp_pending_step=0;
+                    self.xp_pending_since=None;
+                    self.xp_unseen=0;
+                    self.xp_hero_level=(*herolevel>0).then_some(*herolevel);
                     self.xp_authoritative = true;
                     self.total_kills = *kills;
                     self.stale_save = false;
-                } else if *has_experience && *experience > 0 {
-                    // only trust a diff between two authoritative totals; the
-                    // first one just calibrates (guild-XP guesses precede it)
-                    if self.xp_authoritative {
-                        let diff = experience - self.total_xp;
-                        if diff > 0 {
-                            self.xp_earned = self.xp_earned.saturating_add(diff);
-                            self.progressed();
-                        } else if self.gained_a_hero_level(*herolevel) {
-                            // `experience` is the XP inside the current hero
-                            // level and starts again at each one, so a level-up
-                            // arrives as a large negative diff. Read as "no
-                            // progress" it discards the whole crossing, which
-                            // is why the figure ran low for anyone levelling
-                            // often.
-                            //
-                            // What can be recovered is what carried over. The
-                            // rest — from the last save up to the level's own
-                            // requirement — needs a table of requirements the
-                            // game never sends.
-                            self.xp_earned = self.xp_earned.saturating_add(*experience);
-                            self.progressed();
-                        }
-                    }
-                    self.total_xp = *experience;
-                    self.xp_authoritative = true;
+                } else if *has_experience && *experience >= 0 {
+                    self.apply_xp_total(*experience,*herolevel);
                 }
                 // The game rebases these statistics itself: after an instance
                 // restart a save can report fewer kills than the one before.
@@ -1520,7 +1531,7 @@ impl GameStats {
                 if *kills > 0 && self.total_kills != *kills {
                     if self.total_kills != 0 {
                         let diff = kills - self.total_kills;
-                        if diff > 0 {
+                        if diff > 0 && !self.finished {
                             self.kills_earned = self.kills_earned.saturating_add(diff);
                             self.progressed();
                         }
@@ -1534,7 +1545,7 @@ impl GameStats {
                     match self.tally_base.entry(key) {
                         std::collections::hash_map::Entry::Occupied(mut seen) => {
                             let diff = now - seen.get();
-                            if diff > 0 {
+                            if diff > 0 && !self.finished {
                                 let seen = self.tally_earned.entry(key).or_insert(0);
                                 *seen = seen.saturating_add(diff);
                             }
@@ -1568,7 +1579,7 @@ impl GameStats {
                 // contradict it with.
                 if let (Some(room), true) = (self.room.as_deref(), *act > 0) {
                     if matches!(act_of_room(room), Some(was) if was != *act) {
-                        self.bank_room_time();
+                        if !self.paused() {self.bank_room_time();}
                         self.room = None;
                         self.room_since = None;
                         self.revision += 1;
@@ -2050,6 +2061,172 @@ impl GameStats {
         None
     }
 
+    fn credit_xp(&mut self,amount:i64) {
+        if amount>0 && !self.finished {
+            self.xp_earned=self.xp_earned.saturating_add(amount);
+            self.progressed();
+        }
+    }
+
+    fn expire_xp_matching(&mut self,now:Instant) {
+        if self.xp_pending_since.is_some_and(|at|now.duration_since(at)>IN_FLIGHT) {
+            self.xp_pending_step=0;self.xp_pending_since=None;
+        }
+    }
+
+    fn apply_xp_gain(&mut self,gained:i64) {
+        if gained<=0 {return;}
+        self.expire_xp_matching(Instant::now());
+        let already=self.xp_pending_step.min(gained);
+        self.xp_pending_step-=already;
+        let fresh=gained-already;
+        if let Some(candidate)=self.xp_candidate.as_mut()
+            .filter(|candidate|self.xp_anchor.is_some_and(|anchor|candidate.value<anchor)) {
+            candidate.lower_explicit=candidate.lower_explicit.saturating_add(gained);
+            if !self.finished {candidate.lower_matched_here=candidate.lower_matched_here.saturating_add(already);}
+        }
+        // Every explicit idle report belongs outside the next run, including
+        // the ambiguous overlap with a pre-finish cumulative candidate. Keep
+        // that conservative prediction until the save catches up.
+        let observed=if self.finished {gained} else {fresh};
+        self.xp_unseen=self.xp_unseen.saturating_add(observed);
+        self.total_xp=self.total_xp.saturating_add(observed);
+        self.credit_xp(fresh);
+    }
+
+    fn confirm_xp_candidate(&mut self,candidate:XpCandidate,now:Instant) {
+        let anchor=self.xp_anchor.unwrap_or(candidate.value);
+        let climb=candidate.value.saturating_sub(anchor).max(0);
+        let covered=candidate.rollover_cover.min(climb);
+        let matching=self.xp_unseen.min(climb-covered);
+        self.xp_unseen-=matching;
+        let fresh=climb-covered-matching;
+        if fresh>0 {
+            // Same bounded bidirectional debt as bank deposits: a delayed
+            // explicit report can confirm this inferred gain, not repeat it.
+            self.xp_pending_step=self.xp_pending_step.saturating_add(fresh);
+            self.xp_pending_since=Some(now);
+            if candidate.credit_here {self.credit_xp(fresh);}
+        }
+        self.xp_anchor=Some(candidate.value);
+    }
+
+    fn close_xp_epoch(&mut self) {
+        // An unconfirmed tail is not earnings, and cannot become the next
+        // run's earnings when its delayed save or delta finally arrives.
+        if let Some(mut candidate)=self.xp_candidate.take() {
+            candidate.credit_here=false;
+            if candidate.value<self.xp_anchor.unwrap_or(candidate.value) {
+                // A lone lower read is still unconfirmed at a run boundary.
+                candidate.lower_matched_here=0;
+                self.xp_candidate=Some(candidate);
+                return;
+            }
+            self.confirm_xp_candidate(candidate,Instant::now());
+            self.total_xp=self.xp_anchor.unwrap().saturating_add(self.xp_unseen);
+        }
+    }
+
+    fn apply_xp_total(&mut self,current:i64,hero_level:i64) {
+        self.apply_xp_total_at(current,hero_level,Instant::now());
+    }
+
+    fn observe_lower_xp(&mut self,current:i64) {
+        let anchor=self.xp_anchor.unwrap();
+        let previous=self.xp_candidate.take().filter(|candidate|candidate.value<anchor);
+        match previous {
+            Some(candidate) if current>=candidate.value => {
+                // Clear the old epoch, but retain explicit events observed
+                // after its first lower read. They already earned their XP.
+                self.xp_anchor=Some(candidate.value);
+                self.xp_unseen=candidate.lower_explicit;
+                self.xp_pending_step=0;self.xp_pending_since=None;
+                self.credit_xp(candidate.lower_matched_here);
+                self.xp_candidate=(current>candidate.value).then_some(XpCandidate {
+                    value:current,credit_here:!self.finished,rollover_cover:0,..Default::default()
+                });
+            }
+            previous => {
+                let (lower_explicit,lower_matched_here)=previous
+                    .map(|candidate|(candidate.lower_explicit,candidate.lower_matched_here)).unwrap_or_default();
+                self.xp_candidate=Some(XpCandidate {
+                    value:current,credit_here:!self.finished,rollover_cover:0,
+                    lower_explicit,lower_matched_here,
+                });
+            }
+        }
+    }
+
+    fn apply_xp_total_at(&mut self,current:i64,hero_level:i64,now:Instant) {
+        self.expire_xp_matching(now);
+        let level_up=self.gained_a_hero_level(hero_level);
+        if !self.xp_authoritative || self.xp_anchor.is_none() {
+            self.xp_anchor=Some(current);self.xp_candidate=None;self.xp_unseen=0;
+        } else if self.finished {
+            // Idle observations move live marks without producing earnings.
+            // Preserve explicit gains ahead of a same-level save, so their
+            // eventual confirmation also stays outside the next run.
+            if level_up {
+                self.xp_candidate=None;
+                self.xp_anchor=Some(current);self.xp_unseen=0;
+                self.xp_pending_step=0;self.xp_pending_since=None;
+            } else if current<self.xp_anchor.unwrap() {
+                self.observe_lower_xp(current);
+            } else {
+                self.xp_candidate=None;
+                self.confirm_xp_candidate(XpCandidate {
+                    value:current,credit_here:false,rollover_cover:0,..Default::default()
+                },now);
+            }
+        } else if level_up {
+            // The counter changed epochs. Its old requirement is unknown, so
+            // a new level cannot corroborate the old unconfirmed magnitude.
+            // Explicit/confirmed earnings remain; the remainder is staged.
+            self.xp_candidate=None;
+            let covered=current.min(self.xp_unseen);
+            self.xp_anchor=Some(0);self.xp_unseen=0;
+            self.xp_pending_step=0;self.xp_pending_since=None;
+            self.xp_candidate=(current>0).then_some(XpCandidate {
+                value:current,credit_here:!self.finished,rollover_cover:covered,..Default::default()
+            });
+        } else {
+            let anchor=self.xp_anchor.unwrap();
+            if current<anchor {
+                self.observe_lower_xp(current);
+            } else if current==anchor {
+                self.xp_candidate=None;
+            } else if let Some(candidate)=self.xp_candidate.take() {
+                if candidate.value<anchor {
+                    // A corrected return from a lone bad lower read cannot
+                    // turn the original counter into a fresh climb.
+                    self.xp_candidate=Some(XpCandidate {
+                        value:current,credit_here:!self.finished,rollover_cover:0,..Default::default()
+                    });
+                } else if current>=candidate.value {
+                    self.confirm_xp_candidate(candidate,now);
+                    let anchor=self.xp_anchor.unwrap();
+                    self.xp_candidate=(current>anchor).then_some(XpCandidate {
+                        value:current,credit_here:!self.finished,rollover_cover:0,..Default::default()
+                    });
+                } else {
+                    // A correction, even minutes later, replaces the candidate.
+                    // No unconfirmed spike has reached XP/H or the chart.
+                    self.xp_candidate=Some(XpCandidate {
+                        value:current,credit_here:candidate.credit_here,
+                        rollover_cover:candidate.rollover_cover.min(current-anchor),..Default::default()
+                    });
+                }
+            } else {
+                self.xp_candidate=Some(XpCandidate {
+                    value:current,credit_here:!self.finished,rollover_cover:0,..Default::default()
+                });
+            }
+        }
+        self.total_xp=self.xp_anchor.unwrap_or(current).saturating_add(self.xp_unseen);
+        if hero_level>0 {self.xp_hero_level=Some(hero_level);}
+        self.xp_authoritative=true;
+    }
+
     /// Gold totals only make sense once the season mode is known, and only
     /// while it stays the same — a mode switch is a different purse.
     fn apply_currency(&mut self, c: &crate::parser::Currency) {
@@ -2074,8 +2251,10 @@ impl GameStats {
             self.pending_step -= already;
             let fresh = c.delta - already;
             if fresh > 0 {
-                self.gold_earned = self.gold_earned.saturating_add(fresh);
-                self.progressed();
+                if !self.finished {
+                    self.gold_earned = self.gold_earned.saturating_add(fresh);
+                    self.progressed();
+                }
                 self.banked = self.banked.saturating_add(fresh);
             }
             self.last_bank = Some(Instant::now());
@@ -2108,12 +2287,12 @@ impl GameStats {
                 self.banked -= already;
                 if diff > already {
                     let fresh = diff - already;
-                    self.gold_earned = self.gold_earned.saturating_add(fresh);
+                    if !self.finished {self.gold_earned = self.gold_earned.saturating_add(fresh);}
                     // Remembered in case the deposit that caused it has not
                     // arrived yet; the branch above cancels against this.
                     self.pending_step = self.pending_step.saturating_add(fresh);
                     self.pending_since = Some(Instant::now());
-                    self.progressed();
+                    if !self.finished {self.progressed();}
                 }
             }
         }
@@ -2151,10 +2330,10 @@ impl GameStats {
 
     /// Whether this save stands on a higher hero level than the last one did.
     ///
-    /// `self.character` still holds the previous save's level here: it is
-    /// rewritten further down the same arm, after the counters have run.
+    /// The XP baseline has its own level. Heartbeats may update the displayed
+    /// character before the corresponding save reports the XP rollover.
     fn gained_a_hero_level(&self, now: i64) -> bool {
-        self.character.as_ref().is_some_and(|c| c.herolevel > 0 && now > c.herolevel)
+        self.xp_hero_level.is_some_and(|previous|now>previous)
     }
 
     fn per_hour(&self, value: i64) -> i64 {
@@ -2162,7 +2341,7 @@ impl GameStats {
         if secs == 0 {
             0
         } else {
-            value * 3600 / secs as i64
+            ((value as i128)*3600/(secs as i128)).clamp(0,i64::MAX as i128) as i64
         }
     }
 
@@ -2712,14 +2891,14 @@ mod tests {
         assert_eq!((found.name.as_str(), found.rarity.as_str()), ("St. Draxis' Pigstick", "Angelic"));
     }
 
-    /// A vault can be listed by the rarity it came in.
+    /// A rarity-specific vault list needs a verified effective quality.
     ///
     /// Seven Essence Vaults share one display name, so a list naming it fired
     /// for all seven. The packet is a pickup out of a capture — the ground
     /// sighting of a vault is refused, `c: 0` being an ordinary base there —
     /// with `-19` the vault type and `b` saying which of the seven.
     #[test]
-    fn a_list_can_name_one_of_the_seven_vaults() {
+    fn a_vault_list_requires_verified_quality_but_the_bare_name_matches_all() {
         let vault = |which: i64, sh: &str| {
             crate::parser::events_from_messages(&[json!({
                 "status": 1,
@@ -2746,17 +2925,15 @@ mod tests {
         let mut s = GameStats::default();
         s.set_flourish_listed(true);
         s.set_sound_lists(vec![("list-vault".into(), vec!["Essence Vault (Angelic)".into()])]);
-        let angelic = s.apply(&vault(5, "a")).expect("the one the list names");
-        assert_eq!(angelic.rarity, "Angelic");
-        assert_eq!(angelic.sound.as_deref(), Some("list-vault"));
-        assert!(angelic.flourish, "a listed vault takes the pillar: it is a container, so rarity alone never would");
-        assert!(s.apply(&vault(0, "b")).is_none(), "the Superior one is another item");
+        assert!(s.apply(&vault(5, "a")).is_none(), "an unresolved quality must not be inferred from an old vault index mapping");
+        assert!(s.apply(&vault(0, "b")).is_none(), "another unresolved vault does not prove Angelic either");
 
         // the bare name still means any of them
         s.set_sound_lists(vec![("list-any".into(), vec!["Essence Vault".into()])]);
-        let superior = s.apply(&vault(0, "c")).expect("any vault");
-        assert_eq!(superior.rarity, "Superior");
-        assert_eq!(superior.sound.as_deref(), Some("list-any"));
+        let any = s.apply(&vault(0, "c")).expect("any vault");
+        assert_eq!(any.rarity, "Unknown");
+        assert_eq!(any.sound.as_deref(), Some("list-any"));
+        assert!(any.flourish, "a bare-name watchlist can still announce a container with unresolved quality");
     }
 
     #[test]
@@ -2814,15 +2991,28 @@ mod tests {
     }
 
     #[test]
-    fn identityless_heroic_weapon_reaches_the_collection_by_name() {
-        let mut s = GameStats::default();
-        s.apply(&account(CURRENT_SEASON, 0, 0));
-        s.apply(&GameEvent::Found { finder: "Test".into(), name: "Ethereal Musket".into() });
-        let finds = s.take_collection_sightings();
-        assert_eq!(finds.len(), 1);
-        assert_eq!(finds[0].name, "Ethereal Musket");
-        assert_eq!(finds[0].item_type, 3);
-        assert_eq!(finds[0].rarity, "Heroic");
+    fn identityless_heroic_chat_find_reaches_the_collection_by_name() {
+        for (name,id,weapon) in [("AK-47",15,14),("Ethereal Musket",19,14),
+            ("Conjured Tentacle",13,10),("Leviathan´s Spine",8,9)] {
+            let mut s = GameStats::default();
+            s.apply(&account(CURRENT_SEASON, 0, 0));
+            // The chat event has no identity; the current catalogue independently
+            // establishes this weapon's Heroic quality and exact identity.
+            s.apply(&GameEvent::Found { finder: "Test".into(), name: name.into() });
+            let finds = s.take_collection_sightings();
+            assert_eq!(finds.len(), 1);
+            assert_eq!(finds[0].name, name);
+            assert_eq!((finds[0].item_type,finds[0].item_id,finds[0].weapon_type), (3,id,weapon));
+            assert_eq!(finds[0].rarity, "Heroic");
+        }
+    }
+
+    #[test]
+    fn an_item_with_unverified_quality_is_not_collected_by_name() {
+        let mut s=GameStats::default();
+        s.apply(&account(CURRENT_SEASON,0,0));
+        s.apply(&GameEvent::Found {finder:"Test".into(),name:"Doctor's Potion".into()});
+        assert!(s.take_collection_sightings().is_empty(),"a historical rarity label cannot replace missing current evidence");
     }
 
     #[test]
@@ -3178,6 +3368,8 @@ mod tests {
         assert_eq!(snap.xp.earned, 0);
         assert_eq!(snap.kills.earned, 0);
         // and from there it counts normally again
+        s.apply(&account_packet("Parahryushka", 913_100, 91_500_000));
+        assert_eq!(s.xp_earned,0,"a single cumulative increase is unconfirmed");
         s.apply(&account_packet("Parahryushka", 913_100, 91_500_000));
         for e in parser::events_from_messages(&[json!({"currencyData": {"GSS": 716_000}})]) {
             s.apply(&e);
@@ -3627,7 +3819,7 @@ mod tests {
 
         let found = |who: &str| GameEvent::Found {
             finder: who.into(),
-            name: "Doctor's Potion".into(),
+            name: "Pirate Captain's Hat".into(),
         };
 
         // the whole shard reads this line; it is not our run
@@ -3769,8 +3961,8 @@ mod tests {
 
     #[test]
     fn the_servers_announcement_chimes_and_the_pickup_stays_quiet() {
-        // "SERVER: Parahryushka Just found [Doctor's Potion]" — the game says
-        // it the moment the item lands, before anything else knows the tier
+        // A server announcement arrives when the item lands, before a pickup.
+        // This current catalogue fixture is verified Set SS.
         let mut s = GameStats::default();
         s.set_filter(vec!["Set".into()], 5);
         let announced = s
@@ -3783,7 +3975,7 @@ mod tests {
                 item_id: 0,
                 weapon_type: 0,
                 seed: 0,
-                name: "Doctor's Potion".into(),
+                name: "Pirate Captain's Hat".into(),
                 announced: true,
                 amount: 1,
                 fingerprint: String::new(),
@@ -3799,14 +3991,14 @@ mod tests {
             unscaled: false,
             mf: false,
             tier: 6,
-            item_type: 13,
-            item_id: 86,
+            item_type: 0,
+            item_id: 15,
             weapon_type: 0,
             seed: 1,
-            name: "Doctor's Potion".into(),
+            name: "Pirate Captain's Hat".into(),
             announced: false,
             amount: 1,
-            fingerprint: "13-1-1".into(),
+            fingerprint: "0-15-1".into(),
             hash: String::new(),
             ground: false,
         });
@@ -3994,6 +4186,8 @@ mod tests {
         s.apply(&GameEvent::XpGain(100)); // the parser has already scaled the share
         s.apply(&account_xp(CURRENT_SEASON, 0, 0, 50_000_000));
         assert_eq!(s.snapshot(String::new()).xp.earned, 100);
+        s.apply(&account_xp(CURRENT_SEASON, 0, 0, 50_000_500));
+        assert_eq!(s.xp_earned,100,"explicit XP remains immediate; the cumulative remainder waits");
         s.apply(&account_xp(CURRENT_SEASON, 0, 0, 50_000_500));
         assert_eq!(s.snapshot(String::new()).xp.earned, 600);
     }
@@ -4195,8 +4389,11 @@ mod tests {
         let mut s = GameStats::default();
         s.apply(&account_at_level(50_000_000, 91)); // calibrates
         s.apply(&account_at_level(53_600_000, 91));
-        assert_eq!(s.snapshot(String::new()).xp.earned, 3_600_000);
+        assert_eq!(s.snapshot(String::new()).xp.earned, 0,"the first cumulative climb is staged");
+        s.apply(&account_at_level(53_600_000, 91)); // confirms the old level before it resets
         // the level turns over and the counter starts again at the remainder
+        s.apply(&account_at_level(1_289, 92));
+        assert_eq!(s.xp_earned,3_600_000,"only the previously confirmed climb crosses the reset");
         s.apply(&account_at_level(1_289, 92));
         assert_eq!(
             s.snapshot(String::new()).xp.earned,
@@ -4204,6 +4401,8 @@ mod tests {
             "the overflow past a level-up is xp this session earned"
         );
         // and the next climb is measured from the new floor, not the old peak
+        s.apply(&account_at_level(500_000, 92));
+        assert_eq!(s.xp_earned,3_601_289,"the next unbacked climb also needs confirmation");
         s.apply(&account_at_level(500_000, 92));
         assert_eq!(s.snapshot(String::new()).xp.earned, 4_100_000);
     }
@@ -4215,6 +4414,7 @@ mod tests {
         let mut s = GameStats::default();
         s.apply(&account_at_level(50_000_000, 91));
         s.apply(&account_at_level(53_600_000, 91));
+        s.apply(&account_at_level(53_600_000, 91)); // corroborates the earlier earnings
         s.apply(&account_at_level(2_000_000, 91));
         assert_eq!(s.snapshot(String::new()).xp.earned, 3_600_000);
     }
@@ -4271,6 +4471,7 @@ mod tests {
         let mut s = aged(600);
         s.apply(&account_packet("Test", 1_000, 10_000)); // the baseline
         s.apply(&account_packet("Test", 1_400, 60_000)); // +400 kills, +50k xp
+        s.apply(&account_packet("Test", 1_400, 60_000)); // confirms the cumulative XP gain
 
         s.apply(&GameEvent::Room("Act_07_02".into()));
         s.room_since = Some(Instant::now() - Duration::from_secs(300));
@@ -4415,9 +4616,11 @@ mod tests {
         let mut s = GameStats::default();
         s.apply(&save("Main", 1_000_000, 900_000, 5_000)); // the first save only marks
         s.apply(&save("Main", 1_000_500, 900_010, 5_001));
+        s.apply(&save("Main", 1_000_500, 900_010, 5_001)); // confirms the main's own gain
         // Character select, an alt, and back. The alt's totals are its own life.
         s.apply(&save("Alt", 40, 3, 1));
         s.apply(&save("Alt", 90, 5, 1));
+        s.apply(&save("Alt", 90, 5, 1)); // confirms the alt's own gain
         s.apply(&save("Main", 1_001_000, 900_020, 5_002));
 
         let snap = s.snapshot(String::new());
@@ -5044,4 +5247,202 @@ mod tests {
         let drift = snap.xp.earned - truth;
         eprintln!("--- drift {} ({:+.2}%)", drift, drift as f64 * 100.0 / truth.max(1) as f64);
     }
+
+    #[test]
+    fn isolated_bad_cumulative_xp_never_reaches_the_hourly_rate_or_chart() {
+        for delay in [5,20,120] {
+            let mut s=aged(60);let clock=Instant::now();
+            s.apply_xp_total_at(100,91,clock);
+            s.apply_xp_total_at(1_000_000,91,clock+Duration::from_secs(1));
+            assert_eq!((s.total_xp,s.xp_earned),(100,0));
+            assert_eq!(s.snapshot(String::new()).xp.per_hour,0);
+            s.sample();
+            s.apply_xp_total_at(110,91,clock+Duration::from_secs(delay));
+            assert_eq!(s.xp_earned,0,"a corrected value also needs corroboration");
+            s.apply_xp_total_at(110,91,clock+Duration::from_secs(delay+1));
+            assert_eq!((s.total_xp,s.xp_earned),(110,10));
+            assert!(s.series.iter().all(|point|point.xp==0),"no bad provisional peak was ever plotted");
+        }
+    }
+
+    #[test]
+    fn cumulative_xp_confirms_only_the_prior_supported_climb() {
+        let mut s=GameStats::default();s.apply(&account_at_level(100,91));
+        s.apply(&account_at_level(150,91));assert_eq!((s.total_xp,s.xp_earned),(100,0));
+        s.apply(&account_at_level(170,91));assert_eq!((s.total_xp,s.xp_earned),(150,50));
+        s.apply(&account_at_level(170,91));assert_eq!((s.total_xp,s.xp_earned),(170,70));
+        s.apply(&account_at_level(170,91));assert_eq!(s.xp_earned,70);
+    }
+
+    #[test]
+    fn explicit_xp_and_its_cumulative_confirmation_match_in_both_orders() {
+        for total_first in [false,true] {
+            let mut s=GameStats::default();s.apply(&account_at_level(1_000,91));
+            if total_first {s.apply(&account_at_level(1_100,91));s.apply(&account_at_level(1_100,91));s.apply(&GameEvent::XpGain(100));}
+            else {s.apply(&GameEvent::XpGain(100));s.apply(&account_at_level(1_100,91));s.apply(&account_at_level(1_100,91));}
+            assert_eq!(s.xp_earned,100);
+            s.apply(&GameEvent::XpGain(100));s.apply(&GameEvent::XpGain(100));
+            assert_eq!(s.xp_earned,300,"separate equal delta events both count immediately");
+            s.apply(&account_at_level(1_300,91));s.apply(&account_at_level(1_300,91));
+            assert_eq!(s.xp_earned,300);
+        }
+    }
+
+    #[test]
+    fn a_bad_cumulative_candidate_cannot_erase_explicit_xp_or_double_its_catchup() {
+        let mut s=GameStats::default();s.apply(&account_at_level(1_000,91));
+        s.apply(&account_at_level(5_000,91));s.apply(&GameEvent::XpGain(100));
+        assert_eq!(s.xp_earned,100);
+        s.apply(&account_at_level(1_100,91));s.apply(&account_at_level(1_100,91));
+        assert_eq!(s.xp_earned,100);
+        s.apply(&account_at_level(1_200,91));assert_eq!(s.xp_earned,100);
+        s.apply(&account_at_level(1_200,91));assert_eq!(s.xp_earned,200);
+    }
+
+    #[test]
+    fn a_heartbeat_cannot_hide_the_xp_baselines_hero_level_rollover() {
+        let mut s=GameStats::default();s.apply(&account_at_level(50_000_000,91));
+        s.apply(&account_at_level(53_600_000,91));
+        s.apply(&account_at_level(53_600_000,91));
+        s.apply(&GameEvent::Vitals {mf:None,level:100,hlevel:92,satanic_here:None});
+        s.apply(&account_at_level(1_289,92));assert_eq!(s.xp_earned,3_600_000);
+        s.apply(&account_at_level(1_289,92));assert_eq!(s.xp_earned,3_601_289);
+        let mut s=GameStats::default();s.apply(&account_at_level(50_000_000,91));
+        s.apply(&GameEvent::XpGain(10_000));s.apply(&account_at_level(1_289,92));
+        s.apply(&account_at_level(1_289,92));
+        assert_eq!(s.xp_earned,10_000,"the explicit gain already contains its crossing");
+        s.apply(&account_at_level(2_289,92));s.apply(&account_at_level(2_289,92));
+        assert_eq!(s.xp_earned,11_000);
+    }
+
+    #[test]
+    fn a_reset_carries_xp_matching_debt_and_excludes_unconfirmed_previous_run_income() {
+        let mut s=GameStats::default();s.apply(&account_at_level(1_000,91));
+        s.apply(&account_at_level(2_000,91));s.apply(&account_at_level(2_000,91));s.reset();
+        s.apply(&GameEvent::XpGain(100));s.apply(&GameEvent::XpGain(900));assert_eq!(s.xp_earned,0);
+        s.apply(&account_at_level(2_010,91));s.apply(&account_at_level(2_005,91));
+        assert_eq!(s.xp_earned,0);s.apply(&account_at_level(2_005,91));assert_eq!(s.xp_earned,5);
+        s.apply(&account_at_level(3_000,91));s.reset();
+        s.apply(&account_at_level(3_000,91));assert_eq!(s.xp_earned,0,"a pre-reset candidate never becomes new run income");
+    }
+
+    #[test]
+    fn finished_sessions_observe_live_baselines_without_earning_idle_income() {
+        let gold=|amount|GameEvent::Gold(Currency {gss:amount,..Default::default()});
+        let mut s=GameStats::default();s.apply(&account_packet("Test",100,1_000));s.apply(&gold(100));
+        s.reset();s.set_finished(true);
+        s.apply(&account_packet("Test",200,2_000));s.apply(&gold(200));
+        assert_eq!((s.xp_earned,s.gold_earned,s.kills_earned),(0,0,0));
+        assert!(s.paused());s.set_finished(false);
+        s.apply(&account_packet("Test",201,2_010));s.apply(&account_packet("Test",201,2_010));s.apply(&gold(210));
+        assert_eq!((s.xp_earned,s.gold_earned,s.kills_earned),(10,10,1));
+    }
+
+    #[test]
+    fn explicit_idle_income_and_late_confirmations_never_enter_the_next_run() {
+        let gold=|amount|GameEvent::Gold(Currency {gss:amount,..Default::default()});
+        let deposit=||GameEvent::Gold(Currency {delta:50,..Default::default()});
+        for balance_first in [false,true] {
+            let mut s=GameStats::default();s.apply(&account_at_level(1_000,91));s.apply(&gold(100));
+            s.reset();s.set_finished(true);
+            s.apply(&GameEvent::XpGain(100));
+            if balance_first {s.apply(&gold(150));} else {s.apply(&deposit());}
+            s.set_finished(false);
+            if balance_first {s.apply(&deposit());} else {s.apply(&gold(150));}
+            s.apply(&account_at_level(1_100,91));
+            assert_eq!((s.gold_earned,s.xp_earned),(0,0));
+            s.apply(&deposit());s.apply(&deposit());s.apply(&GameEvent::XpGain(100));s.apply(&GameEvent::XpGain(100));
+            assert_eq!((s.gold_earned,s.xp_earned),(100,200),"legitimate repeated deltas are distinct");
+        }
+    }
+
+    #[test]
+    fn a_pre_finish_candidate_and_idle_explicit_xp_cannot_leak_into_the_next_run() {
+        let mut s=GameStats::default();s.apply(&account_at_level(100,91));
+        s.apply(&account_at_level(500,91));assert_eq!(s.xp_earned,0);
+        s.set_finished(true);s.apply(&GameEvent::XpGain(500));
+        s.set_finished(false);s.apply(&account_at_level(1_000,91));s.apply(&account_at_level(1_000,91));
+        assert_eq!(s.xp_earned,0);
+        s.apply(&account_at_level(1_010,91));s.apply(&account_at_level(1_010,91));
+        assert_eq!(s.xp_earned,10);
+    }
+
+    #[test]
+    fn real_spending_and_explicit_deposits_remain_income_after_balance_changes() {
+        let gold=|amount|GameEvent::Gold(Currency {gss:amount,..Default::default()});
+        let mut s=GameStats::default();s.apply(&account_at_level(1_000,91));
+        s.apply(&gold(100));s.apply(&gold(150));s.apply(&gold(120));
+        assert_eq!(s.gold_earned,50,"a purchase does not erase earned coins");
+        s.pending_since=Some(Instant::now()-IN_FLIGHT-Duration::from_secs(1));
+        for _ in 0..2 {s.apply(&GameEvent::Gold(Currency {delta:10,..Default::default()}));}
+        assert_eq!(s.gold_earned,70);
+    }
+
+    #[test]
+    fn an_extreme_unconfirmed_xp_counter_never_inflates_earnings_or_the_hourly_rate() {
+        let mut s=aged(60);s.apply(&account_at_level(1,91));
+        s.apply(&account_at_level(i64::MAX,91));assert_eq!(s.snapshot(String::new()).xp.per_hour,0);
+        s.apply(&account_at_level(11,91));s.apply(&account_at_level(11,91));assert_eq!(s.xp_earned,10);
+        s.apply(&GameEvent::XpGain(i64::MAX));assert_eq!(s.snapshot(String::new()).xp.per_hour,i64::MAX);
+    }
+
+
+    #[test]
+    fn one_bad_lower_save_cannot_turn_a_corrected_return_into_income() {
+        let mut s=GameStats::default();
+        for xp in [100,110,110] {s.apply(&account_at_level(xp,91));}
+        assert_eq!(s.xp_earned,10);
+        for xp in [50,110,110] {s.apply(&account_at_level(xp,91));}
+        assert_eq!((s.total_xp,s.xp_earned),(110,10));
+    }
+
+    #[test]
+    fn a_confirmed_lower_epoch_clears_old_matching_debt_before_new_explicit_xp() {
+        let mut s=GameStats::default();
+        for xp in [100,110,110] {s.apply(&account_at_level(xp,91));}
+        assert_eq!(s.xp_pending_step,10);
+        s.apply(&account_at_level(50,91));assert_eq!(s.xp_anchor,Some(110));
+        s.apply(&account_at_level(50,91));assert_eq!(s.xp_pending_step,0);
+        s.apply(&GameEvent::XpGain(5));assert_eq!(s.xp_earned,15);
+        for _ in 0..2 {s.apply(&account_at_level(55,91));}
+        assert_eq!(s.xp_earned,15);
+    }
+
+    #[test]
+    fn an_unconfirmed_lower_save_preserves_explicit_xp_predictions() {
+        let mut s=GameStats::default();s.apply(&account_at_level(100,91));
+        s.apply(&GameEvent::XpGain(10));assert_eq!(s.xp_earned,10);
+        for xp in [50,110,110] {s.apply(&account_at_level(xp,91));}
+        assert_eq!((s.total_xp,s.xp_earned),(110,10));
+    }
+
+    #[test]
+    fn a_corrected_pre_finish_bad_peak_cannot_swallow_the_new_runs_explicit_gain() {
+        let mut s=GameStats::default();s.apply(&account_at_level(100,91));
+        s.apply(&account_at_level(1_000_000,91));s.set_finished(true);s.set_finished(false);
+        for _ in 0..2 {s.apply(&account_at_level(110,91));}
+        s.apply(&GameEvent::XpGain(5));assert_eq!((s.total_xp,s.xp_earned),(115,5));
+    }
+
+    #[test]
+    fn a_new_hero_level_cannot_confirm_an_unbounded_old_level_candidate() {
+        let mut s=GameStats::default();s.apply(&account_at_level(100,91));
+        s.apply(&account_at_level(1_000_000,91));
+        s.apply(&account_at_level(10,92));assert_eq!(s.xp_earned,0);
+        s.apply(&account_at_level(10,92));assert_eq!((s.total_xp,s.xp_earned),(10,10));
+    }
+
+
+    #[test]
+    fn explicit_xp_between_lower_observations_is_preserved_as_new_epoch_coverage() {
+        for old_debt in [false,true] {
+            let mut s=GameStats::default();s.apply(&account_at_level(1_000,91));
+            if old_debt {for _ in 0..2 {s.apply(&account_at_level(1_010,91));}}
+            let previous=s.xp_earned;
+            s.apply(&account_at_level(50,91));s.apply(&GameEvent::XpGain(5));
+            for _ in 0..2 {s.apply(&account_at_level(55,91));}
+            assert_eq!(s.xp_earned,previous+5,"new explicit XP cannot be lost or credited twice");
+        }
+    }
+
 }

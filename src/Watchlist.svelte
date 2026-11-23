@@ -794,9 +794,10 @@
       // into step — there is no second copy here to set by hand.
       await flush();
       const base = (await invoke('get_settings').catch(() => null)) ?? $state.snapshot(settings);
+      const previous = structuredClone(base);
       base.filters = [...(base.filters ?? []), imported];
       base.filter = imported.id;
-      await invoke('save_settings', { settings: base });
+      await invoke('patch_settings', { base: previous, settings: base });
       selected = 0;
       notify(say('imported {name} — {n} lists', { name: imported.name, n: imported.lists.length }));
     } catch (e) {

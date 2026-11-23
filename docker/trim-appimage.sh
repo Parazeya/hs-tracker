@@ -61,6 +61,7 @@ set -euo pipefail
 
 img="$(readlink -f "${1:-}")"   # the working directory changes below
 [ -f "$img" ] || { echo "trim-appimage: no such file: ${1:-}" >&2; exit 1; }
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Host-owned, every one of them. A list rather than a pattern, so that a library
 # joining the bundle later cannot quietly join this set too.
@@ -106,6 +107,10 @@ if [ "$comp" = zstd ]; then extra=(-Xcompression-level 22); fi
 
 "$img" --appimage-extract >/dev/null
 
+# This generated hook used to override even GDK_BACKEND=wayland. On a pure
+# Wayland session it made GTK try an absent X server and exit before any GUI.
+bash "$script_dir/fix-appimage-backend.sh" "$work/squashfs-root"
+
 removed=0
 for lib in "${HOST_OWNED[@]}"; do
   # every bundle directory, not only usr/lib - the loader searches all ten
@@ -116,12 +121,10 @@ for lib in "${HOST_OWNED[@]}"; do
   done < <(find squashfs-root -name "$lib" -not -type d 2>/dev/null)
 done
 
-# Nothing found means linuxdeploy stopped bundling these of its own accord and
-# this script has become dead weight. Say so rather than silently repacking.
+# The plugin can already have excluded these libraries. Backend hook cleanup
+# is still required in that case, so a zero count is no longer an error.
 if [ "$removed" = 0 ]; then
-  echo "trim-appimage: none of the host-owned libraries were in the bundle;" >&2
-  echo "  linuxdeploy's behaviour has changed and this script can go." >&2
-  exit 1
+  echo "    host-owned Wayland/XCB libraries are already excluded"
 fi
 
 head -c "$offset" "$img" > runtime

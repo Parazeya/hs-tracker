@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.16 — 2026-11-23
+
+### Added
+
+- Open the interactive map, item codex, skills, and bounties inside Tracker. The map can be included in the OBS output.
+- Choose the Windows capture backend and see its status in Settings.
+
+### Fixed
+
+- Refresh the item catalogue and drop sources, including Crystal Chest and Dungeon Chest.
+- Show item auras, granted skills, and triggered effects with their levels and conditions.
+- Preview socket and damage type bonuses by variant, and show set membership and known set bonuses.
+- Improve collection matching and the handling of item and session events.
+
 ## 1.1.15 — 2026-09-28
 
 ### Added

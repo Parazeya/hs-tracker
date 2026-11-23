@@ -16,6 +16,7 @@ the drop that lands on the ground does not state one.
 
 import functools
 import json
+import math
 import os
 import re
 import sys
@@ -27,10 +28,30 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-DATA = Path(__file__).parent / "data" / "helper" / "items.json"
-GAME = Path(os.environ.get("HERO_SIEGE_BIN", r"C:\Program Files (x86)\Steam\steamapps\common\HeroSiege\bin"))
-OUT = Path(__file__).parent.parent / "src" / "items.js"
-OUT_RS = Path(__file__).parent.parent / "src-tauri" / "src" / "items.rs"
+ROOT = Path(__file__).resolve().parent.parent
+DATA = Path(os.environ.get("HS_ITEMS_INPUT", ROOT / "tools" / "data" / "helper" / "items.json"))
+GAME = Path(os.environ.get("HERO_SIEGE_BIN") or os.environ.get("HERO_SIEGE") or r"C:\Program Files (x86)\Steam\steamapps\common\HeroSiege\bin")
+OUT = Path(os.environ.get("HS_ITEMS_OUT_JS", ROOT / "src" / "items.js"))
+OUT_RS = Path(os.environ.get("HS_ITEMS_OUT_RS", ROOT / "src-tauri" / "src" / "items.rs"))
+SOURCE_RS = ROOT / "src-tauri" / "src"
+BUNDLE = os.environ.get("HS_DATA_BUNDLE")
+if not BUNDLE and (DATA.parent / "manifest.json").exists():
+    BUNDLE = str(DATA.parent)
+BUNDLE_MANIFEST = None
+if BUNDLE:
+    from item_bundle import load_bundle, current_item_rows
+    try:
+        BUNDLE_MANIFEST, bundle_files = load_bundle(Path(BUNDLE))
+        if os.environ.get("HS_ITEMS_INPUT") and DATA.resolve() != bundle_files["items"]:
+            raise ValueError("HS_ITEMS_INPUT does not name this bundle's item dataset")
+        DATA = bundle_files["items"]
+        GAME = bundle_files["translationsItem"].parent
+    except (OSError, ValueError, KeyError) as error:
+        sys.exit(f"Invalid Extractor bundle: {error}")
+else:
+    print("note: using legacy input without a build manifest; freshness is unverified")
+OUT.parent.mkdir(parents=True, exist_ok=True)
+OUT_RS.parent.mkdir(parents=True, exist_ok=True)
 
 # the five the tracker announces; the game's "Satanic Set" is the Set rarity
 # The tracker spells one rarity differently from the tables; everything else it
@@ -80,6 +101,11 @@ NOTABLE = {"Satanic", "Set", "Heroic", "Angelic", "Unholy"}
 # struct rather than assuming it, and calls it NO_DROP.
 NO_DROP = 50_000_000
 
+
+def real_rate(value):
+    """A verified denominator; only legacy input uses the old sentinel."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0 and (BUNDLE_MANIFEST is not None or value != NO_DROP)
+
 # What the game shows IS `droprate.base`, unscaled.
 #
 # There was a 0.35 here and it was wrong. It came from reading the tooltip's two
@@ -102,6 +128,19 @@ NO_DROP = 50_000_000
 
 ORDINARY = {"Common", "Superior", "Rare"}
 TIERS = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5, "SS": 6}
+
+
+def ordinary_namespace(meta: dict) -> bool:
+    """An explicit identity namespace takes precedence over its rarity.
+
+    Only old, unversioned records without a named flag use the rarity
+    heuristic. A canonical record with an unknown namespace must stay
+    ambiguous rather than silently losing an identity collision.
+    """
+    named = meta.get("named")
+    if isinstance(named, bool):
+        return not named
+    return BUNDLE_MANIFEST is None and "named" not in meta and meta.get("rarity") in ORDINARY
 
 
 def group_of(tkey: str, name: str) -> str | None:
@@ -396,6 +435,9 @@ items, rarities, tiers, drops, zones, places, chases = {}, {}, {}, {}, {}, {}, {
 # hold that, so it holds none of them, and the panel showed seven rows with no
 # chance at all. An identity can.
 facts: dict[str, tuple[str, str, int, int]] = {}
+# Exact named identities whose current translation has no display caption.
+# Keep their quality without inventing names or name-only aliases.
+unnamed: dict[str, tuple[str, int, int]] = {}
 dropped: list[tuple[str, str, str]] = []
 # What each name is claimed to be, by every item that answers to it. See the
 # pruning below the loop.
@@ -403,13 +445,28 @@ claimed: dict[str, set] = {}
 
 # Named items first, so a base can be checked against a settled table.
 ENTRIES = json.loads(DATA.read_text(encoding="utf-8"))
-ENTRIES.sort(key=lambda e: ((e.get("metadata") or {}).get("rarity") in ORDINARY,))
+if BUNDLE_MANIFEST:
+    ENTRIES = current_item_rows(ENTRIES)
+ENTRIES.sort(key=lambda e: ordinary_namespace(e.get("metadata") or {}))
 
 for entry in ENTRIES:
     meta = entry.get("metadata") or {}
     identity = meta.get("ID")
     name = translations.get(meta.get("tkey"), meta.get("name") or "").strip()
     if not name or name == "Unknown Name":
+        if BUNDLE_MANIFEST and meta.get("named") is True and isinstance(identity, list) and len(identity) == 3:
+            game_id, weapon_type, item_type = identity
+            if item_type >= 0:
+                key = f"{item_type}:{game_id}:{weapon_type}"
+                stated = meta.get("rarity")
+                rarity = RENAMED.get(stated, stated) or "Unknown"
+                rate = (entry.get("droprate") or {}).get("base")
+                if (entry.get("droprate") or {}).get("meaning") == "no_drop":
+                    rate = None
+                known = (rarity, TIERS.get(meta.get("tier")) or 0, int(rate) if real_rate(rate) else 0)
+                if key in unnamed and unnamed[key] != known:
+                    raise SystemExit(f"Conflicting unnamed item identity {key}; no tables were installed")
+                unnamed[key] = known
         continue
     if isinstance(identity, list) and len(identity) == 3:
         game_id, weapon_type, item_type = identity
@@ -420,14 +477,19 @@ for entry in ENTRIES:
                 items[key] = name
                 if meta.get("tkey"):
                     tkey_of[key] = meta["tkey"]
-            elif meta.get("rarity") in ORDINARY:
+            elif ordinary_namespace(meta):
                 dropped.append((key, name, taken))
             elif taken != name:
                 # Two NAMED items on one triple would mean the tables are lying
                 # about one of them, and no rule here could tell which.
-                print(f"warning: {key} is both {taken!r} and {name!r}")
+                raise SystemExit(f"Conflicting named item identity {key}: {taken!r} and {name!r}; no tables were installed")
     stated = meta.get("rarity")
     rarity = RENAMED.get(stated, stated)
+    if BUNDLE_MANIFEST and not rarity and isinstance(identity, list) and len(identity) == 3:
+        # This is a known identity whose effective rarity the decoder could not
+        # establish. An explicit Unknown prevents the parser from taking the
+        # packet's frequently misleading Angelic flag or a namesake's rarity.
+        rarity = "Unknown"
     if rarity:
         rarities.setdefault(name.lower(), rarity)
     notable = rarity in NOTABLE
@@ -450,7 +512,9 @@ for entry in ENTRIES:
     # hundred and eleven million.
     # The base as the table holds it: the game prints that number and no other.
     rate = (entry.get("droprate") or {}).get("base")
-    if notable and isinstance(rate, (int, float)) and rate > 0 and rate != NO_DROP:
+    if BUNDLE_MANIFEST and (entry.get("droprate") or {}).get("meaning") == "no_drop":
+        rate = None
+    if notable and real_rate(rate):
         drops.setdefault(name.lower(), int(rate))
     # where it is tied to: "8-2" is act 8 zone 2, "-D" a dungeon, "-BD" a boss
     # dungeon. Being tied is not exclusivity — the item drops anywhere, just
@@ -506,7 +570,7 @@ for entry in ENTRIES:
         # game states now keeps the pair in step through a season that retunes
         # either half, which taking the snapshot's number does not.
         factor = entry.get("chaseDropRate")
-        if isinstance(rate, (int, float)) and rate > 0 and rate != NO_DROP and isinstance(factor, (int, float)) and factor > 0:
+        if real_rate(rate) and isinstance(factor, (int, float)) and factor > 0:
             # Truncated, not rounded: the snapshot's own chase numbers are the
             # exact product with the fraction cut off, and matching that keeps
             # a rebuild from moving 89 unrelated numbers by one.
@@ -523,13 +587,16 @@ for entry in ENTRIES:
         places.setdefault(name.lower(), sorted({str(w) for w in where}))
     if isinstance(identity, list) and len(identity) == 3 and identity[2] >= 0:
         game_id, weapon_type, item_type = identity
-        own = rate if isinstance(rate, (int, float)) and rate > 0 and rate != NO_DROP else 0
+        own = rate if real_rate(rate) else 0
         facts.setdefault(
             f"{item_type}:{game_id}:{weapon_type}", (name, rarity, tier, int(own))
         )
-header = """// Generated by tools/gen_items.py — do not edit by hand.
-// Identities, rarities and grades: datamined tables from hero-siege-helper.
-// Display names: the game's own translationsItem.csv."""
+header = "// Generated by tools/gen_items.py — do not edit by hand.\n"
+if BUNDLE_MANIFEST:
+    header += "// Extractor game fingerprint: " + BUNDLE_MANIFEST["game"]["fingerprint"] + "\n"
+    header += "// Only fields verified by this extraction enter the lookup tables."
+else:
+    header += "// Legacy input: source build and freshness are unverified."
 
 # A name two different items disagree about is not a name this app can answer
 # for.
@@ -566,26 +633,35 @@ def disagree(claims: set, field: int) -> bool:
     return len({c[field] for c in claims}) > 1
 
 
+def rate_claims(claims: set) -> set:
+    """The namespace a name-level rate is allowed to describe."""
+    if BUNDLE_MANIFEST and any(c[0] in NOTABLE for c in claims):
+        # This is the same deliberate notable-name selection as rarity. Only
+        # verified ordinary qualities may be excluded; Unknown can be notable.
+        return {c for c in claims if c[0] not in ORDINARY}
+    return claims
+
+
 def rates_disagree(claims: set) -> bool:
-    """Whether two claimants really say different things about how often it falls.
-
-    NO_DROP is not one of the things they can say. It is the engine's default,
-    left standing in a record that never states a rate at all, so a claimant
-    carrying it is silent rather than contradicting anyone — the same reason the
-    rarity rule above steps over a Common relic that shares a name.
-
-    Four names turned on this and lost a number the game states outright:
-    Shrunken Head is a Satanic charm the game gives 1 in 52,950 and a Common
-    relic that does not drop, and the charm's figure is exactly what the game's
-    own tooltip prints. Death's Scythe, Satan's Horn and Justice are the same
-    shape. Six names collide here in all; the two that remain — Angel and
-    Essence Vault — really are two items with two different rates.
-    """
-    return len({c[2] for c in claims if c[2] != NO_DROP}) > 1
+    eligible = rate_claims(claims)
+    if BUNDLE_MANIFEST:
+        # Missing canonical rates are unknown, including on a second Common
+        # identity. They cannot silently inherit a namesake's denominator.
+        # Unknown quality also prevents selecting a competing notable identity,
+        # even when their currently decoded numbers happen to match.
+        if len(eligible) > 1 and any(c[0] == "Unknown" for c in eligible):
+            return any(real_rate(c[2]) for c in eligible)
+        return len({c[2] if real_rate(c[2]) else None for c in eligible}) > 1
+    # The unversioned historical format used a sentinel instead of a rate.
+    return len({c[2] for c in eligible if real_rate(c[2])}) > 1
 
 
 def only_notable(claims: set, field: int):
     """The one claim a notable rarity makes about this, when only one does."""
+    # An unresolved claimant may itself be notable. It cannot be dismissed as
+    # a proven Common namesake, or a name-only orb "Angel" becomes the Set gun.
+    if any(claim[0] == "Unknown" for claim in claims):
+        return None
     mine = [c for c in claims if c[0] in NOTABLE]
     return mine[0][field] if len(mine) == 1 else None
 
@@ -614,22 +690,21 @@ for name in muddled["tier"]:
 for name in muddled["rate"]:
     for table in (drops, chases, zones, places):
         table.pop(name, None)
-# Where only one claimant states a rate at all, that rate is the answer, and the
-# name keeps it rather than being dropped for a disagreement that is not one.
+# Recover a rate only after every eligible claimant agrees. Exact identity
+# facts below keep their own numbers when a shared name cannot answer safely.
 settled_rate = 0
 for name, claims in claimed.items():
     if name in muddled["rate"]:
         continue
-    stated = {c[2] for c in claims if c[2] != NO_DROP}
-    if len(stated) == 1 and drops.get(name) in (None, NO_DROP):
+    stated = {c[2] for c in rate_claims(claims) if real_rate(c[2])}
+    if len(stated) == 1 and not real_rate(drops.get(name)):
         drops[name] = stated.pop()
         settled_rate += 1
 for field, names in muddled.items():
     if names:
         print(f"note: {len(names)} names two items disagree about, so no {field}: {', '.join(sorted(names))}")
 if settled_rate:
-    print(f"note: {settled_rate} names kept the one rate a claimant actually states, "
-          f"the other saying only the engine's \"does not drop\"")
+    print(f"note: {settled_rate} name-level rates recovered from eligible claimant data")
 if settled:
     print(f"note: {len(settled)} settled by the one notable claimant: "
           f"{', '.join(f'{n} = {r}' for n, r in sorted(settled.items()))}")
@@ -711,6 +786,10 @@ export const GROUP_TYPE = {json.dumps(group_types, separators=(",", ":"))};
 // calls both a Set gun and a Heroic orb "Angel" — and the seven Essence Vaults
 // share theirs across every rarity there is.
 export const BY_ID = {json.dumps({k: [n, r, t or 0, d or 0] for k, (n, r, t, d) in sorted(by_id.items())}, ensure_ascii=False, separators=(",", ":"))};
+
+// These verified named identities have no current display translation.
+// They cannot establish a name-only catalogue entry.
+export const UNNAMED_BY_ID = {json.dumps(unnamed, ensure_ascii=False, separators=(",", ":"))};
 
 // how rare a named item is: "one in N", so a bigger number is a rarer drop
 export const DROP_RATE = {json.dumps(drops, ensure_ascii=False, separators=(",", ":"))};
@@ -809,6 +888,7 @@ rs_muddled = sorted(refused)
 # Three of the four: `Known` carries a name, a rarity and a grade, and nothing
 # in the Rust asks how often a thing falls.
 rs_by_id = sorted((rs_key(k), n, r, t or 0) for k, (n, r, t, _) in by_id.items())
+rs_unnamed = sorted((rs_key(k), r, t) for k, (r, t, _) in unnamed.items())
 rs_rarities = sorted(rarities.items())
 rs_tiers = sorted(tiers.items())
 
@@ -868,7 +948,23 @@ rs_lines += [
 ]
 rs_lines += [f"    ({k}, {rs_str(n)}, {rs_str(r)}, {t})," for k, n, r, t in rs_by_id]
 rs_lines += [
+    "];", "",
+    "/// Exact named identities with no current display caption.",
+    f"static UNNAMED_BY_ID: [(u32, &str, u8); {len(rs_unnamed)}] = [",
+]
+rs_lines += [f"    ({k}, {rs_str(r)}, {t})," for k, r, t in rs_unnamed]
+rs_lines += [
     "];",
+    "",
+    "pub struct Unnamed { pub rarity: &'static str, pub tier: i64 }",
+    "",
+    "/// Exact lookup only; the caller must prove the named packet namespace.",
+    "pub fn unnamed_by_identity(item_type: i64, id: i64, weapon_type: i64) -> Option<Unnamed> {",
+    "    let key = packed(item_type, id, weapon_type)?;",
+    "    let at = UNNAMED_BY_ID.binary_search_by_key(&key, |(key, ..)| *key).ok()?;",
+    "    let (_, rarity, tier) = UNNAMED_BY_ID[at];",
+    "    Some(Unnamed { rarity, tier: tier as i64 })",
+    "}",
     "",
     "/// What the tables know about one item.",
     "pub struct Known {",
@@ -1074,7 +1170,7 @@ print(
 # said "Flask" for the first since it was written — renaming it would rename 22
 # items in every list a user has already built. So English is ours and the other
 # ten are the game's, which is what a reader of those languages expects to see.
-LANG_OUT = OUT.parent / "lang"
+LANG_OUT = Path(os.environ.get("HS_ITEMS_LANG_OUT", OUT.parent / "lang"))
 
 TYPE_TKEY = {
     0: "item_type_helmet", 1: "item_type_bodyarmor", 2: "item_type_boots",
@@ -1267,7 +1363,7 @@ def tallied_bosses() -> set[str]:
     Read rather than listed, so a season that adds a boss to TALLIES gets its
     name translated without anyone remembering to copy it here twice.
     """
-    rs = OUT_RS.parent / "stats.rs"
+    rs = SOURCE_RS / "stats.rs"
     if not rs.exists():
         return set()
     body = rs.read_text(encoding="utf-8", errors="replace")
@@ -1297,7 +1393,7 @@ def backend_words(written: dict[str, set[str]]) -> None:
     anywhere in `src/`: the tray menu, the file dialogs, the errors it hands
     back and the Discord card. This is the only place that can see both halves.
     """
-    src = OUT_RS.parent
+    src = SOURCE_RS
     if not src.is_dir():
         return
     asked: dict[str, set[str]] = {}
@@ -1318,7 +1414,7 @@ def write_languages():
     if not LANGS:
         print("note: no language columns were read — no side files written")
         return
-    LANG_OUT.mkdir(exist_ok=True)
+    LANG_OUT.mkdir(parents=True, exist_ok=True)
     main_words()
     words = app_words()
     written = []

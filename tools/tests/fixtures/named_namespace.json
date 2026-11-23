@@ -1,0 +1,26 @@
+[
+  {
+    "metadata": {
+      "tkey": "helmet_fixture_base",
+      "record_id": "base:71",
+      "ID": [71, 0, 0],
+      "name": "Fixture Ordinary Base",
+      "named": false,
+      "rarity": "Satanic",
+      "tier": "S",
+      "fromGame": ["ID", "name", "rarity", "tier"]
+    }
+  },
+  {
+    "metadata": {
+      "tkey": "helmet_fixture_named_common",
+      "record_id": "named:71",
+      "ID": [71, 0, 0],
+      "name": "Fixture Named Common",
+      "named": true,
+      "rarity": "Common",
+      "tier": "D",
+      "fromGame": ["ID", "name", "rarity", "tier"]
+    }
+  }
+]

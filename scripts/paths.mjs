@@ -13,8 +13,9 @@
 // the documentation.
 
 import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -37,6 +38,52 @@ function dotenv() {
 
 const file = dotenv();
 const read = (name) => process.env[name] || file[name] || '';
+const rooted = (value) => value ? (isAbsolute(value) ? value : resolve(root, value)) : '';
+
+export function steamLibraries({ platform = process.platform, env = process.env, registry } = {}) {
+  const personal = env.USERPROFILE || env.HOME || '';
+  const candidates = platform === 'win32'
+    ? [join(env['ProgramFiles(x86)'] || 'C:/Program Files (x86)', 'Steam'), join(env.ProgramFiles || 'C:/Program Files', 'Steam')]
+    : platform === 'darwin'
+      ? [join(personal, 'Library', 'Application Support', 'Steam')]
+      : [join(personal, '.local', 'share', 'Steam'), join(personal, '.steam', 'steam')];
+  if (platform === 'win32') {
+    try {
+      const value = registry ?? execFileSync('reg.exe', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      const match = value.match(/SteamPath\s+REG_SZ\s+(.+)/i);
+      if (match) candidates.unshift(match[1].trim());
+    } catch { /* Steam is optional; a prebuilt bundle needs no installation. */ }
+  }
+  const all = new Set(candidates);
+  for (const steam of candidates) {
+    const path = join(steam, 'steamapps', 'libraryfolders.vdf');
+    if (!existsSync(path)) continue;
+    for (const match of readFileSync(path, 'utf8').matchAll(/"path"\s+"((?:\\.|[^"\\])*)"/g)) {
+      all.add(match[1].replace(/\\\\/g, '\\'));
+    }
+  }
+  return [...all];
+}
+
+export function findGame(libraries = steamLibraries()) {
+  const candidates = libraries.map((library) => {
+    const manifest = join(library, 'steamapps', 'appmanifest_269210.acf');
+    const folder = existsSync(manifest)
+      ? readFileSync(manifest, 'utf8').match(/"installdir"\s+"([^"]+)"/)?.[1] || 'HeroSiege'
+      : 'HeroSiege';
+    return join(library, 'steamapps', 'common', folder, 'bin');
+  });
+  return candidates.find((candidate) => existsSync(join(candidate, 'data.win'))) || candidates[0] || '';
+}
+
+function configuredPath(names, fallback) {
+  const explicit = names.map((name) => process.env[name]).find(Boolean);
+  if (explicit) return rooted(explicit);
+  const saved = names.map((name) => file[name]).find(Boolean);
+  if (saved && existsSync(rooted(saved))) return rooted(saved);
+  if (saved) console.warn(`Saved ${names[0]} path is unavailable; using local discovery. An environment override remains authoritative.`);
+  return fallback();
+}
 
 /// The first candidate that exists, or the first one at all so an error message
 /// has something to name.
@@ -47,17 +94,38 @@ export const REPO = root;
 /// The game's bin folder — where data.win, Hero_Siege.exe and the translation
 /// tables live.
 export const GAME =
-  read('HERO_SIEGE_BIN') ||
-  firstThatExists(
-    'C:/Program Files (x86)/Steam/steamapps/common/HeroSiege/bin',
-    'D:/Steam/steamapps/common/HeroSiege/bin',
-  );
+  configuredPath(['HERO_SIEGE_BIN', 'HERO_SIEGE'], findGame);
 
 /// The extractor that reads the game. It is a separate tool in a separate
 /// folder, on purpose: it knows about Hero Siege, not about this app.
 export const EXTRACTOR =
-  read('HS_EXTRACTOR') ||
-  resolve(root, '..', 'HeroSiege Extractor');
+  configuredPath(['HS_EXTRACTOR'], () => resolve(root, '..', 'HeroSiege Extractor'));
+
+export const EXTRACTOR_BIN = rooted(read('HS_EXTRACTOR_BIN')) ||
+  join(EXTRACTOR, 'target', 'release', process.platform === 'win32' ? 'hse-extractor.exe' : 'hse-extractor');
+
+export const BUNDLE = rooted(read('HS_DATA_BUNDLE'));
+const python = read('PYTHON');
+const localPython = join(EXTRACTOR, '.venv', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python']));
+export const PYTHON = python && /[\\/]/.test(python) ? rooted(python) : python || (existsSync(localPython) ? localPython : 'python');
+
+function findVCVars() {
+  const installer = join(process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+  if (existsSync(installer)) {
+    try {
+      const installs = JSON.parse(execFileSync(installer, ['-all', '-products', '*', '-format', 'json'], { encoding: 'utf8', windowsHide: true }));
+      for (const install of installs) {
+        const candidate = join(install.installationPath, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
+        if (existsSync(candidate)) return candidate;
+      }
+    } catch { /* Fall back to the conventional locations below. */ }
+  }
+  return firstThatExists(
+    'C:/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvars64.bat',
+    'C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat',
+    'C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build/vcvars64.bat',
+  );
+}
 
 /// The certificate the Windows build signs with, by its SHA-1 thumbprint, and
 /// empty when there is none — an unsigned build is the ordinary case and must
@@ -80,13 +148,7 @@ export const SIGN_TIMESTAMP = read('HS_SIGN_TIMESTAMP') || 'http://timestamp.dig
 /// A Visual Studio whose CRT headers are actually installed. cargo finds a
 /// compiler by looking for cl.exe, not by checking that it works, so a broken
 /// installation is found first and every build dies in vswhom-sys.
-export const VCVARS =
-  read('VCVARS') ||
-  firstThatExists(
-    'C:/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvars64.bat',
-    'C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat',
-    'C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build/vcvars64.bat',
-  );
+export const VCVARS = configuredPath(['VCVARS'], findVCVars);
 
 /// The private half of the key an update is signed with. It lives outside the
 /// checkout on purpose: the app installs nothing this key did not sign, so a

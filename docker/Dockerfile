@@ -71,7 +71,7 @@ ENV PKG_FAMILY=deb
 # return on the shebang line makes the entrypoint "bash\r: No such file
 # or directory" - a 127 with no other clue. Strip them here so the checkout
 # settings of whoever builds the image stop mattering.
-COPY build.sh trim-appimage.sh /usr/local/bin/
-RUN sed -i 's/\r$//' /usr/local/bin/build.sh /usr/local/bin/trim-appimage.sh \
- && chmod +x /usr/local/bin/build.sh /usr/local/bin/trim-appimage.sh
+COPY build.sh trim-appimage.sh fix-appimage-backend.sh /usr/local/bin/
+RUN sed -i 's/\r$//' /usr/local/bin/build.sh /usr/local/bin/trim-appimage.sh /usr/local/bin/fix-appimage-backend.sh \
+ && chmod +x /usr/local/bin/build.sh /usr/local/bin/trim-appimage.sh /usr/local/bin/fix-appimage-backend.sh
 ENTRYPOINT ["/usr/local/bin/build.sh"]

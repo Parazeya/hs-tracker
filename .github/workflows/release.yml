@@ -59,7 +59,7 @@ jobs:
       # delay-loaded, so no driver is needed on the runner
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      - run: npx tauri build
+      - run: npx tauri build --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - uses: actions/upload-artifact@v4
         with:
@@ -71,7 +71,7 @@ jobs:
   # cutting a release. The .rpm is built in a Fedora job of its own below,
   # because a binary linked here asks for a libpcap Fedora does not ship.
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -105,7 +105,7 @@ jobs:
           sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g'             /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           apt_opts="-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
           sudo apt-get $apt_opts update
-          sudo apt-get $apt_opts install -y libwebkit2gtk-4.1-dev libgtk-3-dev             libayatana-appindicator3-dev librsvg2-dev libpcap-dev             patchelf zsync desktop-file-utils             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav
+          sudo apt-get $apt_opts install -y libwebkit2gtk-4.1-dev libgtk-3-dev             libayatana-appindicator3-dev librsvg2-dev libpcap-dev             patchelf zsync desktop-file-utils squashfs-tools             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav
           sudo apt-get $apt_opts install -y libfuse2             || sudo apt-get $apt_opts install -y libfuse2t64
 
       - run: npm ci
@@ -114,7 +114,7 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       # The .deb is the artifact that matters and it is built on its own, so
       # nothing that happens to the AppImage can withhold it.
-      - run: npx tauri build --bundles deb
+      - run: npx tauri build --bundles deb --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       # The AppImage bundler fetches AppRun, linuxdeploy and the GTK plugin from
       # github.com and raw.githubusercontent.com at bundle time. Those are
@@ -131,7 +131,17 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: 1
         run: |
           for attempt in 1 2 3; do
-            if npx tauri build --bundles appimage; then
+            if npx tauri build --bundles appimage --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'; then
+              # Apply the same host-library and GTK-backend cleanup as the local
+              # Docker build before handing a runner artifact to a tester.
+              # This step may fail without blocking the .deb, so upload from a
+              # separate directory: a rejected original must never match it.
+              validated=src-tauri/target/release/bundle/appimage/validated
+              mkdir -p "$validated"
+              while IFS= read -r -d '' img; do
+                bash docker/trim-appimage.sh "$img"
+                mv "$img" "$validated/"
+              done < <(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print0)
               exit 0
             fi
             echo "::warning::AppImage bundling failed (attempt $attempt/3), waiting"
@@ -147,14 +157,14 @@ jobs:
           name: hs-tracker-linux
           path: |
             src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/validated/*.AppImage
 
   # An RPM has to be built where it will run. Debian calls the capture library
   # libpcap.so.0.8 and Fedora calls the same library libpcap.so.1, so a package
   # built on Ubuntu installs on Fedora and then refuses to start.
   rpm:
     runs-on: ubuntu-latest
-    container: fedora:41
+    container: fedora:44
     steps:
       - uses: actions/checkout@v4
 
@@ -168,7 +178,7 @@ jobs:
       - run: npm ci
       - run: node scripts/set-version.mjs
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npx tauri build --bundles rpm
+      - run: npx tauri build --bundles rpm --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - uses: actions/upload-artifact@v4
         with:

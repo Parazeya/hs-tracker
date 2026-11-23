@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "game_fingerprint": "6a59daeeee59be1b7861fd280d28daf6f93acc3600336b29aadfb82f7dcdf27a",
+  "source_sha256": "7754999f8fbf5357f90dc4caaeabcf76da741094e33f631f48ebf66cc9180ebd",
+  "files": [
+    {
+      "path": ".nojekyll",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "path": "assets/Detail-B3L3SNQJ.js",
+      "sha256": "8b20b1e67f5ee1c69f4a2a8cbe4f24e4510258cb04fe483fe5dcb08462b9c9cd",
+      "size": 26334
+    },
+    {
+      "path": "assets/Detail-Bn2xANMX.css",
+      "sha256": "3aac53412f319c76d7da938ec4159b89654af0b50ec8b29752d3258374d3f5b3",
+      "size": 6407
+    },
+    {
+      "path": "assets/ItemIcon-CYbScCjT.js",
+      "sha256": "986901568385b15c82ad3adabd20766f7c978dd591ea776602c52f610f243960",
+      "size": 1769
+    },
+    {
+      "path": "assets/ItemIcon-DvIKpDt2.css",
+      "sha256": "37f30302c44519a043e4737783a225df38c18096d3e7e72566be3d2e6989e53f",
+      "size": 173
+    },
+    {
+      "path": "assets/book-ievhJ2NT.js",
+      "sha256": "a037fa2e196940eca21f5a0ee186cec56c6fefd31cd3ca620373608f534499f1",
+      "size": 1962
+    },
+    {
+      "path": "assets/bounty-DQ98UDjG.css",
+      "sha256": "ed927152b2f247ac4c46b5818a96c2c8b79a59cf8de2828f45db0015bb1a4c68",
+      "size": 3112
+    },
+    {
+      "path": "assets/bounty-Gg4Zd_wT.js",
+      "sha256": "a62df4b981799e1fef3c8c61bdf02f038917f28beb13389797bc8b67887a99c2",
+      "size": 5710
+    },
+    {
+      "path": "assets/codex-BbLdp62n.css",
+      "sha256": "d4a4752f19109379aa9783d28cb13fcd2bd51af21667b097d23d099dde316fa0",
+      "size": 10762
+    },
+    {
+      "path": "assets/codex-Dt3H6nO7.js",
+      "sha256": "b828457d11d54bb1e25318158723ae54177f15306005ce6d101a9167255f8d8a",
+      "size": 15567
+    },
+    {
+      "path": "assets/map-CM8gbvHg.js",
+      "sha256": "0052c7e841b5ae515a6d3f3639c8a4530d93308440459f18128f31cbd7e0f870",
+      "size": 56908
+    },
+    {
+      "path": "assets/map-DLm-Dkjh.css",
+      "sha256": "70a2943c01cf79043dcfeddee19d4e35ebc37724e9a464b5bc86f74ff9c543bf",
+      "size": 17433
+    },
+    {
+      "path": "assets/say-Cxey2X-U.js",
+      "sha256": "2a7a08ac5103d28859691a9e22e9f4f8ddbb0aee25ef35f357c119643b4f9e96",
+      "size": 49749
+    },
+    {
+      "path": "assets/say-DG9SLEzG.css",
+      "sha256": "35be8462e54cdd77be5653c3be320ed37d4a7760b80d2e6c20f3945936a4d2ce",
+      "size": 853
+    },
+    {
+      "path": "assets/skills-B_4ZmESz.js",
+      "sha256": "2412f1e9d4ef264a3134f1f61ae17de49f96c96d639baa9b06308a1425f87511",
+      "size": 20815
+    },
+    {
+      "path": "assets/skills-DPvtVDwo.css",
+      "sha256": "5e1f529072afaa0fbb92d1eb0ae55814b9e64e165c4626ecdd7ac23af99c47a4",
+      "size": 8642
+    },
+    {
+      "path": "bounty.html",
+      "sha256": "a093133ea61885a8502fb54257781712c82bcdb909c761c4e7b9571ed0725f32",
+      "size": 2043
+    },
+    {
+      "path": "codex.html",
+      "sha256": "3b7f853584d7978b44645164cd5176516064e113796e24e54f0e81a7fca7005a",
+      "size": 2447
+    },
+    {
+      "path": "data/bounty.de.json",
+      "sha256": "ec9d26d9d1aad596a3cac4af7686e9f72a7c340207ea5049033a415e904f9ec3",
+      "size": 7279
+    },
+    {
+      "path": "data/bounty.fi.json",
+      "sha256": "e2b3eaa63c8bcb0ff6fb00fa27f5155bbc4e610e93fa44a79578a31603482256",
+      "size": 4949
+    },
+    {
+      "path": "data/bounty.fr.json",
+      "sha256": "6ee57b0dc6e8603e290affce666557d6c01372f557132e2a9aac742530a280c5",
+      "size": 7599
+    },
+    {
+      "path": "data/bounty.ja.json",
+      "sha256": "387020a640af7322afdc9aee2421ae328abaf869fe1613c9b5feba746ef86356",
+      "size": 8148
+    },
+    {
+      "path": "data/bounty.json",
+      "sha256": "4cf9c6345cadb4844a6228c19e4a5b3573e8001ad0aa46836ee4bad0192c7ca6",
+      "size": 8706
+    },
+    {
+      "path": "data/bounty.ko.json",
+      "sha256": "b25af116692066e20b9720265ce201870ac6d33207d39448374c74620b7abd5a",
+      "size": 7512
+    },
+    {
+      "path": "data/bounty.pl.json",
+      "sha256": "6cdc7761fe8335ab8bad6d76753a8134363b9072e6f7eae6468f5a35d5996aec",
+      "size": 7156
+    },
+    {
+      "path": "data/bounty.pt.json",
+      "sha256": "014fb5adaf8c16ab8665deb813ae7f958e43ea7c7304b40352de4282de8893bd",
+      "size": 7117
+    },
+    {
+      "path": "data/bounty.ru.json",
+      "sha256": "f2c61aaf529dfb7f9d7381cb04d780024d2105cade44ab4171cd7764e159820f",
+      "size": 14111
+    },
+    {
+      "path": "data/bounty.sp.json",
+      "sha256": "0ed60104cb54ca518bc3cd0aeeae15a928f1c8b634fe38b2c1566a03d85d790c",
+      "size": 7286
+    },
+    {
+      "path": "data/bounty.zh.json",
+      "sha256": "a8975a2bd492d8827760e8c790a9658593d870f49eb4d1899338d7ebd245544b",
+      "size": 7137
+    },
+    {
+      "path": "data/codex.de.json",
+      "sha256": "d352cc31f5f72499dc6a5694570cdea00d424ab4e8a7f1f1dd4685f45e2ebe1c",
+      "size": 311459
+    },
+    {
+      "path": "data/codex.fi.json",
+      "sha256": "e47eb15631b6fb4ac1a5b0192dfa9325bd68afbb7f2aae373d2b93b855daf513",
+      "size": 266228
+    },
+    {
+      "path": "data/codex.fr.json",
+      "sha256": "b4a70baaff7a20723d317e2f7a8658c76306aeb48234e4df2fca2ae6674564d7",
+      "size": 340125
+    },
+    {
+      "path": "data/codex.ja.json",
+      "sha256": "8aedfaf5f62cdb66a912a9bfad3e88eeeb4cd76f9039df6583b4e6f2e2ff537f",
+      "size": 346865
+    },
+    {
+      "path": "data/codex.json",
+      "sha256": "f305a4c82cdb346ca49dcc6a2e62e68ea6b8a9f10a3a1746e04b154f9122882a",
+      "size": 13793510
+    },
+    {
+      "path": "data/codex.ko.json",
+      "sha256": "6c75c6520fe5d8be0f1c629d32015118d74599a4ab3db48c1172c068ad6b6f8a",
+      "size": 325493
+    },
+    {
+      "path": "data/codex.pl.json",
+      "sha256": "df91c3572f0627abcf11b1a7c7e15a5e1ea6c75535bbe8baa4989ebdb35ebb62",
+      "size": 306671
+    },
+    {
+      "path": "data/codex.pt.json",
+      "sha256": "b5c1d7c367650e0b5a9dfaefd9dfce6dd4d4c51d693eaac834e614270e827e66",
+      "size": 320645
+    },
+    {
+      "path": "data/codex.ru.json",
+      "sha256": "94da68ab1ed8f8632ccf554ebeb823ac0be0528999350e0c87aa7739e31a40ea",
+      "size": 454661
+    },
+    {
+      "path": "data/codex.sp.json",
+      "sha256": "b93dcdcdabab7071562a5abd345b69b5786ba309c0a2aa70f2e29063b832e034",
+      "size": 312965
+    },
+    {
+      "path": "data/codex.zh.json",
+      "sha256": "8023b31d57225113a64c63bf7a27631bb2b60fc5859102701a78246943ad26aa",
+      "size": 283207
+    },
+    {
+      "path": "data/map.de.json",
+      "sha256": "8160348d7f8bf886eaa9f59bd605c816173b97e0787c96eb914c24e9c8d8b5bf",
+      "size": 60838
+    },
+    {
+      "path": "data/map.fi.json",
+      "sha256": "cc6e8a04c3b51a3adf037dc23dc0c6667364decd6779cb0aa260cc4f7203dc75",
+      "size": 56796
+    },
+    {
+      "path": "data/map.fr.json",
+      "sha256": "787f3ddfe3c1c4cdf6805d59f7ed362a8b447a8072365c7d4a2187843803411e",
+      "size": 62835
+    },
+    {
+      "path": "data/map.ja.json",
+      "sha256": "42b4b4eef49f070025d7afc08bdb939cee6b24f84ae4186ad9a8dd3c100417b5",
+      "size": 69625
+    },
+    {
+      "path": "data/map.json",
+      "sha256": "3f376791854a1b2d8524692f861e15188bf91e628312feab43b1ecf09b9a5f47",
+      "size": 209603
+    },
+    {
+      "path": "data/map.ko.json",
+      "sha256": "8209a28eee43eb95ac75d8d89681c3e32b78b7fd550afb2319a6d934b58cd394",
+      "size": 62610
+    },
+    {
+      "path": "data/map.pl.json",
+      "sha256": "757532f28c6c438b8c5847daa0e09febe7667b47abcc5d9d422cd0298d75f7d0",
+      "size": 60406
+    },
+    {
+      "path": "data/map.pt.json",
+      "sha256": "e94269c8287605f203cc95a927f6cc3033f8067409f0f40a73ab2cf2432b5d5f",
+      "size": 62770
+    },
+    {
+      "path": "data/map.ru.json",
+      "sha256": "c10d85e05991bf7d4ca4f103f25bdd100f69c589dd648741e8b91362c9448f51",
+      "size": 85025
+    },
+    {
+      "path": "data/map.sp.json",
+      "sha256": "16c7f477c585502ca5484d5729b379b88facfff81e7f1e8ed812f8303705cee3",
+      "size": 63568
+    },
+    {
+      "path": "data/map.zh.json",
+      "sha256": "a027710072409cef484a558cc462f9e562b8e64e1d912130c11c46305aa53a30",
+      "size": 58242
+    },
+    {
+      "path": "data/skills.de.json",
+      "sha256": "7907cbf2b328f54558d84d4ae59f31a2dd7c322d26035a28249c082675dbc60d",
+      "size": 400649
+    },
+    {
+      "path": "data/skills.fi.json",
+      "sha256": "23d5595e6a0f54d6ba8ddcb3714524aa6c0079a2b30a38a7239670a4dc3ac13d",
+      "size": 103748
+    },
+    {
+      "path": "data/skills.fr.json",
+      "sha256": "bfbdbbba296e43bdf55977a373b25cbdbbaa2278762316b0cc2f990a831cdf58",
+      "size": 508838
+    },
+    {
+      "path": "data/skills.ja.json",
+      "sha256": "f68779cf1028e9be95393cd014dfb9e6bbdf31e6aa2677c1059ce5912b0e882a",
+      "size": 498932
+    },
+    {
+      "path": "data/skills.json",
+      "sha256": "520139868e89469b2c135aac3eee6efd0a2c8359d43676dccda0c74802bde2b2",
+      "size": 4135989
+    },
+    {
+      "path": "data/skills.ko.json",
+      "sha256": "cfbb61318d4b3e020644fcc5865e61669f1faee5dd9347131d76dd2a7b4f59be",
+      "size": 468908
+    },
+    {
+      "path": "data/skills.pl.json",
+      "sha256": "eccdc34efc56c39312cd00f99682a08843cb7d842ea300bef05bb65e1a75558b",
+      "size": 462870
+    },
+    {
+      "path": "data/skills.pt.json",
+      "sha256": "2d4fd388f62fb111eaa2a747355114829f17d6f664ba286e0d2a24b311bee0b4",
+      "size": 388856
+    },
+    {
+      "path": "data/skills.ru.json",
+      "sha256": "3358e37a63ba5cf7a376fde43aa6f0a59fb65c2128e27241f52e2dff81c22a1e",
+      "size": 722780
+    },
+    {
+      "path": "data/skills.sp.json",
+      "sha256": "c86dd2a8b76c3f2ab4fa11bc978c590e963f7f39c7100824ae5b3d68bec4157a",
+      "size": 476634
+    },
+    {
+      "path": "data/skills.zh.json",
+      "sha256": "1880d6cfadabdc98db6589760b655f2da44930d9628259683f8a89becff06203",
+      "size": 388822
+    },
+    {
+      "path": "data/source.json",
+      "sha256": "7754999f8fbf5357f90dc4caaeabcf76da741094e33f631f48ebf66cc9180ebd",
+      "size": 6193
+    },
+    {
+      "path": "favicon.png",
+      "sha256": "2ce429ac04b22f6ae36e3ab47be88a52c94ae63632d34bd646faa5410088929d",
+      "size": 674
+    },
+    {
+      "path": "img/bosses.webp",
+      "sha256": "d11f59f2b0adcb2e780946d5229108d1f52bb92f0907ea3bed9a70bc784a2907",
+      "size": 107684
+    },
+    {
+      "path": "img/chosen.webp",
+      "sha256": "0ed2f5394578dd4f609fdd8a8faf4af20db3f6d8141aa7f4d784ec53e07206c0",
+      "size": 166
+    },
+    {
+      "path": "img/codex.webp",
+      "sha256": "d41b03af2741e422843d3f508713f628e538d29b2f4e965948811acdb58f4b16",
+      "size": 809848
+    },
+    {
+      "path": "img/dungeon.webp",
+      "sha256": "19b22cf5f7ed43330a7300951f204f08906ed5d004b41394a1ff22bab78777cd",
+      "size": 256
+    },
+    {
+      "path": "img/dungeonmark.webp",
+      "sha256": "e0220e5fdff435dca14e003b5e00353a5546a685f74d2f1021f23acdb5d637e8",
+      "size": 238
+    },
+    {
+      "path": "img/fx-satanic.6x1.webp",
+      "sha256": "09a8b212fe6627fd0526809d952fadaff42716de60f83ca287b5d5a53e3d820e",
+      "size": 2998
+    },
+    {
+      "path": "img/fx-zone.12x6.webp",
+      "sha256": "3c6302fa1b663db075d6fc071ebe55d7a2a540a0acc38edc1345095bdca1ef7b",
+      "size": 13816
+    },
+    {
+      "path": "img/glow.webp",
+      "sha256": "d9db910654145c68084b1feb38b4434e133a999c898f8347699553d11308e283",
+      "size": 1484
+    },
+    {
+      "path": "img/items.webp",
+      "sha256": "9df4a7ecaa49191dcfe1cd733868a519ba45759715a7f059a72eef4e49481755",
+      "size": 568612
+    },
+    {
+      "path": "img/link.webp",
+      "sha256": "90f95fb63617c44be5d4759290a36d01fd3516f872d6a285761fd2d210d07abd",
+      "size": 82
+    },
+    {
+      "path": "img/map.webp",
+      "sha256": "8bbeda0e86a1f18abdcf54294950e5b8a9364a45f679b545a83c28b5d2d295af",
+      "size": 464246
+    },
+    {
+      "path": "img/node-big.webp",
+      "sha256": "c38788c1c08c77c731f101ac4890a538f56b776f0f5ad439ae0c2590e7fc31e9",
+      "size": 334
+    },
+    {
+      "path": "img/node-dim.webp",
+      "sha256": "c7dd1aab117cddd2b8aaccd404a1b053ed407d574a41469c7d23ff0ff1c414e6",
+      "size": 206
+    },
+    {
+      "path": "img/node-ring-big.webp",
+      "sha256": "4203bfd262883fb39ad1c4b2cabb7e4b62a0a574c1c4623050b5cecd586d4a48",
+      "size": 174
+    },
+    {
+      "path": "img/node-ring.webp",
+      "sha256": "8213beddf51f22de2b646bda7065b4cf5f956051d3f95061a4a6af52f80354e2",
+      "size": 140
+    },
+    {
+      "path": "img/node.webp",
+      "sha256": "b6a294bbb05d9cccf3dfa0147037246389c1c4b4f12909c3a9e6d9e916c28961",
+      "size": 258
+    },
+    {
+      "path": "img/prop01.webp",
+      "sha256": "1c917b33e255895a9ff9bbb6e46a2faf07a31fccc6874a740a3b5ea3ca74b87f",
+      "size": 2502
+    },
+    {
+      "path": "img/prop02.webp",
+      "sha256": "dc59f4a651bb1b8795044c4b7fd80a4fbb405d7dfdfb95de0a9a67dd07b78f3f",
+      "size": 1990
+    },
+    {
+      "path": "img/prop03.webp",
+      "sha256": "66e8ca37d8a064359103a255d136cabb493b89169c7ea15f6a5733692e8c81ec",
+      "size": 668
+    },
+    {
+      "path": "img/prop04.webp",
+      "sha256": "89021ed570b940f9f52a1556838374ea869d4101cd895dd523bc7ab5363a6f14",
+      "size": 690
+    },
+    {
+      "path": "img/prop05-1.webp",
+      "sha256": "5a0ec3b37a9fa8ecdd34af20aacf19055c6bc7b59655d86e5f0d7d72e90a8c25",
+      "size": 1030
+    },
+    {
+      "path": "img/prop05-2.webp",
+      "sha256": "a241d77eba1e42878df94b4ea866716401be69ba7dc1e76e9d16abef6ccdf5c6",
+      "size": 326
+    },
+    {
+      "path": "img/prop05-3.webp",
+      "sha256": "be8911dfc1b848a44d3a47df30ecdedf06c11595d1ed6903b50fedc43fabfd58",
+      "size": 1528
+    },
+    {
+      "path": "img/prop05-4.webp",
+      "sha256": "7cec74849b06ffd91d9c858de27eddf9f0c02ad6238c21aec71328734fb98f05",
+      "size": 180
+    },
+    {
+      "path": "img/prop05-5.webp",
+      "sha256": "6d0b05dae88fee3490ff30b5ef15152047d6ed905f8c76c069d15b42bf184ccc",
+      "size": 1410
+    },
+    {
+      "path": "img/prop05.webp",
+      "sha256": "240748428541a48b913a89ec319e9388a15bac1e17bc287b5aff562c82a88a3b",
+      "size": 5212
+    },
+    {
+      "path": "img/prop06-1.webp",
+      "sha256": "e279eb7d6d383c5932f580bc5893cb59f7e6b8bb34a7eea0d7402beec67b407f",
+      "size": 4014
+    },
+    {
+      "path": "img/prop06.webp",
+      "sha256": "d21282b1780d5e1fa90d364a05b0249d45919e1f047dd1103e31f328715925de",
+      "size": 1008
+    },
+    {
+      "path": "img/prop07.webp",
+      "sha256": "f9d5171a64386e7ace51332ee3c7825ced4d563fe7fb16879abce3a38adfb561",
+      "size": 5074
+    },
+    {
+      "path": "img/prop08-1.webp",
+      "sha256": "82677ea9a5efa871d60f3b84a76046b976950cf518b1bae14beb04ef5200ea32",
+      "size": 4972
+    },
+    {
+      "path": "img/prop08-2.webp",
+      "sha256": "48487d7abff9639229959dae66899d38e3c27150029a6353eb5d321897d3048b",
+      "size": 4748
+    },
+    {
+      "path": "img/prop08.webp",
+      "sha256": "ca63f07e7bde65625614e56a3689d1ffe9289e5ad608964ea34d9be0ead70e40",
+      "size": 5368
+    },
+    {
+      "path": "img/satanic.webp",
+      "sha256": "c53faec7affad7dd6db389d6d852db856d2c461780f49ccd12dcbbe6dd039386",
+      "size": 254
+    },
+    {
+      "path": "img/skills.webp",
+      "sha256": "aefe32fedbf86cdb4c4527daaf945f7c2ac2765fb24255dc18608ef280183849",
+      "size": 256630
+    },
+    {
+      "path": "img/skull.webp",
+      "sha256": "d62a13c951245e4354b6ff88275fbe21162eca85b280c3ade4bdab0eea9c6aa1",
+      "size": 132
+    },
+    {
+      "path": "img/subskills.webp",
+      "sha256": "7dd10ef34f0d2932f45bed552e88d7446fb72a0701ffee3213e108c607db5e9f",
+      "size": 673362
+    },
+    {
+      "path": "img/town.webp",
+      "sha256": "480bcb042de534767d391407648d8790de112a77edf31f33b57b27b7693de6fa",
+      "size": 326
+    },
+    {
+      "path": "index.html",
+      "sha256": "8fd4de888b3bf036a2dba6fd9011aec251db72e57124f83f60e1daeb268e042a",
+      "size": 2278
+    },
+    {
+      "path": "skills.html",
+      "sha256": "3a8a4e276831625f89251040707418294dcb8a9d86dfdd1cf5a50a46fa485bb1",
+      "size": 2239
+    }
+  ]
+}

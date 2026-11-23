@@ -160,132 +160,444 @@ const SCAN_BUDGET: usize = 8;
 /// It is only a bound on what one flow may hold; `opens_a_value` is what tells
 /// a real tail from framing noise.
 const CARRY_CAP: usize = 64 << 10;
-const CARRY_ROUNDS: u8 = 3;
-const BUF_TTL: Duration = Duration::from_secs(15);
-/// What we send is only flushed when the ack changes, and the ack only changes
-/// when the server sends something back. Character saves — the one source of
-/// kills and experience — would then sit here until the next server burst, so
-/// the counters would move only on a zone change. A quiet buffer is flushed on
-/// its own.
+const BUF_TTL: Duration = Duration::from_secs(120);
 const IDLE_FLUSH: Duration = Duration::from_millis(250);
+const GAP_WAIT: Duration = Duration::from_secs(2);
+const CARRY_WAIT: Duration = Duration::from_secs(2);
+const MAX_FLOWS: usize = 256;
+const MAX_SEGMENTS: usize = 256;
+const HISTORY_CAP: usize = 64 << 10;
+const TOTAL_CAP: usize = 16 << 20;
 
-struct Pending {
-    data: Vec<u8>,
-    at: Instant,
+/// A directional TCP connection. Destination address is part of its identity,
+/// including on loopback and when several local addresses use the same ports.
+pub type Flow = (IpAddr, u16, IpAddr, u16);
+
+#[derive(Clone, Copy, Default)]
+pub struct TcpFlags {
+    pub syn: bool,
+    pub ack: bool,
+    pub ack_number: u32,
+    pub fin: bool,
+    pub rst: bool,
 }
 
-/// One side of one TCP connection: source address and both ports. The game
-/// holds several connections to the same server at once — a busy one (the
-/// world) and a quiet one (character saves). Keyed by address alone they share
-/// a buffer, and during a fight the world traffic shreds the save being
-/// assembled — which is exactly when the counters must not stop moving.
-pub type Flow = (IpAddr, u16, u16);
+/// Cumulative bounded-recovery counters, without packet contents or addresses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransportDiagnostics {
+    pub gaps: u64,
+    pub conflicts: u64,
+    pub limits: u64,
+    pub resets: u64,
+    pub expired_flows: u64,
+    pub evicted_flows: u64,
+}
 
-/// Payloads are buffered per flow and ack, and flushed when the ack from that
-/// flow changes. A message that straddles two flushes would be lost, so the
-/// unterminated tail is carried over to the next flush of the same flow.
+struct TcpStream {
+    checkpoint: i64,
+    next: Option<i64>,
+    pending: std::collections::BTreeMap<i64, Vec<u8>>,
+    history: Vec<u8>,
+    history_start: i64,
+    carry: Vec<u8>,
+    carry_since: Option<Instant>,
+    touched: Instant,
+    batch_started: Instant,
+    gap_since: Option<Instant>,
+    syn: Option<u32>,
+    peer_syn: Option<u32>,
+    fin: Option<i64>,
+    closed: bool,
+    faults: [u64; 3],
+}
+
+impl TcpStream {
+    fn new(seq: u32, syn: bool, now: Instant) -> Self {
+        let start = seq.wrapping_add(u32::from(syn)) as i64;
+        Self {
+            checkpoint: start,
+            next: syn.then_some(start),
+            pending: Default::default(),
+            history: Vec::new(),
+            history_start: start,
+            carry: Vec::new(),
+            carry_since: None,
+            touched: now,
+            batch_started: now,
+            gap_since: None,
+            syn: syn.then_some(seq),
+            peer_syn: None,
+            fin: None,
+            closed: false,
+            faults: [0; 3],
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        self.pending.values().map(Vec::len).sum::<usize>() + self.history.len() + self.carry.len()
+    }
+
+    fn quarantine(&mut self) {
+        self.pending.clear();
+        self.history.clear();
+        self.carry.clear();
+        self.carry_since = None;
+        self.closed = true;
+    }
+
+    fn initial_syn_start(&self, seq: u32) -> Option<i64> {
+        if self.closed || self.syn.is_some() || self.next.is_some()
+            || !self.history.is_empty() || !self.carry.is_empty() {
+            return None;
+        }
+        let wire = seq.wrapping_add(1);
+        let start = self.checkpoint + wire.wrapping_sub(self.checkpoint as u32) as i32 as i64;
+        let (&first, _) = self.pending.first_key_value()?;
+        let (&last, bytes) = self.pending.last_key_value()?;
+        // Only bind an uncommitted initial range beginning at this SYN's first
+        // data byte. A different ISN must still discard the previous generation.
+        (first == start && last + bytes.len() as i64 - start <= BUF_CAP as i64).then_some(start)
+    }
+
+    fn insert(&mut self, seq: u32, flags: TcpFlags, payload: &[u8], now: Instant) {
+        self.touched = now;
+        if self.closed {
+            return;
+        }
+        // Unwrap relative to the moving checkpoint, so a long-lived stream can
+        // cross the 32-bit sequence boundary repeatedly without sorting by u32.
+        let wire = seq.wrapping_add(u32::from(flags.syn));
+        let mut start = self.checkpoint + wire.wrapping_sub(self.checkpoint as u32) as i32 as i64;
+        let end = start + payload.len() as i64;
+        if flags.fin {
+            self.fin = Some(end);
+        }
+        if payload.is_empty() {
+            return;
+        }
+        if payload.len() > BUF_CAP {
+            self.faults[2] += 1;
+            self.quarantine();
+            return;
+        }
+        self.checkpoint = self.checkpoint.max(end);
+        let mut data = payload;
+        if let Some(next) = self.next {
+            // Compare the retained committed overlap before ignoring a retry.
+            let lo = start.max(self.history_start);
+            let hi = end.min(next);
+            if hi > lo
+                && self.history
+                    [(lo - self.history_start) as usize..(hi - self.history_start) as usize]
+                    != data[(lo - start) as usize..(hi - start) as usize]
+            {
+                self.faults[1] += 1;
+                self.quarantine();
+                return;
+            }
+            if end <= next {
+                return;
+            }
+            if start < next {
+                data = &data[(next - start) as usize..];
+                start = next;
+            }
+            // A missing multi-megabyte span cannot be bridged in bounded memory.
+            // Recover at the new segment, without appending it to an old JSON tail.
+            if start - next > BUF_CAP as i64 {
+                self.faults[0] += 1;
+                self.pending.clear();
+                self.history.clear();
+                self.carry.clear();
+                self.carry_since = None;
+                self.next = Some(start);
+                self.history_start = start;
+                self.gap_since = None;
+            }
+        }
+        let end = start + data.len() as i64;
+        let overlaps: Vec<i64> = self
+            .pending
+            .iter()
+            .filter_map(|(&at, bytes)| {
+                (at <= end && at + bytes.len() as i64 >= start).then_some(at)
+            })
+            .collect();
+        let mut lo = start;
+        let mut hi = end;
+        for at in &overlaps {
+            let bytes = &self.pending[at];
+            let left = start.max(*at);
+            let right = end.min(*at + bytes.len() as i64);
+            if right > left
+                && bytes[(left - *at) as usize..(right - *at) as usize]
+                    != data[(left - start) as usize..(right - start) as usize]
+            {
+                self.faults[1] += 1;
+                self.quarantine();
+                return;
+            }
+            lo = lo.min(*at);
+            hi = hi.max(*at + bytes.len() as i64);
+        }
+        if hi - lo > BUF_CAP as i64 {
+            self.faults[2] += 1;
+            self.quarantine();
+            return;
+        }
+        let previous = self.pending.values().map(Vec::len).sum::<usize>();
+        let mut merged = vec![0; (hi - lo) as usize];
+        for at in overlaps {
+            let bytes = self.pending.remove(&at).unwrap();
+            merged[(at - lo) as usize..(at - lo) as usize + bytes.len()].copy_from_slice(&bytes);
+        }
+        merged[(start - lo) as usize..(start - lo) as usize + data.len()].copy_from_slice(data);
+        self.pending.insert(lo, merged);
+        if self.pending.len() > MAX_SEGMENTS
+            || self.pending.values().map(Vec::len).sum::<usize>() > BUF_CAP
+        {
+            self.faults[2] += 1;
+            self.quarantine();
+            return;
+        }
+        // Bound batching latency even on a busy connection. Resetting this
+        // deadline on every new segment would prevent a continuously active
+        // stream from flushing until it hit its memory limit.
+        if previous == 0 {
+            self.batch_started = now;
+        }
+        if let (Some(next), Some((&at, _))) = (self.next, self.pending.first_key_value()) {
+            if at > next {
+                self.gap_since.get_or_insert(now);
+            } else {
+                self.gap_since = None;
+            }
+        }
+    }
+
+    fn flush(&mut self, now: Instant, force: bool) -> Option<Vec<u8>> {
+        if self.closed {
+            return None;
+        }
+        let expired_carry = self
+            .carry_since
+            .is_some_and(|at| now.duration_since(at) >= CARRY_WAIT);
+        let mut data = Vec::new();
+        if let Some((&first, _)) = self.pending.first_key_value() {
+            let expected = self.next.unwrap_or(first);
+            if first > expected {
+                let since = *self.gap_since.get_or_insert(now);
+                if now.duration_since(since) < GAP_WAIT {
+                    return None;
+                }
+                self.faults[0] += 1;
+                // Discontinuity: never manufacture a message from two sides of
+                // an uncaptured gap. The later run starts with no JSON carry.
+                self.carry.clear();
+                self.carry_since = None;
+                self.history.clear();
+                self.history_start = first;
+                self.next = Some(first);
+                self.gap_since = None;
+            }
+            if !force && now.duration_since(self.batch_started) < IDLE_FLUSH {
+                return None;
+            }
+            let (start, bytes) = self.pending.pop_first().unwrap();
+            let end = start + bytes.len() as i64;
+            self.next = Some(end);
+            if self.history.is_empty() {
+                self.history_start = start;
+            }
+            self.history.extend_from_slice(&bytes);
+            if self.history.len() > HISTORY_CAP {
+                let discard = self.history.len() - HISTORY_CAP;
+                self.history.drain(..discard);
+                self.history_start += discard as i64;
+            }
+            data = bytes;
+            if self
+                .pending
+                .first_key_value()
+                .is_some_and(|(&at, _)| at > end)
+            {
+                self.gap_since = Some(now);
+            }
+        }
+        if data.is_empty() && !expired_carry {
+            if self
+                .fin
+                .is_some_and(|fin| self.next.is_some_and(|next| next >= fin))
+            {
+                self.closed = true;
+                self.pending.clear();
+                self.carry.clear();
+                self.carry_since = None;
+            }
+            return None;
+        }
+        let mut combined = std::mem::take(&mut self.carry);
+        combined.extend_from_slice(&data);
+        let cut = unterminated_start(&combined);
+        if !expired_carry
+            && cut < combined.len()
+            && combined.len() - cut <= CARRY_CAP
+            && opens_a_value(&combined[cut..])
+        {
+            self.carry = combined.split_off(cut);
+            self.carry_since.get_or_insert(now);
+        } else {
+            self.carry_since = None;
+        }
+        if self
+            .fin
+            .is_some_and(|fin| self.next.is_some_and(|next| next >= fin))
+        {
+            // Keep a bounded tombstone/history for delayed duplicate captures.
+            self.closed = true;
+            self.pending.clear();
+            self.carry.clear();
+            self.carry_since = None;
+        }
+        (!combined.is_empty()).then_some(combined)
+    }
+}
+
+/// Sequence-aware passive assembly, shared by capture adapters. A byte range
+/// is delivered once per directional full tuple, independently of JSON value.
+/// Mid-stream attachment waits briefly before committing its first range so a
+/// preceding out-of-order segment can still prepend. Uncaptured bytes cannot
+/// be reconstructed; timed-out gaps discard JSON carry before recovery.
 #[derive(Default)]
 pub struct Reassembler {
-    bufs: HashMap<(Flow, u32), Pending>,
-    last_ack: HashMap<Flow, u32>,
-    carry: HashMap<Flow, (Vec<u8>, u8)>,
+    streams: HashMap<Flow, TcpStream>,
+    diagnostics: TransportDiagnostics,
 }
 
 impl Reassembler {
-    pub fn push(&mut self, flow: Flow, ack: u32, payload: &[u8]) -> Option<Vec<u8>> {
-        if payload.is_empty() {
+    pub fn push(
+        &mut self,
+        flow: Flow,
+        seq: u32,
+        flags: TcpFlags,
+        payload: &[u8],
+    ) -> Option<Vec<u8>> {
+        self.push_at(flow, seq, flags, payload, Instant::now())
+    }
+
+    fn push_at(
+        &mut self,
+        flow: Flow,
+        seq: u32,
+        flags: TcpFlags,
+        payload: &[u8],
+        now: Instant,
+    ) -> Option<Vec<u8>> {
+        self.evict(now);
+        let reverse = (flow.2, flow.3, flow.0, flow.1);
+        if flags.rst {
+            self.diagnostics.resets += 1;
+            for key in [flow, reverse] {
+                let stream = self
+                    .streams
+                    .entry(key)
+                    .or_insert_with(|| TcpStream::new(seq, false, now));
+                stream.touched = now;
+                stream.quarantine();
+            }
+            self.evict(now);
             return None;
         }
-        self.evict_stale();
-        let last = *self.last_ack.entry(flow).or_insert(ack);
-        let buf = self.bufs.entry((flow, ack)).or_insert_with(|| Pending {
-            data: Vec::new(),
-            at: Instant::now(),
-        });
-        if buf.data.len() < BUF_CAP {
-            buf.data.extend_from_slice(payload);
+        let new_syn = flags.syn
+            && self
+                .streams
+                .get(&flow)
+                .is_none_or(|stream| stream.syn != Some(seq));
+        let adopt_syn = new_syn.then(|| self.streams.get(&flow)
+            .and_then(|stream| stream.initial_syn_start(seq))).flatten();
+        if new_syn {
+            if adopt_syn.is_none() {
+                self.streams.remove(&flow);
+            }
+            // Capture queues on different adapters may deliver SYN-ACK before
+            // SYN. Keep the reverse stream only when the actual ACK number
+            // binds it to this handshake, otherwise start a fresh generation.
+            let same_handshake=self.streams.get(&reverse).is_some_and(|peer|
+                if flags.ack {peer.syn==Some(flags.ack_number.wrapping_sub(1))}
+                else {peer.peer_syn==Some(seq)});
+            if !same_handshake {
+                self.streams.remove(&reverse);
+            }
         }
-        buf.at = Instant::now();
-        if ack == last {
+        if payload.is_empty() && !flags.syn && !flags.fin {
+            if let Some(stream) = self.streams.get_mut(&flow) {
+                stream.touched = now;
+            }
             return None;
         }
-        self.last_ack.insert(flow, ack);
-        let flushed = self.bufs.remove(&(flow, last))?;
-        Some(self.finish(flow, flushed.data))
-    }
-
-    /// Buffers nobody has added to for a moment, so a stream that only talks
-    /// one way still gets read.
-    pub fn drain_idle(&mut self) -> Vec<(IpAddr, Vec<u8>)> {
-        let now = Instant::now();
-        let ripe: Vec<(Flow, u32)> = self
-            .bufs
-            .iter()
-            .filter(|(_, b)| !b.data.is_empty() && now.duration_since(b.at) >= IDLE_FLUSH)
-            .map(|(k, _)| *k)
-            .collect();
-        ripe.into_iter()
-            .filter_map(|key| {
-                let pending = self.bufs.remove(&key)?;
-                Some((key.0 .0, self.finish(key.0, pending.data)))
-            })
-            .collect()
-    }
-
-    fn finish(&mut self, flow: Flow, flushed: Vec<u8>) -> Vec<u8> {
-        // Stitch the previous tail back on. The flush count travels in the map
-        // with it — derived from whether the tail was empty it would stay at 0
-        // or 1 and never reach CARRY_ROUNDS.
-        //
-        // Giving up keeps the bytes and parses them rather than dropping the
-        // tail: a stray `[` or `{` in binary framing is followed by whatever
-        // the stream sent next, so discarding the tail discards any message
-        // sitting behind the opener. What was behind it is read on this pass,
-        // and no new carry is taken from it.
-        let (mut data, rounds, giving_up) = match self.carry.remove(&flow) {
-            Some((tail, rounds)) if rounds < CARRY_ROUNDS => (tail, rounds, false),
-            Some((tail, _)) => (tail, 0, true),
-            None => (Vec::new(), 0, false),
-        };
-        data.extend_from_slice(&flushed);
-
-        // Is the unterminated value at the end a real message, or a framing
-        // byte that happens to be a brace?
-        //
-        // Bracket structure cannot answer it. A stray brace never closes
-        // either, so everything after it counts as nested, and a truncated drop
-        // answer whose first item object has already closed is indistinguishable
-        // from a stray brace with a whole message behind it. The byte after the
-        // opener is the discriminator — see `opens_a_value`.
-        let cut = unterminated_start(&data);
-        let truncated = !giving_up
-            && cut < data.len()
-            && data.len() - cut <= CARRY_CAP
-            && opens_a_value(&data[cut..]);
-        if truncated {
-            let tail = data.split_off(cut);
-            self.carry.insert(flow, (tail, rounds + 1));
+        let stream = self
+            .streams
+            .entry(flow)
+            .or_insert_with(|| TcpStream::new(seq, flags.syn, now));
+        if let Some(start) = adopt_syn {
+            stream.syn = Some(seq);
+            stream.next = Some(start);
+            stream.history_start = start;
         }
-        data
+        if flags.syn && flags.ack {stream.peer_syn=Some(flags.ack_number.wrapping_sub(1));}
+        let before = stream.faults;
+        stream.insert(seq, flags, payload, now);
+        // A FIN does not establish the start of a stream attached mid-flight.
+        // Its first observed payload may be the reordered tail; committing it
+        // now would close the stream before the preceding bytes can arrive.
+        let force_fin = stream.next.is_some();
+        let flushed = flags.fin.then(|| stream.flush(now, force_fin)).flatten();
+        self.diagnostics.gaps += stream.faults[0] - before[0];
+        self.diagnostics.conflicts += stream.faults[1] - before[1];
+        self.diagnostics.limits += stream.faults[2] - before[2];
+        self.evict(now);
+        flushed
     }
 
-    fn evict_stale(&mut self) {
-        // A flow that flushes cleanly leaves no buffer behind, so its ack and
-        // carry entries would otherwise outlive every sweep keyed on `bufs`.
-        if self.bufs.len() <= 64 && self.last_ack.len() <= 512 && self.carry.len() <= 512 {
-            return;
+    pub fn drain_idle(&mut self) -> Vec<(Flow, Vec<u8>)> {
+        self.drain_at(Instant::now())
+    }
+
+    fn drain_at(&mut self, now: Instant) -> Vec<(Flow, Vec<u8>)> {
+        let mut out = Vec::new();
+        for (&flow, stream) in &mut self.streams {
+            let gaps = stream.faults[0];
+            if let Some(bytes) = stream.flush(now, false) {
+                out.push((flow, bytes));
+            }
+            self.diagnostics.gaps += stream.faults[0] - gaps;
         }
-        let now = Instant::now();
-        self.bufs.retain(|_, b| now.duration_since(b.at) < BUF_TTL);
-        // capturing every host this machine talks to means flows come and go;
-        // their ack and carry entries go with them
-        let live: std::collections::HashSet<Flow> = self.bufs.keys().map(|(flow, _)| *flow).collect();
-        self.last_ack.retain(|flow, _| live.contains(flow));
-        self.carry.retain(|flow, _| live.contains(flow));
-        if self.bufs.len() > 512 {
-            self.bufs.clear();
-            self.last_ack.clear();
-            self.carry.clear();
+        self.evict(now);
+        out
+    }
+
+    pub fn diagnostics(&self) -> TransportDiagnostics {
+        self.diagnostics
+    }
+
+    fn evict(&mut self, now: Instant) {
+        let before = self.streams.len();
+        self.streams
+            .retain(|_, stream| now.duration_since(stream.touched) < BUF_TTL);
+        self.diagnostics.expired_flows += (before - self.streams.len()) as u64;
+        while self.streams.len() > MAX_FLOWS
+            || self.streams.values().map(TcpStream::bytes).sum::<usize>() > TOTAL_CAP
+        {
+            let Some(key) = self
+                .streams
+                .iter()
+                .min_by_key(|(_, stream)| stream.touched)
+                .map(|(&key, _)| key)
+            else {
+                break;
+            };
+            self.streams.remove(&key);
+            self.diagnostics.evicted_flows += 1;
         }
     }
 }
@@ -1436,9 +1748,41 @@ fn item_event(obj: &Value, fingerprint: Option<&str>, ground: bool) -> GameEvent
     } else {
         String::new()
     };
+    // A missing translation does not erase a certified named identity. This
+    // separate registry supplies quality only: it creates no caption or
+    // name-only catalogue match, and never admits a foreign/ordinary namespace.
+    let unnamed = crate::items::unnamed_by_identity(item_type, item_id, weapon_type);
+    let exact_number = |value: &Value| match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(number) => number.trim().parse::<f64>().ok().filter(|n| n.is_finite()),
+        _ => None,
+    };
+    let supported_unnamed = unnamed.as_ref().is_some_and(|known| {
+        !odyssey && field_ref(obj, &["c"]).and_then(exact_number) == Some(1.0)
+            // The generic protocol reader tolerates fractional numeric fields
+            // by truncating them. Certification of an exact identity cannot.
+            && obj.as_object().is_some_and(|fields| fields.iter().all(|(field, value)| {
+                let identity_field = ["b", "id", "itemId", "item_id", "gid", "type",
+                    "itemType", "item_type", "j", "weapon_type", "weaponType"]
+                    .iter().any(|name| norm_eq(name, field));
+                !identity_field || exact_number(value).is_some_and(|n| n.is_finite() && n.fract() == 0.0)
+            }))
+            && match field_ref(obj, &["tier", "n"]) {
+                None => true,
+                Some(value) => exact_number(value).is_some_and(|tier|
+                    tier == 0.0 || (known.tier > 0 && tier == known.tier as f64)),
+            }
+    });
+    let (rarity, tier, name) = if let Some(known) = unnamed.as_ref() {
+        if supported_unnamed {
+            (Value::String(known.rarity.into()), known.tier, String::new())
+        } else {
+            (Value::Null, 0, String::new())
+        }
+    } else { (rarity, tier, name) };
     GameEvent::ItemAdded {
         rarity,
-        unscaled: odyssey && !named_flag,
+        unscaled: (odyssey && !named_flag) || (unnamed.is_some() && !supported_unnamed),
         mf: int_field(obj, &["mf_drop", "mfDrop", "m"]) == 1,
         tier,
         item_type,
@@ -2421,7 +2765,8 @@ mod tests {
         // and the grade follows the same claimant, not the relic's D
         assert_eq!(crate::items::tier_by_name("Shrunken Head"), 5, "the charm is S");
 
-        // unsettled, because the game calls both a Set gun and a Heroic orb this
+        // Unsettled: the gun is verified Set, while the orb's effective
+        // runtime quality is unresolved. Its unknown claim cannot be ignored.
         assert!(crate::items::muddled("Angel"));
         assert_eq!(crate::items::rarity_by_name("Angel"), None, "the table will not pick");
         assert_eq!(
@@ -2449,11 +2794,11 @@ mod tests {
 
         for claim in [json!(7), json!(8), Value::Null] {
             assert_eq!(resolve_rarity(&claim, "Angel", false, angel_gun), "Set");
-            assert_eq!(resolve_rarity(&claim, "Angel", false, angel_orb), "Heroic");
+            assert_eq!(resolve_rarity(&claim, "Angel", false, angel_orb), "Unknown");
             assert_eq!(resolve_rarity(&claim, "Justice", false, justice), "Common");
         }
         assert_eq!(known_item("Angel", false, angel_gun).map(|k| k.tier), Some(5));
-        assert_eq!(known_item("Angel", false, angel_orb).map(|k| k.tier), Some(6));
+        assert_eq!(known_item("Angel", false, angel_orb).map(|k| k.tier), Some(0), "an unresolved runtime grade must not inherit the gun's S or the historical orb's SS");
 
         // and it answers for the loser of a settled name too: the relic is
         // Common D, and took the charm's Satanic S for as long as the name
@@ -3046,130 +3391,449 @@ named things, by what the tracker made of them:");
         assert!(extract_messages(b"\x02{\"inventory_charms\": [1], \"a\": 2}\x00").is_empty());
     }
 
-    #[test]
-    fn reassembler_flushes_on_ack_change() {
-        let mut asm = Reassembler::default();
-        let flow = flow_from("1.2.3.4");
-        assert!(asm.push(flow, 1, b"{\"a\":").is_none());
-        assert!(asm.push(flow, 1, b"1}").is_none());
-        let flushed = asm.push(flow, 2, b"next").unwrap();
-        assert_eq!(flushed, b"{\"a\":1}");
+
+}
+
+#[cfg(test)]
+mod unnamed_identity_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn darkmoon_packet() -> Value {
+        json!({"a":42,"b":13,"c":1,"d":7,"e":9,"j":16,"sh":"unnamed-proof",
+            "rarity":7,"name":"AK-47"})
     }
 
-    fn flow_from(ip: &str) -> Flow {
-        (ip.parse().unwrap(), 6600, 51000)
+    fn pickup_facts(item:Value) -> (String,String,i64) {
+        let message=json!({"status":1,"message":"Success on inventory update ext",
+            "operations":{"add":{"99-1-unnamed-3":item}}});
+        let events=events_from_messages(&[message]);
+        let [GameEvent::ItemAdded {name,rarity,tier,unscaled,item_type,item_id,weapon_type,..}]=events.as_slice()
+            else {panic!("expected one item event: {events:?}")};
+        (name.clone(),resolve_rarity(rarity,name,*unscaled,(*item_type,*item_id,*weapon_type)),*tier)
     }
 
     #[test]
-    fn two_connections_from_one_host_do_not_shred_each_other() {
-        // a fight floods the world connection while the save connection is
-        // still sending; keyed by address alone the save was lost
-        let mut asm = Reassembler::default();
-        let save = flow_from("1.2.3.4");
-        let world = ("1.2.3.4".parse().unwrap(), 6669, 51001);
-        asm.push(save, 1, b"{\"currency_data\":{\"GSS\":");
-        asm.push(world, 7, b"position noise");
-        asm.push(world, 8, b"more noise");
-        asm.push(save, 1, b"42}}");
-        let flushed = asm.push(save, 2, b"x").expect("the save flushes on its own ack");
-        let messages = extract_messages(&flushed);
-        assert_eq!(messages.len(), 1, "the save survived the flood");
-        assert_eq!(messages[0]["currency_data"]["GSS"], 42);
+    fn an_unnamed_native_identity_keeps_facts_without_borrowing_a_caption() {
+        let known=crate::items::unnamed_by_identity(3,13,16).expect("verified current Darkmoon record");
+        assert_eq!((known.rarity,known.tier),("Heroic",6));
+        assert!(crate::items::item_name(3,13,16).is_none(),"an absent CSV caption must stay absent");
+        assert!(crate::items::catalogue_entry("w_throwing_darkmoon_deck").is_none(),"a translation key is not a collection caption");
+        for tier in [None,Some(json!(0)),Some(json!(6)),Some(json!(6.0))] {
+            let mut packet=darkmoon_packet();
+            if let Some(tier)=tier {packet["n"]=tier;}
+            assert_eq!(pickup_facts(packet),(String::new(),"Heroic".into(),6));
+        }
+        let mut numeric_float_flag=darkmoon_packet();
+        numeric_float_flag["c"]=json!(1.0);
+        assert_eq!(pickup_facts(numeric_float_flag),(String::new(),"Heroic".into(),6));
     }
 
-    /// What the stray brace was holding comes back.
-    ///
-    /// An opener in framing noise looks exactly like a truncated message — the
-    /// bytes after it are whatever the stream sent next — so it is carried, and
-    /// after three flushes the carry is given up. Giving up must not mean
-    /// dropping the tail: a real message sitting behind the brace would go with
-    /// it, never counted, never chimed, never journalled. The bytes are parsed
-    /// on the way out instead.
     #[test]
-    fn a_message_held_hostage_by_a_stray_opener_is_recovered() {
+    fn an_unnamed_native_identity_refuses_other_namespaces_and_conflicting_grades() {
+        for flag in [None,Some(json!(0)),Some(json!(2)),Some(json!(1.5)),Some(json!(true))] {
+            let mut packet=darkmoon_packet();
+            if let Some(flag)=flag {packet["c"]=flag;} else {packet.as_object_mut().unwrap().remove("c");}
+            assert_eq!(pickup_facts(packet),(String::new(),"Unknown".into(),0));
+        }
+        for odyssey_flag in [json!(0),json!(1)] {
+            let mut packet=darkmoon_packet();packet["h"]=odyssey_flag;
+            assert_eq!(pickup_facts(packet),(String::new(),"Unknown".into(),0));
+        }
+        for grade in [json!(-1),json!(4),json!(7),json!(6666),json!(6.5),json!("6.5")] {
+            let mut packet=darkmoon_packet();packet["n"]=grade;
+            assert_eq!(pickup_facts(packet),(String::new(),"Unknown".into(),0));
+        }
+        for (field,value) in [("b",json!(13.5)),("j",json!(16.5)),("type",json!(3.5)),
+            ("itemId",json!(13.5)),("weapon_type",json!(16.5)),("gid",json!(13.5))] {
+            let mut packet=darkmoon_packet();packet[field]=value;
+            assert_eq!(pickup_facts(packet),(String::new(),"Unknown".into(),0),"fractional identity field {field} must not select a native record");
+        }
+    }
+
+    #[test]
+    fn the_unnamed_registry_requires_the_exact_weapon_namespace() {
+        assert!(crate::items::unnamed_by_identity(3,13,0).is_none());
+        assert!(crate::items::unnamed_by_identity(3,13,15).is_none());
+        assert!(crate::items::unnamed_by_identity(3,12,16).is_none());
+        assert!(crate::items::unnamed_by_identity(0,13,16).is_none());
+        let mut unrelated=darkmoon_packet();unrelated["j"]=json!(15);
+        unrelated.as_object_mut().unwrap().remove("name");
+        let (_,rarity,tier)=pickup_facts(unrelated);
+        assert_ne!((rarity.as_str(),tier),("Heroic",6),"another subtype cannot borrow the unnamed record's facts");
+    }
+}
+
+
+#[cfg(test)]
+mod tcp_reassembly_tests {
+    use super::*;
+    fn flow() -> Flow {
+        (
+            "127.0.0.1".parse().unwrap(),
+            6600,
+            "127.0.0.2".parse().unwrap(),
+            51000,
+        )
+    }
+    fn send(asm: &mut Reassembler, seq: u32, bytes: &[u8], at: Instant) {
+        assert!(asm
+            .push_at(flow(), seq, TcpFlags::default(), bytes, at)
+            .is_none());
+    }
+    fn read(asm: &mut Reassembler, at: Instant) -> Vec<Value> {
+        asm.drain_at(at)
+            .into_iter()
+            .flat_map(|(_, bytes)| extract_messages(&bytes))
+            .collect()
+    }
+    #[test]
+    fn repeated_delta_messages_survive_but_retransmitted_bytes_do_not_repeat() {
+        let at = Instant::now();
         let mut asm = Reassembler::default();
-        let flow = flow_from("1.2.3.4");
-        // `[` then a quote is a plausible enough start for the carry to take it
-        asm.push(flow, 1, b"\x01[\"noise");
-        asm.push(flow, 2, b"{\"currency_data\":{\"GSS\":11}}");
-        for ack in 3..8 {
-            if let Some(flushed) = asm.push(flow, ack, b"x") {
-                let events = events_from_messages(&extract_messages(&flushed));
-                if events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 11)) {
-                    return;
-                }
+        let gold = br#"{"goldAmount":100}"#;
+        let xp = br#"{"message":"guild","status":1,"xp":150}"#;
+        let bytes = [
+            gold.as_slice(),
+            gold.as_slice(),
+            xp.as_slice(),
+            xp.as_slice(),
+        ]
+        .concat();
+        send(&mut asm, 100, &bytes, at);
+        send(&mut asm, 100, &bytes, at);
+        let messages = read(&mut asm, at + IDLE_FLUSH);
+        assert_eq!(messages.len(), 4, "JSON equality is not transport identity");
+        let events = events_from_messages(&messages);
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    GameEvent::Gold(c) => Some(c.delta),
+                    _ => None,
+                })
+                .sum::<i64>(),
+            200
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, GameEvent::XpGain(_)))
+                .count(),
+            2
+        );
+        send(&mut asm, 100, &bytes, at + IDLE_FLUSH);
+        assert!(read(&mut asm, at + IDLE_FLUSH * 2).is_empty());
+    }
+    #[test]
+    fn a_busy_connection_flushes_with_bounded_latency_without_an_idle_pause() {
+        let at = Instant::now();
+        let mut asm = Reassembler::default();
+        let bytes = br#"{"goldAmount":1}"#;
+        let mut seen = 0;
+        for index in 0..20 {
+            let now = at + Duration::from_millis(index * 100);
+            send(
+                &mut asm,
+                100 + index as u32 * bytes.len() as u32,
+                bytes,
+                now,
+            );
+            seen += read(&mut asm, now).len();
+            if index >= 3 {
+                assert!(seen > 0, "busy traffic cannot postpone every flush");
             }
         }
-        panic!("the message behind the stray opener was never parsed");
+        seen += read(&mut asm, at + Duration::from_secs(3)).len();
+        assert_eq!(seen, 20);
     }
 
     #[test]
-    fn a_stray_brace_in_binary_noise_does_not_stall_parsing() {
+    fn a_late_captured_syn_does_not_erase_its_matching_syn_ack_stream() {
+        let at=Instant::now();let mut asm=Reassembler::default();
+        let reverse=(flow().2,flow().3,flow().0,flow().1);
+        asm.push_at(reverse,500,TcpFlags {syn:true,ack:true,ack_number:101,..Default::default()},b"",at);
+        asm.push_at(reverse,501,TcpFlags::default(),br#"{"goldAmount":1}"#,at);
+        asm.push_at(flow(),100,TcpFlags {syn:true,..Default::default()},b"",at);
+        assert_eq!(read(&mut asm,at+IDLE_FLUSH),vec![serde_json::json!({"goldAmount":1})]);
+    }
+    #[test]
+    fn a_late_syn_adopts_the_compatible_uncommitted_initial_payload_in_its_own_direction() {
+        for seq in [100u32, u32::MAX - 7] {
+            let at = Instant::now();
+            let mut asm = Reassembler::default();
+            let wire = br#"{"goldAmount":100}{"goldAmount":100}"#;
+            let split = 9;
+            send(&mut asm, seq.wrapping_add(split as u32), &wire[split..], at);
+            send(&mut asm, seq, &wire[..split], at + IDLE_FLUSH / 2);
+            assert!(asm.push_at(flow(), seq.wrapping_sub(1), TcpFlags {syn: true, ..Default::default()}, b"", at + IDLE_FLUSH / 2).is_none());
+            let messages = read(&mut asm, at + IDLE_FLUSH);
+            assert_eq!(messages, vec![serde_json::json!({"goldAmount":100}), serde_json::json!({"goldAmount":100})]);
+            send(&mut asm, seq, wire, at + IDLE_FLUSH);
+            assert!(read(&mut asm, at + IDLE_FLUSH * 2).is_empty());
+        }
+    }
+    #[test]
+    fn a_different_connection_syn_discards_incompatible_pending_payload_in_both_directions() {
+        let at = Instant::now();
         let mut asm = Reassembler::default();
-        let flow = flow_from("1.2.3.4");
-        // a lone '{' in framing bytes never closes; everything after it must
-        // still be parsed instead of being carried forever
-        asm.push(flow, 1, b"\x01{\x02noise{\"currency_data\":{\"GSS\":5}}");
-        let flushed = asm.push(flow, 2, b"x").unwrap();
-        let events = events_from_messages(&extract_messages(&flushed));
-        assert!(
-            events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 5)),
-            "capture stalled on a stray brace"
+        let reverse = (flow().2, flow().3, flow().0, flow().1);
+        send(&mut asm, 100, br#"{"goldAmount":100}"#, at);
+        asm.push_at(reverse, 500, TcpFlags::default(), br#"{"goldAmount":200}"#, at);
+        asm.push_at(flow(), 999, TcpFlags {syn: true, ..Default::default()}, b"", at);
+        send(&mut asm, 1000, br#"{"goldAmount":7}"#, at);
+        assert_eq!(read(&mut asm, at + IDLE_FLUSH), vec![serde_json::json!({"goldAmount":7})]);
+        assert!(!asm.streams.contains_key(&reverse));
+    }
+    #[test]
+    fn out_of_order_and_overlapping_fragments_recover_the_golden_save() {
+        let wire = br#"{"currency_data":{"GSS":42},"name":"Test","level":100}"#;
+        for with_syn in [false, true] {
+            let at = Instant::now();
+            let mut asm = Reassembler::default();
+            if with_syn {
+                asm.push_at(
+                    flow(),
+                    99,
+                    TcpFlags {
+                        syn: true,
+                        ..Default::default()
+                    },
+                    b"",
+                    at,
+                );
+            }
+            send(&mut asm, 120, &wire[20..], at);
+            send(&mut asm, 110, &wire[10..30], at);
+            send(&mut asm, 100, &wire[..20], at);
+            send(&mut asm, 100, &wire[..20], at);
+            assert_eq!(
+                read(&mut asm, at + IDLE_FLUSH),
+                vec![serde_json::from_slice::<Value>(wire).unwrap()]
+            );
+        }
+    }
+    #[test]
+    fn committed_overlap_only_adds_the_new_suffix_and_sequence_numbers_wrap() {
+        let at = Instant::now();
+        let mut asm = Reassembler::default();
+        let first = br#"{"goldAmount":1}"#;
+        let second = br#"{"goldAmount":2}"#;
+        let seq = u32::MAX - 6;
+        send(&mut asm, seq, first, at);
+        assert_eq!(read(&mut asm, at + IDLE_FLUSH).len(), 1);
+        let overlap = [&first[first.len() - 4..], second.as_slice()].concat();
+        send(
+            &mut asm,
+            seq.wrapping_add(first.len() as u32 - 4),
+            &overlap,
+            at + IDLE_FLUSH,
+        );
+        assert_eq!(
+            read(&mut asm, at + IDLE_FLUSH * 2),
+            vec![serde_json::json!({"goldAmount":2})]
         );
     }
-
     #[test]
-    fn a_message_cut_after_one_of_its_values_closes_is_still_carried() {
+    fn complete_endpoints_and_directions_keep_identical_ports_separate() {
+        let at = Instant::now();
         let mut asm = Reassembler::default();
-        let flow = flow_from("1.2.3.4");
-        // The shape every real drop answer has: an inner object that has
-        // already closed by the time the cut lands. Deciding the carry on
-        // "does anything complete follow the opener" read that inner object
-        // and called the whole message framing noise, so the drop was dropped.
-        asm.push(flow, 1, b"{\"itemData\":{\"7-1-1\":{\"n\":1}},\"currency_data\":{\"GSS\":7");
-        let first = asm.push(flow, 2, b"}}").unwrap();
-        assert!(extract_messages(&first).is_empty(), "half a message must not parse");
-        let second = asm.push(flow, 3, b"noise").unwrap();
-        let events = events_from_messages(&extract_messages(&second));
-        assert!(
-            events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 7)),
-            "a message cut after a closed inner value was thrown away"
+        let a = flow();
+        let b = (a.0, a.1, "127.0.0.3".parse().unwrap(), a.3);
+        let reverse = (a.2, a.3, a.0, a.1);
+        for (key, amount) in [(a, 11), (b, 22), (reverse, 33)] {
+            let message = format!("{{\"goldAmount\":{amount}}}");
+            asm.push_at(key, 7, TcpFlags::default(), message.as_bytes(), at);
+        }
+        let mut amounts: Vec<_> = read(&mut asm, at + IDLE_FLUSH)
+            .into_iter()
+            .map(|m| m["goldAmount"].as_i64().unwrap())
+            .collect();
+        amounts.sort();
+        assert_eq!(amounts, vec![11, 22, 33]);
+    }
+    #[test]
+    fn a_gap_never_joins_two_halves_into_a_fabricated_delta() {
+        let at = Instant::now();
+        let mut asm = Reassembler::default();
+        let head = br#"{"goldAmount":"#;
+        send(&mut asm, 100, head, at);
+        assert!(read(&mut asm, at + IDLE_FLUSH).is_empty());
+        let tail_seq = 100 + head.len() as u32 + 3;
+        send(&mut asm, tail_seq, b"100}", at + IDLE_FLUSH);
+        assert!(read(&mut asm, at + IDLE_FLUSH * 2).is_empty());
+        assert!(read(&mut asm, at + IDLE_FLUSH + GAP_WAIT).is_empty());
+        assert_eq!(asm.diagnostics().gaps, 1);
+        send(
+            &mut asm,
+            tail_seq + 4,
+            br#"{"goldAmount":7}"#,
+            at + IDLE_FLUSH + GAP_WAIT,
+        );
+        assert_eq!(
+            read(&mut asm, at + IDLE_FLUSH * 2 + GAP_WAIT),
+            vec![serde_json::json!({"goldAmount":7})]
         );
     }
-
     #[test]
-    fn a_tail_longer_than_eight_kilobytes_is_still_carried() {
+    fn conflicting_overlaps_are_quarantined_until_a_new_handshake() {
+        let at = Instant::now();
         let mut asm = Reassembler::default();
-        let flow = flow_from("1.2.3.4");
-        // The biggest message in a real capture is 35 KB and the cap was 8 KB,
-        // so the tail of every large answer was refused on length alone.
-        let mut head = br#"{"pad":""#.to_vec();
-        head.extend(std::iter::repeat(b'x').take(20 << 10));
-        head.extend_from_slice(br#"","currency_data":{"GSS":9"#);
-        asm.push(flow, 1, &head);
-        let first = asm.push(flow, 2, b"}}").unwrap();
-        assert!(extract_messages(&first).is_empty());
-        let second = asm.push(flow, 3, b"noise").unwrap();
-        let events = events_from_messages(&extract_messages(&second));
-        assert!(
-            events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 9)),
-            "a 20 KB tail was refused"
+        send(&mut asm, 100, br#"{"goldAmount":1}"#, at);
+        send(&mut asm, 100, br#"{"goldAmount":9}"#, at);
+        assert!(read(&mut asm, at + IDLE_FLUSH).is_empty());
+        assert_eq!(asm.diagnostics().conflicts, 1);
+        asm.push_at(
+            flow(),
+            999,
+            TcpFlags {
+                syn: true,
+                ..Default::default()
+            },
+            b"",
+            at + IDLE_FLUSH,
+        );
+        send(&mut asm, 1000, br#"{"goldAmount":3}"#, at + IDLE_FLUSH);
+        assert_eq!(
+            read(&mut asm, at + IDLE_FLUSH * 2),
+            vec![serde_json::json!({"goldAmount":3})]
         );
     }
-
     #[test]
-    fn reassembler_carries_a_message_split_across_flushes() {
+    fn fin_and_reset_do_not_replay_old_bytes_and_syn_resets_both_directions() {
+        let at = Instant::now();
         let mut asm = Reassembler::default();
-        let flow = flow_from("1.2.3.4");
-        // the ack moves on while the object is still open
-        asm.push(flow, 1, b"{\"currency_data\":{\"GSS\":42");
-        let first = asm.push(flow, 2, b"}}").unwrap();
-        assert!(extract_messages(&first).is_empty(), "half a message must not parse");
-        let second = asm.push(flow, 3, b"noise").unwrap();
-        let events = events_from_messages(&extract_messages(&second));
-        assert!(
-            events.iter().any(|e| matches!(e, GameEvent::Gold(c) if c.gss == 42)),
-            "message lost across the flush boundary"
+        let bytes = br#"{"goldAmount":1}"#;
+        assert!(asm
+            .push_at(
+                flow(),
+                100,
+                TcpFlags {
+                    fin: true,
+                    ..Default::default()
+                },
+                bytes,
+                at,
+            )
+            .is_none());
+        assert_eq!(read(&mut asm, at + IDLE_FLUSH).len(), 1);
+        send(&mut asm, 100, bytes, at);
+        assert!(read(&mut asm, at + IDLE_FLUSH).is_empty());
+        asm.push_at(
+            flow(),
+            1000,
+            TcpFlags {
+                syn: true,
+                ..Default::default()
+            },
+            b"",
+            at,
         );
+        send(&mut asm, 1001, bytes, at);
+        let reverse = (flow().2, flow().3, flow().0, flow().1);
+        asm.push_at(
+            reverse,
+            5,
+            TcpFlags {
+                rst: true,
+                ..Default::default()
+            },
+            b"",
+            at,
+        );
+        assert!(read(&mut asm, at + IDLE_FLUSH).is_empty());
+        asm.push_at(
+            reverse,
+            2000,
+            TcpFlags {
+                syn: true,
+                ..Default::default()
+            },
+            b"",
+            at,
+        );
+        send(&mut asm, 3000, bytes, at);
+        assert_eq!(read(&mut asm, at + IDLE_FLUSH).len(), 1);
+    }
+    #[test]
+    fn first_midstream_fin_waits_for_a_reordered_prefix_and_delivers_each_delta_once() {
+        let at = Instant::now();
+        let mut asm = Reassembler::default();
+        let wire = br#"{"goldAmount":100}{"goldAmount":100}"#;
+        let split = 11;
+        let seq = u32::MAX - 7;
+        assert!(asm.push_at(flow(), seq.wrapping_add(split as u32),
+            TcpFlags {fin: true, ..Default::default()}, &wire[split..], at).is_none());
+        assert!(read(&mut asm, at + IDLE_FLUSH / 2).is_empty());
+        send(&mut asm, seq, &wire[..split], at + IDLE_FLUSH / 2);
+        let messages = read(&mut asm, at + IDLE_FLUSH);
+        assert_eq!(messages, vec![serde_json::json!({"goldAmount":100}), serde_json::json!({"goldAmount":100})]);
+        let events = events_from_messages(&messages);
+        assert_eq!(events.iter().filter_map(|event| match event {GameEvent::Gold(gold) => Some(gold.delta), _ => None}).sum::<i64>(), 200);
+        assert!(asm.push_at(flow(), seq.wrapping_add(split as u32),
+            TcpFlags {fin: true, ..Default::default()}, &wire[split..], at + IDLE_FLUSH).is_none());
+        send(&mut asm, seq, &wire[..split], at + IDLE_FLUSH);
+        assert!(read(&mut asm, at + IDLE_FLUSH * 2).is_empty());
+    }
+    #[test]
+    fn a_known_syn_start_still_allows_immediate_contiguous_fin_delivery() {
+        let at = Instant::now();
+        let mut asm = Reassembler::default();
+        asm.push_at(flow(), 99, TcpFlags {syn: true, ..Default::default()}, b"", at);
+        let wire = br#"{"goldAmount":7}"#;
+        let flushed = asm.push_at(flow(), 100, TcpFlags {fin: true, ..Default::default()}, wire, at).expect("SYN establishes the complete range start");
+        assert_eq!(extract_messages(&flushed), vec![serde_json::json!({"goldAmount":7})]);
+        assert!(read(&mut asm, at + IDLE_FLUSH).is_empty());
+    }
+    #[test]
+    fn idle_boundaries_keep_nested_large_messages_across_many_fragments() {
+        let at = Instant::now();
+        let mut asm = Reassembler::default();
+        let mut bytes = br#"{"itemData":{"x":{"n":1}},"pad":""#.to_vec();
+        bytes.extend(std::iter::repeat_n(b'x', 20 << 10));
+        bytes.extend_from_slice(br#"","goldAmount":9}"#);
+        let mut offset = 0;
+        for (index, chunk) in bytes.chunks(4500).enumerate() {
+            let now = at + IDLE_FLUSH * index as u32;
+            send(&mut asm, 100 + offset, chunk, now);
+            offset += chunk.len() as u32;
+            let messages = read(&mut asm, now + IDLE_FLUSH);
+            if offset < bytes.len() as u32 {
+                assert!(messages.is_empty());
+            } else {
+                assert_eq!(
+                    messages,
+                    vec![serde_json::from_slice::<Value>(&bytes).unwrap()]
+                );
+            }
+        }
+    }
+    #[test]
+    fn bounded_state_expires_and_recovers_messages_behind_a_stray_opener() {
+        let at = Instant::now();
+        let mut asm = Reassembler::default();
+        let bytes = br#"["noise{"goldAmount":5}"#;
+        send(&mut asm, 10, bytes, at);
+        assert!(read(&mut asm, at + IDLE_FLUSH).is_empty());
+        assert_eq!(
+            read(&mut asm, at + IDLE_FLUSH + CARRY_WAIT),
+            vec![serde_json::json!({"goldAmount":5})]
+        );
+        for port in 1..MAX_FLOWS + 20 {
+            let key = (flow().0, port as u16, flow().2, 51000);
+            asm.push_at(key, 1, TcpFlags::default(), b"x", at);
+        }
+        assert!(asm.streams.len() <= MAX_FLOWS);
+        assert!(asm.diagnostics().evicted_flows > 0);
+        assert!(asm.streams.values().map(TcpStream::bytes).sum::<usize>() <= TOTAL_CAP);
+        asm.drain_at(at + BUF_TTL);
+        assert!(asm.streams.is_empty());
+        send(&mut asm, 1, &vec![b'x'; BUF_CAP + 1], at + BUF_TTL);
+        assert_eq!(
+            asm.streams[&flow()].bytes(),
+            0,
+            "oversized inputs are rejected rather than truncated"
+        );
+        assert_eq!(asm.diagnostics().limits, 1);
     }
 }

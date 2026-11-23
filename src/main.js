@@ -8,6 +8,7 @@ import App from './App.svelte';
 import Dashboard from './Dashboard.svelte';
 import Ticker from './Ticker.svelte';
 import Flourish from './Flourish.svelte';
+import MapView from './MapView.svelte';
 
 // no default WebView2 context menu anywhere; the overlay draws its own
 window.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -71,8 +72,8 @@ listen('settings-changed', (e) => {
 // The window's own label says which face to draw. There is one other way in —
 // a webview built without Tauri under it, which is what a test harness gets —
 // and it draws the overlay, the same as an unlabelled window would.
-const label = native ? getCurrentWebviewWindow().label : 'main';
-const roots = { dashboard: Dashboard, ticker: Ticker, flourish: Flourish };
+const label = native ? getCurrentWebviewWindow().label : new URLSearchParams(location.search).get('view') === 'map' ? 'world-map' : 'main';
+const roots = { dashboard: Dashboard, ticker: Ticker, flourish: Flourish, 'world-map': MapView };
 
 // Nothing drew, and every window here is transparent.
 //

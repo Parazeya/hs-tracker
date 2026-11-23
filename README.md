@@ -24,19 +24,19 @@
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.15/HS.Tracker_1.1.15_x64-setup.exe">HS.Tracker_1.1.15_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.16/HS.Tracker_1.1.16_x64-setup.exe">HS.Tracker_1.1.16_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.15/HS.Tracker_1.1.15_amd64.AppImage">HS.Tracker_1.1.15_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.16/HS.Tracker_1.1.16_amd64.AppImage">HS.Tracker_1.1.16_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.15/HS.Tracker_1.1.15_amd64.deb">HS.Tracker_1.1.15_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.16/HS.Tracker_1.1.16_amd64.deb">HS.Tracker_1.1.16_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.15/HS.Tracker-1.1.15-1.x86_64.rpm">HS.Tracker-1.1.15-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.16/HS.Tracker-1.1.16-1.x86_64.rpm">HS.Tracker-1.1.16-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
@@ -62,7 +62,7 @@
 | **Collection** | Add characters to one shared collection by turning tracking on for each of them. Browse unique equippable gear, including charms and flasks; filter found and missing items, see totals by rarity, and open an item to see its drop chances and locations. A popup announces each new name. Jewels, relics and other non-equipment are excluded. Turning a character off keeps the progress. |
 | **Runs** | Every finished session kept — the rates, the finds, where the time went. **Copy card** turns one into a picture you can paste into a chat. |
 | **Pause** | By hand, or by itself after five quiet minutes, so a break does not end up in the per-hour figures. |
-| **OBS** | The announcement window can stay on screen between drops, so OBS can capture it as a window source. |
+| **OBS** | Independent Browser Sources for statistics, notifications, recent drops and the current map view. |
 | **Backup** | Export every setting — rarities, grades, the announcement, every filter and list, and the sound files themselves — to one file, and read it back on another machine. |
 | **About** | The version you are running, who made it, and a button that asks GitHub whether a newer release is out. |
 | **Discord** | Optional: while the game is open, your friends see the zone, the drops and the timer. |
@@ -141,75 +141,46 @@ people change, with the rest a click away under **More settings**.
 Run the installer. It installs for the current user, so Windows never asks for
 administrator rights.
 
-HS Tracker needs [Npcap](https://npcap.com) to read the game's traffic. The
+The standard build needs [Npcap](https://npcap.com) to read the game's traffic. The
 installer checks for it and opens the download page when it is missing. Install
 it with the options it comes with, and in particular leave *Restrict Npcap
 driver's access to Administrators only* unticked — with that on, HS Tracker is
 refused the adapter and counts nothing.
+
+An experimental portable build can use Windows Packet Monitor without Npcap.
+It requires administrator privileges and is still awaiting live game capture
+validation; see [CAPTURE-BACKENDS.md](CAPTURE-BACKENDS.md) for its limits and
+build options.
 
 Everything the app writes lives next to the executable, so the folder can be
 copied to another machine as it is.
 
 ### Linux
 
+Use a native package for live tracking, and start Tracker as your normal user:
+
 ```bash
 sudo apt install ./HS\ Tracker_*_amd64.deb      # Debian, Ubuntu, Mint …
 sudo dnf install ./HS\ Tracker-*.x86_64.rpm     # Fedora
 ```
 
-The `.deb` is built on Ubuntu 22.04 and runs on it and on anything newer. The
-`.rpm` is built on Fedora and wants glibc 2.39 or later, so it is for a current
-Fedora rather than for RHEL and its rebuilds — those do not carry the WebKitGTK
-4.1 this is drawn with either way. Everywhere else, the AppImage.
+These packages grant the executable its capture capability during installation.
+Settings live in `~/.config/hs-tracker`.
 
-Either package grants the app the right to capture during installation. Settings
-live in `~/.config/hs-tracker`.
+For **Arch Linux and Manjaro**, build a native package on the target distribution
+with [scripts/package-arch.sh](scripts/package-arch.sh), as described in
+[LINUX.md](LINUX.md). A binary built on current Arch is not a universal Manjaro
+artifact because their library versions can differ. Debian's libpcap soname also
+differs from Arch's, so unpacking the `.deb` is not an Arch installation method.
 
-The AppImage does not carry the wayland and xcb libraries it used to. They have
-to match the compositor and the graphics driver of the machine it is running on,
-and the copies it shipped stopped the host's own driver loading on Fedora and
-Arch — four `EGL_BAD_PARAMETER` lines and no window. Every desktop that has GTK
-has them already, so this costs nothing in practice; a machine built with no
-wayland libraries at all is the one place the AppImage now needs something from
-its host.
+The AppImage is an alternative for opening the dashboard. It needs a working
+FUSE setup, or `APPIMAGE_EXTRACT_AND_RUN=1`; this only addresses startup. Its
+launcher cannot retain the file capability required for capture, so use a native
+package for the live numbers. The packaging step preserves the user's GTK
+backend choice and excludes host-owned Wayland/XCB libraries.
 
-**Install a package if you want the numbers.** The AppImage runs anywhere, and
-it is the one form that cannot be given the capture right — not by `setcap`, and
-not by anything else.
-
-There are two files you could try to grant it to, and neither one works.
-
-Grant it to the `.AppImage` and nothing happens. Linux recomputes capabilities
-at every `execve`, and the AppImage runtime execs the real binary out of the
-mount it just made, so the right is gone before the app starts. The app runs
-perfectly well and still counts nothing.
-
-Grant it to the extracted binary instead and the app stops starting at all. A
-binary carrying a capability is a privileged one, and the loader stops trusting
-both of the ways an AppImage finds the libraries bundled inside it: the
-`LD_LIBRARY_PATH` its own `AppRun` sets is dropped from the environment, and the
-`$ORIGIN/../lib` runpath built into the binary is refused as well. It gets as
-far as the first library the machine does not already have of its own:
-
-```
-hs-tracker: error while loading shared libraries: libwebkit2gtk-4.1.so.0:
-cannot open shared object file: No such file or directory
-```
-
-And in ordinary use there is no file to try it on at all: the binary lives on a
-mount that exists only while the app is running. A package has none of this —
-its binary uses the distribution's own libpcap from a directory the loader
-trusts however the program was started.
-
-`sudo` does work, because nothing is granted at exec time and the library path
-survives — but settings, runs and sounds are then written to root's home instead
-of yours:
-
-```bash
-chmod +x ./HS\ Tracker_*.AppImage               # a fresh download has no execute bit
-./HS\ Tracker_*.AppImage --appimage-extract     # gives ./squashfs-root
-sudo ./squashfs-root/AppRun
-```
+Native Wayland can show the dashboard. The overlay and global hotkeys require
+X11/XWayland; see [LINUX.md](LINUX.md) for the tested cases and remaining limits.
 
 ### Updates
 
@@ -232,11 +203,19 @@ edge for the same things.
 | Lock the overlay | the lock icon on hover, or `Ctrl+Shift+L` |
 | Reset the session | the overlay button, the tray, or `Ctrl+Shift+R` |
 | Pause the session | the clock in Statistics, the tray, or `Ctrl+Shift+P` |
+| Full-screen world map | `Ctrl+Shift+M`, or **Open full-screen map** in Settings |
+
+The map opens the bundled current [hs-map](https://parazeya.github.io/hs-map/) on the current screen.
+Press `Ctrl+Shift+M` again or use the red **×**
+at the top right to hide it; reopening keeps your position. **Reload map**
+reloads the packaged map. On Wayland, use the Settings button when global
+shortcuts are unavailable.
 
 Counting starts once the game reports your character, a moment after you enter a
-zone. Gold, experience and kills only travel when the game saves, so between
-saves those three sit still while drops keep arriving — that is the game, not a
-stuck counter.
+zone. Cumulative gold, experience and kills arrive with saves; explicit gold
+and XP gains may arrive between them. An XP gain inferred only from a save
+waits for a second compatible reading, so a single bad read cannot inflate
+XP/hour. Drops arrive continuously; these counters do not all advance together.
 
 Open **Collection** after the game reports your character and switch tracking
 on for it. Add other characters the same way when you play them. Their finds
@@ -261,55 +240,30 @@ from the collection. **Remove all characters** clears the roster and its finds.
 
 ## Streaming it
 
-The app draws four windows. Each is transparent and can be captured on its own:
+Open **Streaming**, enable **Browser Sources**, then add a **Browser** source
+in OBS for each part you want. Copy its URL from Tracker and use 30 FPS.
 
-| Window | What it is | On screen |
+| Source | Default URL | Suggested size |
 | --- | --- | --- |
-| `HS Tracker — Overlay` | the compact panel | while you are in compact mode |
-| `HS Tracker — Drops` | drop names, under the overlay | for a few seconds after a drop |
-| `HS Tracker — Announcement` | the announcement for a big drop, and for the zone rotating | while it plays |
-| `HS Tracker` | the dashboard | while you are in dashboard mode |
+| Statistics | `http://127.0.0.1:17265/stats` | 480 × 380 |
+| Notifications | `http://127.0.0.1:17265/notifications` | 960 × 540 |
+| Recent drops | `http://127.0.0.1:17265/drops` | 480 × 300 |
+| Map view | `http://127.0.0.1:17265/map` | 1280 × 720 |
 
-### Capturing a window
+The sources stay live while Tracker is hidden or minimized. They are silent;
+Tracker plays the audio once. **Test notification** checks the OBS path without
+changing your session or collection. Sources reconnect and receive the latest
+state after a scene reload or Tracker restart; expired notifications do not replay.
 
-1. Add a **Window Capture** and pick the window from the list.
-2. Set **Capture Method** to **Windows 10 (1903 and up)**. Not a preference:
-   it is the only method that sees these windows at all. They are drawn by
-   WebView2 through the GPU, and the older BitBlt method — which is what
-   *Automatic* often settles on — captures them as a black rectangle.
-3. Set **Window Match Priority** to **Window title must match**.
-4. Tick **Client Area**. These windows have no frame, so it changes little, but
-   it is what a working capture of them looks like.
+The map source mirrors the map view in Tracker: position, zoom, room selection,
+search, language and selected source. Different OBS proportions add margins to
+preserve the view. It does not show the desktop cursor, hover tooltips or other
+Tracker pages. Open the map once to choose its view; hiding it leaves that view
+available to OBS.
 
-A window that is not on screen cannot be captured, and three of the four come
-and go: the overlay hides with the game if you asked it to, and the ticker and
-the announcement appear for a few seconds at a time. The announcement has a
-setting of its own — *Keep its window on screen so OBS can capture it* — for
-exactly that.
-
-### The source is black
-
-OBS names the window and shows nothing. The window is there — that is why it is
-in the list — so what is missing is OBS's permission or its view of it. In the
-order worth checking:
-
-- **The capture method.** Step 2 above, and the first thing to check: on
-  anything but *Windows 10 (1903 and up)* these windows are black, and
-  *Automatic* is not that.
-- **Windows or OBS too old for it.** That method needs Windows 10 build 1903
-  and an OBS that knows what to do with it. OBS offers the option either way
-  and it simply returns nothing. **Help → About** in OBS gives its version, and
-  `winver` gives the build.
-- **One of the two is running as administrator and the other is not.** A
-  program at normal privilege cannot capture an elevated window, and it fails
-  exactly this way: named, listed, black. If you started the tracker as
-  administrator to make its settings save, that is the cause — and the better
-  answer is to move it out of Program Files so it needs nothing of the sort.
-- **The window is on a monitor a different graphics adapter drives.** On a
-  laptop with two, or a desktop with a card and the motherboard's outputs both
-  in use, the capture comes back black. Drag the window to the main monitor: if
-  it fills in, that is it.
-- **The window is hidden.** Minimised, in the tray, or hidden with the game.
+Only the loopback interface is used. The HTTP service serves packaged assets
+and read-only stream data; it has no control endpoints. A port conflict appears
+in Streaming. Choose another local port there and update the URLs in OBS.
 
 ## If something does not work
 
@@ -411,6 +365,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 hs-tracker
 ## Development
 
 See [DEVELOPING.md](DEVELOPING.md).
+The local capture, statistics, settings and OBS audit is recorded in [AUDIT.md](AUDIT.md).
 
 ## Credits
 

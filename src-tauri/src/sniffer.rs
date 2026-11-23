@@ -1,9 +1,12 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+#[cfg(feature = "pcap-capture")]
+use std::collections::HashMap;
 use std::net::IpAddr;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "pcap-capture"))]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "pcap-capture")]
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -12,14 +15,21 @@ use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::Emitter;
 
-use crate::parser::{self, Reassembler};
+use crate::parser::{self, Reassembler, TcpFlags};
 use crate::stats::GameStats;
+
+#[cfg(windows)]
+#[path = "sniffer_packetmon.rs"]
+mod packet_monitor;
 
 #[derive(Clone, PartialEq)]
 pub enum Status {
+    BackendError { backend: String, message: String },
+    WaitingForConnection,
     /// no way to capture at all: Npcap absent on Windows, libpcap refusing to
     /// hand out a device elsewhere — which on Linux usually means the binary
     /// lacks cap_net_raw rather than that the library is missing
+    #[cfg(feature = "pcap-capture")]
     NoCapture,
     /// The driver is installed and will not let this process use it.
     ///
@@ -27,7 +37,9 @@ pub enum Status {
     /// driver's access to Administrators only" — a box in its own installer —
     /// looks like an absent driver, and telling that player to install what
     /// they already have is a dead end.
+    #[cfg(feature = "pcap-capture")]
     NoAccess,
+    #[cfg(feature = "pcap-capture")]
     NoInterface,
     WaitingForGame,
     Capturing {
@@ -67,11 +79,15 @@ pub enum Deaf {
 impl Status {
     pub fn text(&self) -> String {
         match self {
-            #[cfg(windows)]
+            Status::BackendError { backend, message } => format!("capture-error|{}|{}", backend.replace('|', "/"), message.replace(['|', '\r', '\n'], " ")),
+            Status::WaitingForConnection => "waiting-for-game-connection".into(),
+            #[cfg(all(windows,feature = "pcap-capture"))]
             Status::NoCapture => "npcap-missing".into(),
-            #[cfg(not(windows))]
+            #[cfg(all(not(windows),feature = "pcap-capture"))]
             Status::NoCapture => "no-capture".into(),
+            #[cfg(feature = "pcap-capture")]
             Status::NoAccess => "no-access".into(),
+            #[cfg(feature = "pcap-capture")]
             Status::NoInterface => "no-interface".into(),
             Status::WaitingForGame => "waiting-for-game".into(),
             Status::Capturing { iface, hosts, local, dropped, packets, deaf } => {
@@ -101,6 +117,7 @@ pub fn set_wide_capture(on: bool) {
 }
 
 /// and how long before saying it again, if it is still true
+#[cfg(feature = "pcap-capture")]
 const DEAF_AGAIN: Duration = Duration::from_secs(300);
 
 /// Whether the game's connections all end on this machine.
@@ -110,6 +127,7 @@ const DEAF_AGAIN: Duration = Duration::from_secs(300);
 /// carries every local socket on the machine. But a game behind an accelerator
 /// talks to `127.0.0.1` and nowhere else, and then it is the only adapter its
 /// traffic is on. See `worth_capturing` and `game_endpoints`.
+#[cfg(feature = "pcap-capture")]
 static THROUGH_LOOPBACK: AtomicBool = AtomicBool::new(false);
 
 /// Whether Hero Siege is up. The watcher already looks for the process every
@@ -121,6 +139,16 @@ pub fn game_running() -> bool {
     GAME_UP.load(Ordering::Relaxed)
 }
 
+/// Assembly is shared across adapters; dispatch has a separate lock so later
+/// bytes cannot reach the statistics engine before a previously drained range.
+/// Captures may still insert ordinary segments while a flush is being handled.
+#[derive(Default)]
+struct TransportState {
+    assembly: Mutex<Reassembler>,
+    dispatch: Mutex<()>,
+}
+
+#[cfg(feature = "pcap-capture")]
 struct Capture {
     stop: Arc<AtomicBool>,
     handle: JoinHandle<()>,
@@ -187,7 +215,7 @@ impl Default for Shared {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "pcap-capture"))]
 fn npcap_dir() -> PathBuf {
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
     PathBuf::from(root).join("System32").join("Npcap")
@@ -195,7 +223,7 @@ fn npcap_dir() -> PathBuf {
 
 /// Windows carries the capture driver as a separate install, so its absence is
 /// worth reporting before anything else is attempted.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "pcap-capture"))]
 pub fn capture_available() -> bool {
     npcap_dir().join("wpcap.dll").exists()
         || npcap_dir().parent().is_some_and(|s| s.join("wpcap.dll").exists())
@@ -210,7 +238,7 @@ pub fn capture_available() -> bool {
 /// game does: a machine with no capture rights at all would otherwise sit on
 /// "waiting for Hero Siege" and never say what was wrong. One device is opened
 /// and closed again to find out.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), feature = "pcap-capture"))]
 pub fn capture_available() -> bool {
     let Some(dev) = capture_devices().into_iter().next() else {
         return true; // nothing to test against; the threads will say so
@@ -234,7 +262,7 @@ pub fn capture_available() -> bool {
 }
 
 /// wpcap.dll is delay-loaded; make sure the loader can find it.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "pcap-capture"))]
 pub fn prepare_capture() {
     let dir = npcap_dir();
     if dir.exists() {
@@ -243,23 +271,21 @@ pub fn prepare_capture() {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(any(not(windows), not(feature = "pcap-capture")))]
 pub fn prepare_capture() {}
 
 fn game_pids(sys: &mut System) -> Vec<u32> {
-    // Only names are wanted here. The default refresh also reads memory, io and
-    // the executable path of every process on the box, three times a second,
-    // for the whole time the game is not running.
+    // Wine can expose a loader as the native executable, so Linux also needs
+    // argv. Reading p.cmd() without requesting its refresh always returned an
+    // empty list and silently disabled that fallback.
+    let refresh = ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::OnlyIfNotSet);
+    #[cfg(not(windows))]
+    let refresh = refresh.with_cmd(sysinfo::UpdateKind::Always);
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+        refresh,
     );
-    let looks_like_it = |s: &str| {
-        let flat: String =
-            s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
-        flat.starts_with("herosiege")
-    };
     sys.processes()
         .iter()
         .filter(|(_, p)| {
@@ -267,15 +293,10 @@ fn game_pids(sys: &mut System) -> Vec<u32> {
             // Steam launch wrapper or Proton the recognisable name is on the
             // executable path or the command line instead, and matching the
             // comm alone would find nothing at all.
-            looks_like_it(&p.name().to_string_lossy())
-                || p.exe()
-                    .and_then(|e| e.file_name())
-                    .is_some_and(|f| looks_like_it(&f.to_string_lossy()))
-                || p.cmd().first().is_some_and(|a| {
-                    std::path::Path::new(a)
-                        .file_name()
-                        .is_some_and(|f| looks_like_it(&f.to_string_lossy()))
-                })
+            let executable = p.exe().map(|path| path.to_string_lossy());
+            let command = p.cmd().iter().map(|value| value.to_string_lossy()).collect::<Vec<_>>();
+            let arguments = command.iter().map(|value| value.as_ref()).collect::<Vec<_>>();
+            crate::game_process::is_game_process(&p.name().to_string_lossy(), executable.as_deref(), &arguments)
         })
         .map(|(pid, _)| pid.as_u32())
         .collect()
@@ -306,6 +327,7 @@ fn unmap(ip: IpAddr) -> IpAddr {
 /// machine's own address in the filter did more harm than the narrowing was
 /// worth. The near ends are read all the same, because a game behind a local
 /// proxy has no far end of its own and is found by them.
+#[cfg(feature = "pcap-capture")]
 fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize, bool) {
     /// One row of the operating system's TCP table, cut down to the four things
     /// asked of it: who owns the socket, and the two ends of it.
@@ -430,6 +452,7 @@ fn game_endpoints(pids: &[u32]) -> (BTreeSet<IpAddr>, usize, bool) {
 /// like) implements the tunnel in user space and re-injects packets, so the
 /// game's traffic can surface on the physical adapter, on the tunnel adapter,
 /// or on both — picking one by address misses half of it.
+#[cfg(feature = "pcap-capture")]
 fn capture_devices() -> Vec<pcap::Device> {
     let all = pcap::Device::list().unwrap_or_default();
     let only_loopback = THROUGH_LOOPBACK.load(Ordering::Relaxed);
@@ -486,6 +509,7 @@ fn capture_devices() -> Vec<pcap::Device> {
 /// is on the adapter this otherwise skips. Skipped the rest of the time on
 /// purpose: nothing on it belongs to the game, and it carries every local socket
 /// on the machine.
+#[cfg(feature = "pcap-capture")]
 fn worth_capturing(addresses: &[pcap::Address], homebound: bool) -> bool {
     homebound || addresses.is_empty() || addresses.iter().any(|a| !a.addr.is_loopback())
 }
@@ -505,6 +529,7 @@ fn worth_capturing(addresses: &[pcap::Address], homebound: bool) -> bool {
 /// None of them can carry a TCP conversation with a game server, so none is
 /// opened. The names are libpcap's own and fixed; anything new that slips
 /// through is caught after the fact by `unusable_device`.
+#[cfg(feature = "pcap-capture")]
 fn is_a_network(name: &str) -> bool {
     const PSEUDO: [&str; 5] = ["any", "nflog", "nfqueue", "dbus-system", "dbus-session"];
     !PSEUDO.contains(&name)
@@ -519,6 +544,7 @@ fn is_a_network(name: &str) -> bool {
 /// That is a fact about the device, not a fault: it must not be retried, and it
 /// must not put an error on the status line while a real adapter is working
 /// perfectly well beside it.
+#[cfg(feature = "pcap-capture")]
 fn unusable_device(e: &pcap::Error) -> bool {
     let text = e.to_string().to_lowercase();
     text.contains("not implemented") || text.contains("link-layer type")
@@ -618,6 +644,7 @@ fn wide_capture() -> bool {
 /// While the game has not connected there is nothing to name and the answer is
 /// everything. The endpoints are re-read every five seconds and the capture
 /// restarted when they change, so that state does not last.
+#[cfg(feature = "pcap-capture")]
 fn scope_for(remote: &BTreeSet<IpAddr>) -> String {
     // The far side is named by its /24 rather than by the one address that
     // happens to be answering: the game moves between servers inside a session,
@@ -664,7 +691,53 @@ fn scope_for(remote: &BTreeSet<IpAddr>) -> String {
 pub fn spawn(shared: &Shared, app: tauri::AppHandle) {
     let stats = shared.stats.clone();
     let status = shared.status.clone();
-    std::thread::spawn(move || watcher(stats, status, app));
+    std::thread::spawn(move || match selected_backend() {
+        #[cfg(feature = "pcap-capture")]
+        Ok(Backend::Pcap) => watcher(stats, status, app),
+        #[cfg(not(feature = "pcap-capture"))]
+        Ok(Backend::Pcap) => set_status(&status, Status::BackendError { backend: "pcap".into(), message: "This build does not include the pcap capture backend".into() }),
+        #[cfg(windows)]
+        Ok(Backend::PacketMonitor) => packet_monitor::watcher(stats, status, app),
+        #[cfg(not(windows))]
+        Ok(Backend::PacketMonitor) => set_status(&status, Status::BackendError { backend: "packet-monitor".into(), message: "Packet Monitor is available only on Windows".into() }),
+        Err(message) => set_status(&status, Status::BackendError { backend: "configuration".into(), message }),
+    });
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backend { Pcap, PacketMonitor }
+
+fn default_backend() -> Backend {
+    if cfg!(all(windows, not(feature = "pcap-capture"))) { Backend::PacketMonitor } else { Backend::Pcap }
+}
+
+fn parse_backend(value: Option<&str>) -> Result<Backend, String> {
+    match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "" => Ok(default_backend()),
+        "pcap" | "npcap" => Ok(Backend::Pcap),
+        "packet-monitor" => Ok(Backend::PacketMonitor),
+        other => Err(format!("Unknown HS_CAPTURE_BACKEND: {}", other.chars().take(128).collect::<String>())),
+    }
+}
+
+fn selected_backend() -> Result<Backend, String> { parse_backend(std::env::var("HS_CAPTURE_BACKEND").ok().as_deref()) }
+
+pub fn capture_backend_info() -> serde_json::Value {
+    match selected_backend() {
+        Ok(Backend::Pcap) => serde_json::json!({"backend":"pcap", "experimental":false,"compiled":cfg!(feature="pcap-capture"),"npcap_required":cfg!(all(windows,feature="pcap-capture")),"error":if cfg!(feature="pcap-capture"){None}else{Some("This build does not include the pcap capture backend")}}),
+        Ok(Backend::PacketMonitor) => {
+            #[cfg(windows)]
+            let error = crate::pktmon::probe().err().map(|e| e.to_string());
+            #[cfg(not(windows))]
+            let error = Some("Packet Monitor is available only on Windows".to_string());
+            #[cfg(windows)]
+            let diagnostics = packet_monitor::diagnostics();
+            #[cfg(not(windows))]
+            let diagnostics = serde_json::Value::Null;
+            serde_json::json!({"backend":"packet-monitor","experimental":true,"npcap_required":false,"administrator_required":true,"snapshot_max_bytes":9000,"error":error,"diagnostics":diagnostics})
+        },
+        Err(error) => serde_json::json!({"backend":"invalid","error":error}),
+    }
 }
 
 fn set_status(status: &Arc<Mutex<Status>>, s: Status) {
@@ -675,6 +748,7 @@ fn set_status(status: &Arc<Mutex<Status>>, s: Status) {
 /// process simply may not open it. libpcap hands the reason back as prose, and
 /// its wording for a missing capability has changed over the years, so all the
 /// spellings it has used are matched.
+#[cfg(feature = "pcap-capture")]
 fn denied_open(e: &pcap::Error) -> bool {
     match e {
         pcap::Error::IoError(kind) => *kind == std::io::ErrorKind::PermissionDenied,
@@ -689,9 +763,47 @@ fn denied_open(e: &pcap::Error) -> bool {
     }
 }
 
+/// Common lifecycle effects remain independent of the packet source.
+fn note_game_presence(running: bool, game_running: &mut bool, stats: &Arc<Mutex<GameStats>>, app: &tauri::AppHandle) {
+    GAME_UP.store(running, Ordering::Relaxed);
+    if running != *game_running {
+        *game_running = running;
+        // nothing to show or hide where the session hosts no overlay
+        let auto = crate::read_settings().auto_show && crate::overlay_supported();
+        // through the same pair as everywhere else, so the overlay comes
+        // back where the player left it rather than where the window
+        // manager fancies
+        if running {
+            // The clock starts when the game does, not when the app does:
+            // on autostart the idle hours before the game opens would
+            // otherwise divide every per-hour figure and be filed as the
+            // run's length. Outside `if auto` on purpose — the same holds
+            // with the overlay switched off.
+            //
+            // This is the one reset with a blackout behind it: the zone
+            // carried over from the last session, and nothing says it is
+            // still the zone.
+            stats.lock().unwrap_or_else(|e| e.into_inner()).reset_after_blackout();
+            if auto {
+                crate::show_overlay(&app);
+            }
+        } else {
+            // the game closing ends the run, and a closed run is filed
+            crate::end_run(&app);
+            if auto {
+                crate::hide_overlay(&app);
+            }
+        }
+    }
+
+}
+
+#[cfg(feature = "pcap-capture")]
 fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri::AppHandle) {
     let mut sys = System::new();
     let mut captures: HashMap<String, Capture> = HashMap::new();
+    // Adapters may observe the same TCP segment; transport identity is shared.
+    let transport=Arc::new(TransportState::default());
     let mut game_running = false;
     let mut tick: u64 = 0;
     let mut wanted: Vec<pcap::Device> = Vec::new();
@@ -743,39 +855,8 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
 
         let pids = game_pids(&mut sys);
 
-        // the overlay follows the game: show on launch, close the farm
-        // session and hide when the game exits
         let running = !pids.is_empty();
-        GAME_UP.store(running, Ordering::Relaxed);
-        if running != game_running {
-            game_running = running;
-            // nothing to show or hide where the session hosts no overlay
-            let auto = crate::read_settings().auto_show && crate::overlay_supported();
-            // through the same pair as everywhere else, so the overlay comes
-            // back where the player left it rather than where the window
-            // manager fancies
-            if running {
-                // The clock starts when the game does, not when the app does:
-                // on autostart the idle hours before the game opens would
-                // otherwise divide every per-hour figure and be filed as the
-                // run's length. Outside `if auto` on purpose — the same holds
-                // with the overlay switched off.
-                //
-                // This is the one reset with a blackout behind it: the zone
-                // carried over from the last session, and nothing says it is
-                // still the zone.
-                stats.lock().unwrap_or_else(|e| e.into_inner()).reset_after_blackout();
-                if auto {
-                    crate::show_overlay(&app);
-                }
-            } else {
-                // the game closing ends the run, and a closed run is filed
-                crate::end_run(&app);
-                if auto {
-                    crate::hide_overlay(&app);
-                }
-            }
-        }
+        note_game_presence(running, &mut game_running, &stats, &app);
 
         // Adapters and endpoints are re-checked on a slow beat: a VPN comes
         // and goes, and the game opens its connections a moment after the
@@ -878,12 +959,13 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
                 let (dev, dropped, scope, hits) = (dev.clone(), dropped.clone(), scope.clone(), hits.clone());
                 let (packets, tls) = (packets.clone(), tls.clone());
                 let opened = opened.clone();
+                let transport=transport.clone();
                 std::thread::spawn(move || {
                     // "no interface" is the wrong story when the adapter is
                     // there and the process simply may not open it — the usual
                     // state of a fresh Linux install without cap_net_raw.
                     if let Err(e) =
-                        capture_loop(dev, scope, stop, stats, dropped, hits, packets, tls, opened, &app)
+                        capture_loop(dev, scope, stop, stats, dropped, hits, packets, tls, opened, transport, &app)
                     {
                         // Something libpcap lists but cannot filter on. Said
                         // once, at a level nobody has to act on, and left alone
@@ -1013,6 +1095,7 @@ fn watcher(stats: Arc<Mutex<GameStats>>, status: Arc<Mutex<Status>>, app: tauri:
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "pcap-capture")]
 fn capture_loop(
     dev: pcap::Device,
     scope: String,
@@ -1023,6 +1106,7 @@ fn capture_loop(
     packets: Arc<AtomicU32>,
     tls: Arc<AtomicU32>,
     opened: Arc<AtomicBool>,
+    transport: Arc<TransportState>,
     app: &tauri::AppHandle,
 ) -> Result<(), pcap::Error> {
     let mut cap = pcap::Capture::from_device(dev)?
@@ -1036,9 +1120,9 @@ fn capture_loop(
     // VPN/tunnel adapters (WireGuard etc.) deliver raw IP or a 4-byte
     // loopback family header instead of Ethernet frames
     let framing = cap.get_datalink().0;
-    let mut asm = Reassembler::default();
     let mut swept = std::time::Instant::now();
     let mut counted = std::time::Instant::now();
+    let mut reported_transport=parser::TransportDiagnostics::default();
 
     while !stop.load(Ordering::Relaxed) {
         if counted.elapsed() >= Duration::from_secs(15) {
@@ -1049,6 +1133,13 @@ fn capture_loop(
                 println!("[capture] {} packets seen, {} dropped, {} dropped by the adapter",
                     st.received, st.dropped, st.if_dropped);
             }
+            let diagnostics=transport.assembly.lock().unwrap_or_else(|e|e.into_inner()).diagnostics();
+            if diagnostics.gaps>reported_transport.gaps || diagnostics.conflicts>reported_transport.conflicts
+                || diagnostics.limits>reported_transport.limits || diagnostics.evicted_flows>reported_transport.evicted_flows {
+                crate::log::warn(format!("TCP recovery: {} gaps, {} conflicting overlaps, {} buffer-limit refusals, {} flow evictions",
+                    diagnostics.gaps,diagnostics.conflicts,diagnostics.limits,diagnostics.evicted_flows));
+            }
+            reported_transport=diagnostics;
         }
         let packet = match cap.next_packet() {
             // `whole` is false when the capture kept less of the frame than the
@@ -1065,80 +1156,86 @@ fn capture_loop(
         };
         if packet.is_none() || swept.elapsed() >= Duration::from_millis(100) {
             swept = std::time::Instant::now();
-            for (src, flushed) in asm.drain_idle() {
-                handle_flush(&flushed, src, &stats, &hits, app);
-            }
+            drain_ready(&transport, |flow, bytes| handle_flush(bytes, flow.0, &stats, &hits, app));
         }
         let Some((data, whole)) = packet else { continue };
-        // A segmentation-offloading adapter hands us the whole buffer with a
-        // length field describing one segment of it; `unoffload` puts the two
-        // back in agreement, and returns nothing at all in the ordinary case.
-        let patched =
-            whole.then(|| ip_offset(data, framing).and_then(|at| unoffload(data, at))).flatten();
-        let data: &[u8] = patched.as_deref().unwrap_or(data);
-        let sliced = match framing {
-            1 => SlicedPacket::from_ethernet(data), // DLT_EN10MB
-            0 | 108 => {
-                // DLT_NULL / DLT_LOOP
-                if data.len() < 4 {
-                    continue;
-                }
-                SlicedPacket::from_ip(&data[4..])
-            }
-            _ => SlicedPacket::from_ip(data), // DLT_RAW and friends
-        };
-        let Ok(pkt) = sliced else { continue };
-        let src = match &pkt.net {
-            Some(NetSlice::Ipv4(v4)) => IpAddr::V4(v4.header().source_addr()),
-            Some(NetSlice::Ipv6(v6)) => IpAddr::V6(v6.header().source_addr()),
-            _ => continue,
-        };
-        let Some(TransportSlice::Tcp(tcp)) = &pkt.transport else { continue };
-        // Port 443 is skipped as encrypted: a TLS stream cannot yield the
-        // plaintext the parser looks for, and reassembling it is pure cost.
-        //
-        // The assumption holds until something moves the game's traffic onto
-        // that port — a route optimiser relaying it does — and then the rule
-        // throws everything away without saying so. Under a wide capture the
-        // port is read anyway; being wrong that way costs only scanning
-        // payloads that never match, which the scan budget bounds.
-        if tcp.source_port() == 443 || tcp.destination_port() == 443 {
-            tls.fetch_add(1, Ordering::Relaxed);
-            if !wide_capture() {
-                continue;
-            }
-        }
-
-        let flow = (src, tcp.source_port(), tcp.destination_port());
-        if let Some(flushed) = asm.push(flow, tcp.acknowledgment_number(), tcp.payload()) {
-            handle_flush(&flushed, src, &stats, &hits, app);
-        }
+        route_packet(data, framing, whole, wide_capture(), &tls, &transport,
+            |flow, bytes| handle_flush(bytes, flow.0, &stats, &hits, app));
     }
     Ok(())
 }
 
-/// With several adapters listening, a re-injected packet arrives twice. The
-/// counters are diff-based and survive that, but a gold deposit is a delta and
-/// would count double — so an identical message seen twice is dropped.
-fn fresh_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-    static SEEN: Mutex<Option<Vec<(u64, std::time::Instant)>>> = Mutex::new(None);
-    let Ok(mut guard) = SEEN.lock() else { return messages };
-    let seen = guard.get_or_insert_with(Vec::new);
-    seen.retain(|(_, at)| at.elapsed() < Duration::from_secs(10));
-    messages
-        .into_iter()
-        .filter(|m| {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            m.to_string().hash(&mut hasher);
-            let key = hasher.finish();
-            if seen.iter().any(|(h, _)| *h == key) {
-                return false;
+/// Shared by packet sources; dispatch stays locked through the emitted flush.
+fn drain_ready(transport: &TransportState, mut emit: impl FnMut(parser::Flow, &[u8])) {
+    let _ordered=transport.dispatch.lock().unwrap_or_else(|e|e.into_inner());
+    let ready=transport.assembly.lock().unwrap_or_else(|e|e.into_inner()).drain_idle();
+    for (flow, bytes) in ready { emit(flow, &bytes); }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_packet(data: &[u8], framing: i32, whole: bool, allow_tls: bool,
+    tls: &AtomicU32, transport: &TransportState, mut emit: impl FnMut(parser::Flow, &[u8])) {
+    // A segmentation-offloading adapter hands us the whole buffer with a
+    // length field describing one segment of it; `unoffload` puts the two
+    // back in agreement, and returns nothing at all in the ordinary case.
+    let patched =
+        whole.then(|| ip_offset(data, framing).and_then(|at| unoffload(data, at))).flatten();
+    let data: &[u8] = patched.as_deref().unwrap_or(data);
+    let sliced = match framing {
+        1 => SlicedPacket::from_ethernet(data), // DLT_EN10MB
+        0 | 108 => {
+            // DLT_NULL / DLT_LOOP
+            if data.len() < 4 {
+                return;
             }
-            seen.push((key, std::time::Instant::now()));
-            true
-        })
-        .collect()
+            SlicedPacket::from_ip(&data[4..])
+        }
+        _ => SlicedPacket::from_ip(data), // DLT_RAW and friends
+    };
+    let Ok(pkt) = sliced else { return };
+    let Some(flow)=packet_flow(&pkt) else {return};
+    let Some(TransportSlice::Tcp(tcp)) = &pkt.transport else { return };
+    // Port 443 is skipped as encrypted: a TLS stream cannot yield the
+    // plaintext the parser looks for, and reassembling it is pure cost.
+    //
+    // The assumption holds until something moves the game's traffic onto
+    // that port — a route optimiser relaying it does — and then the rule
+    // throws everything away without saying so. Under a wide capture the
+    // port is read anyway; being wrong that way costs only scanning
+    // payloads that never match, which the scan budget bounds.
+    if tcp.source_port() == 443 || tcp.destination_port() == 443 {
+        tls.fetch_add(1, Ordering::Relaxed);
+        if !allow_tls {
+            return;
+        }
+    }
+
+    // Only FIN can force an immediate push flush; all other delivery is
+    // through the serialized idle drain above. Do not hold assembly during IO.
+    let _ordered=tcp.fin().then(||transport.dispatch.lock().unwrap_or_else(|e|e.into_inner()));
+    let flushed=transport.assembly.lock().unwrap_or_else(|e|e.into_inner()).push(
+        flow,tcp.sequence_number(),TcpFlags {syn:tcp.syn(),ack:tcp.ack(),ack_number:tcp.acknowledgment_number(),fin:tcp.fin(),rst:tcp.rst()},tcp.payload());
+    if let Some(flushed)=flushed {emit(flow, &flushed);}
+}
+
+/// Keep both network endpoints: equal source/ports are not the same TCP
+/// connection when the destination address differs (including IPv6).
+fn packet_flow(packet: &SlicedPacket<'_>) -> Option<parser::Flow> {
+    let (src, dst) = match &packet.net {
+        Some(NetSlice::Ipv4(ip)) => (
+            IpAddr::V4(ip.header().source_addr()),
+            IpAddr::V4(ip.header().destination_addr()),
+        ),
+        Some(NetSlice::Ipv6(ip)) => (
+            IpAddr::V6(ip.header().source_addr()),
+            IpAddr::V6(ip.header().destination_addr()),
+        ),
+        _ => return None,
+    };
+    let Some(TransportSlice::Tcp(tcp)) = &packet.transport else {
+        return None;
+    };
+    Some((src, tcp.source_port(), dst, tcp.destination_port()))
 }
 
 fn handle_flush(
@@ -1148,7 +1245,8 @@ fn handle_flush(
     hits: &Arc<AtomicU32>,
     app: &tauri::AppHandle,
 ) {
-    let messages = fresh_messages(parser::extract_messages(flushed));
+    // Equal JSON values at different TCP positions are legitimate separate events.
+    let messages = parser::extract_messages(flushed);
     if messages.is_empty() {
         return;
     }
@@ -1171,6 +1269,7 @@ fn handle_flush(
         .collect();
     for drop in fresh {
         let milestone = newly_collected.get(&drop.name.to_lowercase()) == Some(&666);
+        crate::stream::publish_drop(&drop,newly_collected.contains_key(&drop.name.to_lowercase()));
         if let Some(key) = drop.sound.as_ref().filter(|_| !milestone) {
             // the rarity travels along as a fallback: a list with no sound of
             // its own still gets announced
@@ -1192,6 +1291,15 @@ mod tests {
     use super::*;
     use std::net::Ipv6Addr;
 
+    #[test]
+    fn backend_selection_preserves_the_default_and_never_silently_falls_back() {
+        assert_eq!(parse_backend(None),Ok(default_backend()));
+        assert_eq!(parse_backend(Some("")),Ok(default_backend()));
+        for name in ["pcap", "npcap"] { assert_eq!(parse_backend(Some(name)),Ok(Backend::Pcap)); }
+        assert_eq!(parse_backend(Some(" packet-monitor ")),Ok(Backend::PacketMonitor));
+        assert!(parse_backend(Some("packetmon-typo")).is_err());
+    }
+
     /// `::ffff:10.8.1.8` and `10.8.1.8` are one address, and only one of them
     /// can be written into a filter that will ever match. A Linux build of the
     /// game hands us the first; leaving it that way kept the capture up and
@@ -1208,6 +1316,7 @@ mod tests {
         assert_eq!(unmap(plain), plain);
     }
 
+    #[cfg(feature = "pcap-capture")]
     fn address(ip: &str) -> pcap::Address {
         pcap::Address {
             addr: ip.parse().unwrap(),
@@ -1224,6 +1333,7 @@ mod tests {
     /// spent a capture thread on each. Opening the D-Bus one makes libpcap run
     /// `dbus-launch`, which inside an AppImage dies on the bundled libdbus.
     #[test]
+    #[cfg(feature = "pcap-capture")]
     fn the_pseudo_devices_libpcap_lists_are_left_alone() {
         for real in ["enp9s0", "eth0", "wlan0", "virbr0", "tun0", "wg0"] {
             assert!(is_a_network(real), "{real}");
@@ -1241,6 +1351,7 @@ mod tests {
     /// machine whose traffic all goes through a VPN, that was the only adapter
     /// the game could have been seen on.
     #[test]
+    #[cfg(feature = "pcap-capture")]
     fn an_adapter_with_no_addresses_is_still_worth_listening_on() {
         assert!(worth_capturing(&[], false), "no addresses is not the same as loopback");
         assert!(worth_capturing(&[address("192.168.0.70")], false));
@@ -1257,6 +1368,7 @@ mod tests {
     /// address it must stay wide, or a session is deaf until the game happens
     /// to open a socket we can attribute.
     #[test]
+    #[cfg(feature = "pcap-capture")]
     fn the_filter_is_wide_until_the_game_names_itself() {
         assert_eq!(scope_for(&BTreeSet::new()), "tcp");
     }
@@ -1269,6 +1381,7 @@ mod tests {
     /// tunnel is not the address on the wire, and when they differ the filter
     /// matches nothing at all.
     #[test]
+    #[cfg(feature = "pcap-capture")]
     fn the_filter_names_the_far_end_and_leaves_this_machine_alone() {
         let remote: BTreeSet<IpAddr> =
             ["172.104.128.178".parse().unwrap(), "139.162.166.201".parse().unwrap()]
@@ -1377,5 +1490,135 @@ mod offload_tests {
         tagged.extend_from_slice(&plain[12..]);
         assert_eq!(ip_offset(&tagged, 1), Some(18));
         assert_eq!(payload_seen(&tagged), Some(5000));
+    }
+}
+
+
+#[cfg(test)]
+mod transport_frame_tests {
+    use super::*;
+    fn ipv4(seq: u32, payload: &[u8], fin: bool) -> Vec<u8> {
+        let mut out = vec![0; 14 + 20 + 20];
+        out[12..14].copy_from_slice(&[8, 0]);
+        out[14] = 0x45;
+        out[16..18].copy_from_slice(&((40 + payload.len()) as u16).to_be_bytes());
+        out[22] = 64;
+        out[23] = 6;
+        out[26..30].copy_from_slice(&[10, 0, 0, 1]);
+        out[30..34].copy_from_slice(&[10, 0, 0, 2]);
+        out[34..36].copy_from_slice(&6600u16.to_be_bytes());
+        out[36..38].copy_from_slice(&51000u16.to_be_bytes());
+        out[38..42].copy_from_slice(&seq.to_be_bytes());
+        out[46] = 0x50;
+        out[47] = 0x10 | u8::from(fin);
+        out.extend_from_slice(payload);
+        out
+    }
+    fn feed(asm: &mut Reassembler, frame: &[u8]) -> Option<Vec<u8>> {
+        let packet = SlicedPacket::from_ethernet(frame).expect("golden packet headers");
+        let flow = packet_flow(&packet).expect("full TCP endpoints");
+        let Some(TransportSlice::Tcp(tcp)) = packet.transport else {
+            panic!("TCP")
+        };
+        asm.push(
+            flow,
+            tcp.sequence_number(),
+            TcpFlags {
+                syn: tcp.syn(),
+                ack: tcp.ack(),
+                ack_number: tcp.acknowledgment_number(),
+                fin: tcp.fin(),
+                rst: tcp.rst(),
+            },
+            tcp.payload(),
+        )
+    }
+    #[test]
+    fn shared_router_preserves_the_same_tcp_bytes_across_ethernet_and_raw_ip_sources() {
+        let transport = TransportState::default();
+        let tls = AtomicU32::new(0);
+        let wire = br#"{"goldAmount":100}{"goldAmount":100}"#;
+        let seq = 1000u32;
+        let mut syn = ipv4(seq-1,b"",false);syn[47]=0x02;
+        let mut emitted = Vec::new();
+        route_packet(&syn,1,true,false,&tls,&transport,|_,bytes|emitted.extend_from_slice(bytes));
+        let data = ipv4(seq,wire,false);
+        route_packet(&data,1,true,false,&tls,&transport,|_,bytes|emitted.extend_from_slice(bytes));
+        route_packet(&data[14..],12,true,false,&tls,&transport,|_,bytes|emitted.extend_from_slice(bytes));
+        let fin = ipv4(seq+wire.len()as u32,b"",true);
+        route_packet(&fin[14..],12,true,false,&tls,&transport,|_,bytes|emitted.extend_from_slice(bytes));
+        assert_eq!(emitted,wire);
+        let events = parser::events_from_messages(&parser::extract_messages(&emitted));
+        assert_eq!(events.iter().filter_map(|event|match event {parser::GameEvent::Gold(gold)=>Some(gold.delta),_=>None}).sum::<i64>(),200);
+    }
+    #[test]
+    fn raw_frames_reassemble_reordering_retries_and_repeated_gold_deltas() {
+        let mut asm = Reassembler::default();
+        let wire = br#"{"goldAmount":100}{"goldAmount":100}"#;
+        let seq = u32::MAX - 10;
+        let mut syn = ipv4(seq.wrapping_sub(1), b"", false);
+        syn[47] = 0x02;
+        assert!(feed(&mut asm, &syn).is_none());
+        assert!(feed(&mut asm, &ipv4(seq.wrapping_add(11), &wire[11..], false)).is_none());
+        let head = ipv4(seq, &wire[..17], false);
+        assert!(feed(&mut asm, &head).is_none());
+        assert!(feed(&mut asm, &head).is_none());
+        let bytes = feed(
+            &mut asm,
+            &ipv4(seq.wrapping_add(wire.len() as u32), b"", true),
+        )
+        .expect("contiguous FIN range");
+        assert_eq!(bytes, wire);
+        let events = parser::events_from_messages(&parser::extract_messages(&bytes));
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    parser::GameEvent::Gold(gold) => Some(gold.delta),
+                    _ => None,
+                })
+                .sum::<i64>(),
+            200
+        );
+        assert!(
+            feed(&mut asm, &head).is_none(),
+            "a delayed duplicate from another adapter cannot replay the message"
+        );
+    }
+    #[test]
+    fn ipv6_destinations_are_part_of_the_transport_identity() {
+        let base = ipv4(100, br#"{"goldAmount":1}"#, true);
+        let mut frame = vec![0; 14 + 40];
+        frame[12..14].copy_from_slice(&[0x86, 0xdd]);
+        frame[14] = 0x60;
+        frame[18..20].copy_from_slice(&((base.len() - 34) as u16).to_be_bytes());
+        frame[20] = 6;
+        frame[21] = 64;
+        frame[22] = 0x20;
+        frame[23] = 1;
+        frame[37] = 1;
+        frame[38] = 0x20;
+        frame[39] = 1;
+        frame[53] = 2;
+        frame.extend_from_slice(&base[34..]);
+        let first = packet_flow(&SlicedPacket::from_ethernet(&frame).unwrap()).unwrap();
+        frame[53] = 3;
+        let second = packet_flow(&SlicedPacket::from_ethernet(&frame).unwrap()).unwrap();
+        assert_eq!((first.0, first.1, first.3), (second.0, second.1, second.3));
+        assert_ne!(first.2, second.2);
+        let mut asm = Reassembler::default();
+        let mut syn = frame[..14 + 40 + 20].to_vec();
+        syn[18..20].copy_from_slice(&20u16.to_be_bytes());
+        syn[58..62].copy_from_slice(&99u32.to_be_bytes());
+        syn[67] = 0x02;
+        assert!(feed(&mut asm, &syn).is_none());
+        assert!(feed(&mut asm, &frame).is_some());
+        frame[53] = 2;
+        syn[53] = 2;
+        assert!(feed(&mut asm, &syn).is_none());
+        assert!(
+            feed(&mut asm, &frame).is_some(),
+            "different destinations are separate streams"
+        );
     }
 }

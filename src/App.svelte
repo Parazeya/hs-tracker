@@ -8,6 +8,7 @@
   import { RARITIES, soundUrl, play } from './audio.js';
   import collection666Wav from './assets/sounds/collection_666.wav';
   import { fmt } from './format.js';
+  import { captureBackendNotice } from './capture-status.js';
 
   let snap = $state(null);
 
@@ -233,6 +234,8 @@
 
   let status = $derived.by(() => {
     const s = snap?.status ?? '';
+    const notice = captureBackendNotice(s, t, { onLinux: document.documentElement.dataset.os === 'linux' });
+    if (notice) return { cls: notice.bad ? 'err' : 'warn', tip: notice.detail };
     if (s.startsWith('capturing')) {
       const [, iface, hosts, dropped] = s.split('|');
       const loss = Number(dropped) > 0 ? say(', {n} packets dropped', { n: dropped }) : '';

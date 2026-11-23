@@ -9,6 +9,7 @@
   import appIcon from '../src-tauri/icons/128x128.png';
 
   let info = $state(null);
+  let capture = $state(null);
   /// What GitHub says the newest release is. Null until asked, and asked only
   /// by the button: this is the fallback for a release with no manifest, and
   /// the manifest is what the launch check reads. See update.svelte.js.
@@ -29,6 +30,7 @@
 
   $effect(() => {
     invoke('about').then((a) => (info = a)).catch(() => {});
+    invoke('capture_backend_info').then(value => { capture = value; }).catch(() => {});
   });
 
   /// "0.9.8" against "0.9.10": compared piece by piece, because a string
@@ -160,6 +162,18 @@
         <button class="btn" onclick={() => invoke('show_log').catch((e) => (failed = String(e)))}> {t("Show it in the folder")} </button>
       </div>
     </div>
+
+    {#if capture}
+      <div class="card" style:border-image-source="url({art('chip_dark')})">
+        <div class="head">{t('Network capture')}</div>
+        <div class="row"><span class="k">{t('Backend')}</span><b>{capture.backend === 'packet-monitor' ? 'Windows Packet Monitor' : capture.backend === 'pcap' ? (capture.npcap_required ? 'Npcap' : 'libpcap') : capture.backend}</b></div>
+        {#if capture.experimental}<div class="note">{t('Experimental capture. Live packet validation is still required.')}</div>{/if}
+        {#if capture.administrator_required}<div class="note">{t('This backend requires administrator privileges.')}</div>{/if}
+        {#if capture.error}<div class="bad">{capture.error}</div>{/if}
+        <div class="line"><button class="btn" onclick={() => invoke('capture_backend_info').then(value => { capture = value; }).catch(error => { failed = String(error); })}>{t('Refresh diagnostics')}</button></div>
+        <div class="line"><button class="btn" onclick={() => copy(JSON.stringify(capture, null, 2))}>{t('Copy diagnostics')}</button>{#if copied}<span class="ok"> {t('copied')}</span>{/if}</div>
+      </div>
+    {/if}
 
     <div class="card" style:border-image-source="url({art('chip_dark')})">
       <div class="head">{t("Updates")}</div>

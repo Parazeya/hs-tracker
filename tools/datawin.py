@@ -16,12 +16,15 @@ from PIL import Image
 
 import yytex
 
-GAME = Path(r"F:\Games\Steam\steamapps\common\HeroSiege\bin")
+GAME = Path(os.environ.get("HERO_SIEGE_BIN") or os.environ.get("HERO_SIEGE") or r"C:\Program Files (x86)\Steam\steamapps\common\HeroSiege\bin")
 DATA = GAME / "data.win"
 
 
 class DataWin:
     def __init__(self, path=DATA):
+        path = Path(path)
+        self.game = path.resolve().parent
+        self._page_cache = {}
         self.raw = path.read_bytes()
         assert self.raw[:4] == b"FORM"
         self.chunks = {}
@@ -35,6 +38,7 @@ class DataWin:
         self._parse_tpag()
         self._parse_sprt()
         self._parse_tgin()
+        self._parse_txtr()
         self._parse_objt()
         self._rooms = None       # filled by rooms_with, which is not cheap
 
@@ -119,7 +123,20 @@ class DataWin:
             for i, page_id in enumerate(ids):
                 self.page_files[page_id] = (Path(sub) if sub else Path()) / f"{name}_{i}"
 
-    _page_cache = {}
+    def _parse_txtr(self):
+        """Embedded pages take precedence over optional loose copies."""
+        self._embedded_pages = {}
+        if "TXTR" not in self.chunks:
+            return
+        for page_id, pointer in enumerate(self._ptr_list(self.chunks["TXTR"][0])):
+            if pointer + 28 > len(self.raw):
+                raise ValueError(f"Invalid TXTR entry for page {page_id}")
+            length = self.u32(pointer + 8)
+            offset = self.u32(pointer + 24)
+            if offset:
+                if offset + length > len(self.raw):
+                    raise ValueError(f"Embedded texture page {page_id} exceeds data.win")
+                self._embedded_pages[page_id] = (offset, length)
 
     def _parse_objt(self):
         """Object name -> the sprite it is drawn with.
@@ -177,8 +194,12 @@ class DataWin:
 
     def page_image(self, page_id):
         if page_id not in self._page_cache:
-            fname = self.page_files[page_id]
-            self._page_cache[page_id] = yytex.decode_file(GAME / fname.with_suffix(".yytex"))
+            if page_id in self._embedded_pages:
+                offset, length = self._embedded_pages[page_id]
+                self._page_cache[page_id] = yytex.decode_bytes(self.raw[offset:offset + length], f"embedded page {page_id}")
+            else:
+                fname = self.page_files[page_id]
+                self._page_cache[page_id] = yytex.decode_file(self.game / fname.with_suffix(".yytex"))
         return self._page_cache[page_id]
 
     def frame_image(self, tpag_ptr):

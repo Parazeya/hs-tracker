@@ -26,10 +26,12 @@ debug-capture*.jsonl
 
 # datamined item tables: input for tools/gen_items.py, not ours to ship
 tools/data/
-tools/__pycache__/
+__pycache__/
 
 # local notes, not part of the published project
 docs/
+/AUDIT.md
+/CODEX_HANDOFF.md
 
 # locally built Linux packages for testing
 linux-packages/
@@ -48,6 +50,7 @@ dist-linux/
 # Local browser profile and UI review screenshots
 /.chrome-preview/
 /previews/
+/.playwright-mcp/
 
 # machine-specific paths; see .env.example
 .env

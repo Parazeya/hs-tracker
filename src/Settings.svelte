@@ -1,10 +1,12 @@
 <script>
-  import { invoke, recall, remember } from './bridge.js';
+  import { invoke, listen, recall, remember } from './bridge.js';
+  import { onMount } from 'svelte';
   import { art, wearTheme } from './skin.svelte.js';
   import { READINGS, slotsOf } from './panel.js';
   import { LANGUAGES, t } from './say.svelte.js';
 
   import { flush, save, startSettings, store } from './settings.svelte.js';
+  import StreamingSettings from './StreamingSettings.svelte';
 
   /// Which part of the page this tab is — 'overlay', 'streaming' or 'general'.
   /// Three tabs out of one component, so the controls and their styles stay in
@@ -39,10 +41,17 @@
   });
 
   let notice = $state('');
+  onMount(() => {
+    const stop = listen('map-window-error', (event) => { notice = String(event.payload); });
+    return () => { stop.then((unlisten) => unlisten()); };
+  });
+  async function openMap() {
+    try { await invoke('show_map'); } catch (error) { notice = String(error); }
+  }
   async function restart(x11) {
     // a pending edit would die with this process
-    await flush();
     try {
+      await flush();
       await invoke('restart_backend', { x11 });
     } catch (e) {
       notice = String(e);
@@ -119,14 +128,6 @@
   }
 
 
-  /// What each window is called in OBS's list. Not translated: it is the title
-  /// the window carries, and a translated one would be looked for in vain.
-  const WINDOWS = [
-    ['Overlay', 'HS Tracker \u2014 Overlay'],
-    ['Announcement', 'HS Tracker \u2014 Announcement'],
-    ['Drops', 'HS Tracker \u2014 Drops'],
-    ['Dashboard', 'HS Tracker'],
-  ];
 </script>
 
 <div class="panel">
@@ -291,6 +292,14 @@
         >{t("Import…")}</button>
       </div>
 
+      <div class="line">
+        <button class="btn" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={openMap}>{t('Open full-screen map')}</button>
+        <span class="opt">{t('Ctrl+Shift+M — show/hide map')}</span>
+      </div>
+      {#if session.map_hotkey === false}
+        <div class="hint">{t('Global map hotkey is unavailable in this session; use Open full-screen map.')}</div>
+      {/if}
+
       <button class="more" onclick={() => (advanced = !advanced)}>
         {advanced ? '▾' : '▸'} {t('More settings')}
       </button>
@@ -350,41 +359,8 @@
 
     {/if}
 
-    {#if view === 'streaming' && overlay}
-      <!-- Everything OBS needs, in the app rather than only in the README.
-           Three support rounds went on the same three facts: the window has to
-           be picked by name, the announcement is not a window between drops,
-           and a black picture is a refusal rather than an empty window. -->
-      <div class="section" style:border-image-source="url({art('chip_dark')})">
-        <div class="sechead" data-tauri-drag-region>{t("Streaming")}</div>
-        <div class="note">{t("Each window is captured on its own. Add a Window Capture in OBS and pick one of these:")}</div>
-        <div class="wins">
-          {#each WINDOWS as [what, title]}
-            <div class="win"><span>{t(what)}</span><b class="mono">{title}</b></div>
-          {/each}
-        </div>
-        <div class="note">{t("Capture Method must be “Windows 10 (1903 and up)”. Every window here is transparent, and the older method captures nothing from one.")}</div>
-        <!-- Both the announcement and the drop list are up only while they
-             have something to show, so neither is in OBS's list when a Window
-             Capture is being added. The drop list's switch is here, where the
-             capture is being set up; the announcement's sits with the rest of
-             the announcement on Alerts, and this says where. -->
-        <div class="note">{t("The announcement and the drop list are only windows while they are showing something, and OBS lists only windows that are there. Keep them up while you add the capture:")}</div>
-        <!-- Both here, one under the other: they are the same job for two
-             windows. Apart, on two tabs, a player setting up a capture found
-             the announcement's and was left with no drop list in OBS's list at
-             all, and a note on each page pointing at the other. -->
-        <button class="secopt" onclick={() => { settings.flourish_always = !settings.flourish_always; save(); }}>
-          <img src={settings.flourish_always ? art('check_on') : art('check_off')} alt="" />
-          <span>{t("Keep the announcement's window on screen")}</span>
-        </button>
-        <button class="secopt" onclick={() => { settings.ticker_always = !settings.ticker_always; save(); }}>
-          <img src={settings.ticker_always ? art('check_on') : art('check_off')} alt="" />
-          <span>{t("Keep the drop list's window on screen")}</span>
-        </button>
-        <div class="note">{t("Each draws nothing while it waits, but OBS can only capture a window that is there.")}</div>
-        <div class="note">{t("A black picture means OBS is being refused, not that the window is empty: do not run HS Tracker as administrator unless OBS runs that way too, and put both on the same graphics card.")}</div>
-      </div>
+    {#if view === 'streaming'}
+      <StreamingSettings />
     {/if}
 
     <!-- On the Overlay tab, under the overlay's own switches: arranging the
@@ -725,25 +701,6 @@
     line-height: 1.5;
     color: var(--edge-2b);
     padding: 4px 2px 0;
-  }
-
-  /* the window titles, as OBS prints them */
-  .wins {
-    display: grid;
-    gap: 2px;
-    padding: 2px 0 4px;
-  }
-  .win {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
-  }
-  .win span { font-size: 10px; color: var(--edge-2b); }
-  .win .mono {
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 10px;
-    color: var(--bone-6);
   }
 
   .notice {

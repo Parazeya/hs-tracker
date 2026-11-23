@@ -1,35 +1,15 @@
 <script>
   import { BY_ID, DROP_CHASE, DROP_PLACES, DROP_RATE, DROP_ZONES, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, tierLabel } from './items.js';
   import EXTRA_GEAR from './collection-extras.json';
+  import { currentCatalogue, unverifiedHistory } from './collection-catalogue.js';
   import { publicSeason } from './format.js';
   import { itemName, language, locale, placeLabel, say, t, typeLabel } from './say.svelte.js';
   import { invoke, listen } from './bridge.js';
   import { art } from './skin.svelte.js';
 
   const UNIQUE_RARITIES = ['Satanic', 'Set', 'Heroic', 'Angelic', 'Unholy'];
-  // These are the game's equipment slots, including charms and flasks.
-  const GEAR = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 18]);
-  const CATALOGUE = (() => {
-    const seen = new Set();
-    const identified = Object.entries(ITEMS).flatMap(([key, name]) => {
-      const [type, id, weapon] = key.split(':').map(Number);
-      const lower = name.toLowerCase();
-      const known = BY_ID[key];
-      const rarity = known?.[1] ?? RARITY_BY_NAME[lower] ?? '';
-      if (!GEAR.has(type) || !UNIQUE_RARITIES.includes(rarity) || seen.has(lower)) return [];
-      seen.add(lower);
-      return [{ key: lower, name, type, id, weapon, rarity, tier: known?.[2] ?? TIER_BY_NAME[lower] ?? 0,
-        rate: known?.[3] ?? DROP_RATE[lower] ?? 0, chase: DROP_CHASE[lower] ?? 0,
-        places: (DROP_PLACES[lower] ?? []).filter(Boolean), zones: DROP_ZONES[lower] ?? [] }];
-    });
-    const extra = EXTRA_GEAR.filter((it) => !seen.has(it.name.toLowerCase())).map((it) => {
-      const lower = it.name.toLowerCase();
-      return { key: lower, name: it.name, names: it.names, type: it.type, id: -1, weapon: it.weapon,
-        rarity: it.rarity, tier: it.tier, rate: DROP_RATE[lower] ?? 0, chase: DROP_CHASE[lower] ?? 0,
-        places: (DROP_PLACES[lower] ?? []).filter(Boolean), zones: DROP_ZONES[lower] ?? [] };
-    });
-    return [...identified, ...extra];
-  })();
+  const CATALOGUE = currentCatalogue({ items: ITEMS, byId: BY_ID, rarities: RARITY_BY_NAME, tiers: TIER_BY_NAME,
+    rates: DROP_RATE, chases: DROP_CHASE, places: DROP_PLACES, zones: DROP_ZONES });
   const CATALOGUE_BY_NAME = new Map(CATALOGUE.map((it) => [it.key, it]));
   const RARITY_TOTALS = Object.fromEntries(UNIQUE_RARITIES.map((r) => [r, CATALOGUE.filter((it) => it.rarity === r).length]));
   const PAGE_SIZE = 100;
@@ -232,9 +212,14 @@
       ka === current?.key ? -1 : kb === current?.key ? 1 : a.name.localeCompare(b.name, locale()));
   });
   const characterFinds = (c) => Object.entries(c.items ?? {})
-    .filter(([name]) => CATALOGUE_BY_NAME.has(name))
     .sort((a, b) => b[1] - a[1]);
   let owned = $derived(data.items ?? {});
+  let historical = $derived(unverifiedHistory(owned, CATALOGUE));
+  const historicalName = (name) => {
+    const previous = EXTRA_GEAR.find(item => item.name.toLowerCase() === name);
+    // Previous labels are only used to display a saved record, never its rarity.
+    return previous?.names?.[language()] || previous?.name || name;
+  };
   let storedCount = $derived(Object.keys(data.items ?? {}).length);
   let savedCharacterCount = $derived(Object.keys(data.characters ?? {}).length);
   let rarityCounts = $derived.by(() => {
@@ -308,7 +293,11 @@
       {#if expanded === key}
         <div class="character-finds">
           {#each characterFinds(c) as [name] (name)}
-            <button class="find-chip {COLORS[CATALOGUE_BY_NAME.get(name).rarity]}" onclick={(event) => openDetails(event, CATALOGUE_BY_NAME.get(name))}>{displayItem(CATALOGUE_BY_NAME.get(name))}</button>
+            {#if CATALOGUE_BY_NAME.has(name)}
+              <button class="find-chip {COLORS[CATALOGUE_BY_NAME.get(name).rarity]}" onclick={(event) => openDetails(event, CATALOGUE_BY_NAME.get(name))}>{displayItem(CATALOGUE_BY_NAME.get(name))}</button>
+            {:else}
+              <span class="find-chip historical" title={t('Saved find; current quality is unverified')}>{historicalName(name)} · {t('Unverified')}</span>
+            {/if}
           {:else}
             <span class="dim">{t('No finds recorded for this character yet.')}</span>
           {/each}
@@ -377,6 +366,16 @@
     </div>
   </div>
 
+  {#if historical.length}
+    <section class="history-note" aria-label={t('Saved finds awaiting verification')}>
+      <strong>{t('Saved finds awaiting verification')} · {historical.length}</strong>
+      <div>{t('Your saved finds remain in history. Their current quality has not been verified.')}</div>
+      {#each historical as [name, at] (name)}
+        <div class="history-row"><span>{historicalName(name)}</span><time>{new Date(at).toLocaleDateString(locale())}</time></div>
+      {/each}
+    </section>
+  {/if}
+
   {#if selected}
     <div class="detail-scrim" role="presentation" onclick={closeDetails}></div>
     <div class="detail-card menu" role="dialog" aria-modal="true" aria-label={displayItem(selected)} tabindex="-1" use:focusDetails style:border-image-source="url({art('chip_dark')})">
@@ -394,14 +393,14 @@
         {/if}
       </div>
       {#if !selected.rate && !selected.chase}
-        <div class="detail-hint">{t('the game states no drop chance for this — it comes from a boss, a chest or a tower rather than falling in the world')}</div>
+        <div class="detail-hint">{t('Drop chance is not verified for this item')}</div>
       {/if}
       <div class="detail-label">{t('Drop location')}</div>
       <div class="detail-places">
         {#each selected.places.length ? selected.places : selected.zones as place}
           <span class="place">{placeLabel(place)}</span>
         {:else}
-          <span class="dim">{t('drops anywhere')}</span>
+          <span class="dim">{t('Drop location is not verified for this item')}</span>
         {/each}
       </div>
     </div>
@@ -475,6 +474,10 @@
 
 <style>
   .panel { position: relative; isolation: isolate; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; padding: 6px; color: var(--bone-6); font: 12px var(--face); }
+  .history-note { flex: 0 0 auto; max-height: 150px; overflow: auto; padding: 8px; border: 1px solid var(--ground-10); color: var(--bone-3); }
+  .history-note strong { color: var(--bone-9); }
+  .history-row { display: flex; justify-content: space-between; gap: 12px; padding-top: 4px; }
+  .historical { color: var(--bone-3); opacity: .85; cursor: default; }
   .heading { color: var(--bone-13); font-size: 19px; }
   .subtitle { color: var(--bone-3); }
   .rarity-summary, .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }

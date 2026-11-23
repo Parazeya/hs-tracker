@@ -21,22 +21,40 @@ The pieces of the Rust side, in the order data moves through them:
 | `stats.rs` | Applies those events: the session totals, the drop journal, the room timings, the finished runs. |
 | `items.rs` | Generated tables — item identity, rarity, grade, drop rates. |
 | `lib.rs` | Windows, tray, hotkeys, settings, commands. |
+| `map_window.rs` | Queued full-screen map lifecycle, current monitor and Ctrl+Shift+M. |
+| `stream.rs` | Read-only loopback Browser Sources, bounded latest-state SSE and validated map view state. |
 | `presence.rs` | The Discord status. |
 | `log.rs` | Panics, warnings and whatever the front end throws, appended to `hs-tracker.log`. A released build has no console, so nothing else survives. |
 
-The front end runs in the app's own windows and nowhere else. It went through
-`src/bridge.js` to reach the backend when there was a second way in — a page
-served to OBS as a Browser Source — and it still does, because the guard is
-worth keeping: a component rendered by a webview with no Tauri under it gets
-nothing back rather than an exception in a transparent window.
+Native windows use `src/bridge.js`. OBS has an independent `stream.html` entry
+and `StreamView.svelte`; that entry imports no Tauri commands, controls or audio.
 
-There is one route into OBS now, and it is a window capture. See the README.
+The `world-map` window mounts `MapView.svelte`. Its header and close control
+are local; the packaged current hs-map runs in a sandboxed loopback iframe.
+`capabilities/map-view.json` applies to local content only and grants no remote
+origins. A native worker lock serializes show/hide requests and reuses the
+window. To preview the compiled map shell in a browser, open `/?view=map`.
+
+Browser Sources use a GET-only loopback service on a stable configurable port.
+`configure` projects public appearance fields; the stats pusher also runs for
+stream clients when desktop windows are hidden. Deduplicated drops enter the
+stream after engine filtering, and notifications have a bounded six-entry
+schedule. SSE retains only the latest state for each topic; slow readers skip
+obsolete map positions. An epoch identifies Tracker restarts.
+
+The map package is prepared by hs-map's `package:tracker` script into
+`public/hs-map`, copied by Vite to `dist/hs-map` and embedded by Tauri. The
+postMessage protocol is versioned, origin/source checked and data-only. Map
+state includes normalized camera, source document dimensions, room and visible
+presentation. OBS renders at those dimensions then scales/letterboxes; it does
+not pretend a different aspect ratio reveals the identical view naturally.
+`npm run test:stream` checks reconnect, expiry, validation and aspect semantics.
 
 Two things worth knowing before changing anything:
 
-- **The game reports gold, experience and kills only when it saves the
-  character.** Between saves they do not move. Drops arrive continuously. Code
-  that assumes all four advance together will be wrong.
+- **Cumulative account counters arrive with saves.** Explicit bank deposits,
+  XP gains and drops can arrive between them. Reconcile an explicit gain with
+  its later total; do not credit both observations.
 - **The same item is seen twice** — once when the server rolls it onto the
   ground, once when it lands in the bag. Its hash ties the two together.
 
@@ -46,14 +64,24 @@ Two things worth knowing before changing anything:
 npm install
 npm start                    # dev run: vite + tauri
 npm test                     # the Rust tests
+npm run test:settings        # pending edits, native changes and failed writes
+npm run test:stream          # map/SSE protocol, reconnection and corrected counters
 ```
 
-Both work on every platform: on Windows they load the Visual Studio environment
-first, elsewhere they call the Tauri CLI and cargo directly. Install Rust with
+The native commands work on every platform: on Windows they load the Visual
+Studio environment first, elsewhere they call the Tauri CLI and cargo directly.
+Windows entry points share `scripts/paths.mjs` discovery and honor `VCVARS` and
+`CARGO_HOME`; no VS 2019 path needs editing in a batch file. Install Rust with
 [rustup](https://rustup.rs) rather than from a distribution's packages — Ubuntu
 24.04 ships 1.75 and this tree needs 1.88 — the code itself only wants 1.87, but
 the lock file's `time` asks for 1.88, which is what `rust-version` in
 `Cargo.toml` records.
+
+For isolated Windows GUI checks, copy the executable into a new temporary
+profile directory and set process-only `HS_TRACKER_TEST_PROFILE=1`. This skips
+the global Windows autostart registry integration for that QA instance; normal
+launches continue to apply the user's autostart preference. Redirect WebView2's
+user data and keep all test settings beside the copied executable.
 
 On Linux a dev build reads nothing until it is allowed to capture, and the
 capability is on the file, so **every relink drops it**:
@@ -218,10 +246,39 @@ for its own. Check the result with `objdump -p usr/bin/hs-tracker | grep NEEDED`
 
 `tools/` holds the generators. None of them run during a normal build.
 
+After a game update, build the sibling HeroSiege Extractor and run:
+
+```bash
+python -m pip install -r tools/requirements-data.txt
+npm run items -- --dry
+npm run items
+```
+
+The updater discovers Steam libraries or uses `HERO_SIEGE_BIN`. It asks the
+Extractor for a new `--export` bundle in a unique staging directory, verifies
+its manifest, dataset hashes and source game files, and generates both lookup
+tables and translations before replacing anything. Items, talents and the
+manifest are installed together in `tools/data/helper`. An interrupted install
+is recovered on the next run; an export or generation failure keeps the
+previous files. A dry run retains validated staging for inspection.
+
+Set `HS_DATA_BUNDLE` to consume an already exported bundle. Its translation CSVs
+are used directly; if the game is installed, its files must still match the
+bundle. `HS_EXTRACTOR_BIN` overrides the platform-specific executable and
+`PYTHON` selects a Python interpreter or virtual environment. Relative paths in
+`.env` are resolved from this checkout. A manifest marked `partial` retains
+unknown values and coverage in the raw export; only fields identified by the
+current extraction enter the live lookup tables.
+
+`npm run test:items` exercises package validation, publication recovery and
+generation helpers without modifying installed data. For manual generator
+work, `HS_ITEMS_INPUT`, `HS_ITEMS_OUT_JS`, `HS_ITEMS_OUT_RS` and
+`HS_ITEMS_LANG_OUT` redirect inputs and outputs to a staging directory.
+
 | | |
 | --- | --- |
-| `fetch_items.py` | Pulls the datamined item table from hero-siege-helper into `tools/data/helper/items.json`. |
-| `gen_items.py` | Rebuilds `src/items.js` and `src-tauri/src/items.rs` from that table plus the game's own `translationsItem.csv`. Point `HERO_SIEGE_BIN` at the install if it is not on the default path. Traditional Chinese is written out of the game's Simplified column, so this one needs `pip install opencc-python-reimplemented`. |
+| `fetch_items.py` | Historical reference downloader; the normal update pipeline uses the Extractor bundle. |
+| `gen_items.py` | Builds `src/items.js`, `src-tauri/src/items.rs` and language files from a verified Extractor bundle. Direct legacy input remains available for comparison, with its freshness explicitly unverified. |
 | `gen_icon.py` | Draws the app icon on a 16×16 grid and writes every size the app, the tray and Windows want. `--preview` lays them out to look at, `--discord` writes the artwork the Discord application is given. |
 | `gen_installer_art.py` | The installer's header and sidebar, drawn from the icon. Run it after `gen_icon.py`. |
 | `yytex.py`, `datawin.py`, `export_ui.py` | Decode the game's own textures and re-export the UI sprites the app is skinned with, from an installed copy of Hero Siege. |
@@ -231,7 +288,10 @@ for its own. Check the result with `objdump -p usr/bin/hs-tracker | grep NEEDED`
 Inherited from how the protocol reports things, not from the parsing:
 
 - Gold received by mail counts as earned.
-- Experience is slightly off across a level-up.
+- Direct XP gains are counted immediately. Gains inferred only from a save
+  need a second compatible reading, including after a hero-level reset. An
+  unconfirmed final climb across a level cannot be reconstructed without its
+  old XP requirement. See [AUDIT.md](AUDIT.md) for the tested correction cases.
 - Moving items between inventories can register as a pickup.
 - Only named items are identified. The drop of an ordinary base carries a
   different id space, so it is counted but never named or announced.
@@ -246,8 +306,20 @@ The installer and the exe inside it are unsigned unless a certificate is named.
 Defender's ml classifiers judge an unsigned binary on what it does, and this one
 reads network traffic and installs under `%LOCALAPPDATA%`: 1.1.9 was flagged as
 `Trojan:Win32/Bearfoos.B!ml` on machines that had run every release before it.
-A signature is the only thing that answers that, and it removes SmartScreen's
-warning with it.
+Authenticode identifies the publisher and can let reputation carry across
+releases. It does not guarantee a clean antivirus verdict or eliminate a
+SmartScreen warning for a new build. Microsoft's current
+[SmartScreen guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation)
+also says that EV certificates no longer confer instant reputation.
+
+The updater's `.sig` files authenticate updates; they are separate from a
+Windows Authenticode certificate. `scripts/windows-release-evidence.ps1`
+records the exact binary hash and Windows signature status. Its optional
+`-Scan` runs a custom Defender scan with `-DisableRemediation`, records the
+result and changes no protection settings. A malware false positive can be
+reported by the publisher through Microsoft's submission portal; no automatic
+sample upload is performed by the release script. See [CAPTURE-BACKENDS.md](CAPTURE-BACKENDS.md)
+for the experimental driver alternative and its current verification limits.
 
 Import the certificate into the Windows store, read its thumbprint, and put it
 in `.env` beside the game path and the toolchain:

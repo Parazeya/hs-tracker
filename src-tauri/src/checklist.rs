@@ -22,8 +22,8 @@ pub struct ChecklistPreview {
     pub checked: Vec<CheckedItem>,
 }
 
-/// Three current Heroic weapons have no packet identity in the game's item
-/// data. Keep them in the collection catalogue without inventing game IDs.
+/// Historical extra catalogue candidates. Their stored labels are admitted
+/// only when the current generated catalogue independently verifies them.
 #[derive(Deserialize)]
 pub struct ExtraItem {
     pub name: String,
@@ -35,8 +35,13 @@ pub struct ExtraItem {
 
 fn extra_items() -> &'static [ExtraItem] {
     static ITEMS: OnceLock<Vec<ExtraItem>> = OnceLock::new();
-    ITEMS.get_or_init(|| serde_json::from_str(include_str!("../../src/collection-extras.json"))
-        .expect("collection extras are valid JSON"))
+    ITEMS.get_or_init(|| {
+        let mut candidates:Vec<ExtraItem>=serde_json::from_str(include_str!("../../src/collection-extras.json"))
+            .expect("collection extras are valid JSON");
+        candidates.retain(|item|items::catalogue_items().any(|(name,item_type,_,_,rarity)|
+            name_key(name)==name_key(&item.name)&&item_type==item.item_type&&rarity.eq_ignore_ascii_case(&item.rarity)));
+        candidates
+    })
 }
 
 /// Fold harmless spelling differences in the community checklist. Exact
@@ -314,26 +319,43 @@ mod tests {
             ("Death's Scythe", "Set", "Weapon"),
             ("Mevius Mighty Helmet", "Set", "Helmet"),
             ("Shrunken Head", "Satanic", "Charm"),
-            ("Surstromming", "Satanic", "Potion"),
-            ("Sarcasters Coffee Mug", "Satanic", "Potion"),
-            ("Leviathan´s Spine", "Heroic", "Weapon"),
             ("Grimtide's Necklace", "Heroic", "Amulet"),
             ("Komodos Bloodstrap", "Heroic", "Belt"),
-            ("Ethereal Musket", "Heroic", "Weapon"),
             ("Sahkopuimuri", "Heroic", "Weapon"),
             ("Ghostplunderer's Marchers", "Heroic", "Boot"),
             ("Graxy's Mom Lure", "Heroic", "Charm"),
             ("Captain's Anchor", "Heroic", "Charm"),
             ("Aracnist's Wrath", "Heroic", "Chest"),
+            ("AK-47", "Heroic", "Weapon"),
+            ("Ethereal Musket", "Heroic", "Weapon"),
             ("Conjured Tentacle", "Heroic", "Weapon"),
+            ("Leviathan´s Spine", "Heroic", "Weapon"),
         ] {
             assert!(resolve(name, rarity, slot).is_some(), "{name} should match");
         }
         assert_eq!(resolve("Angel", "Set", "Weapon"), Some("Angel".into()));
         assert!(resolve("Angel", "Heroic", "Weapon").is_none());
         assert!(resolve("Voodoo Doll", "Set", "Helmet").is_none());
-        assert!(collection_item("Conjured Tentacle").is_some());
+        assert!(collection_item("AK-47").is_some());
         assert!(collection_item("Uncut Jewel").is_none());
+    }
+
+    #[test]
+    fn spelling_normalization_respects_verified_current_item_facts() {
+        assert_eq!(name_key("Surstromming"),name_key("Surströmming"));
+        assert_eq!(name_key("Sarcasters Coffee Mug"),name_key("Sarcaster’s Coffee Mug"));
+        assert_eq!(name_key("Leviathan´s Spine"),name_key("Leviathan's Spine"));
+        // The frame decoder now proves these potions' Satanic rarity from the
+        // current executable. Normalization can match those proven identities,
+        // while a different rarity/slot and still-unknown facts stay refused.
+        assert!(resolve("Surstromming","Satanic","Potion").is_some());
+        assert!(resolve("Surstromming","Set","Potion").is_none());
+        assert!(resolve("Surstromming","Satanic","Weapon").is_none());
+        assert!(resolve("Sarcasters Coffee Mug","Satanic","Potion").is_some());
+        assert_eq!(name_key("Doctors Potion"),name_key("Doctor's Potion"));
+        assert!(resolve("Doctors Potion","Satanic","Potion").is_none(),
+            "normalized spelling cannot supply a missing current rarity");
+        assert!(collection_item("Doctor's Potion").is_none());
     }
 
     #[test]

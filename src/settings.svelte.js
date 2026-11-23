@@ -12,6 +12,7 @@
 // same object. Splitting a tab in two costs nothing now: there is no plumbing
 // left in a tab to copy.
 import { invoke, listen } from './bridge.js';
+import { mergeSettings } from './settings-merge.js';
 
 /// `settings` is null until the backend has answered. `error` is the last save
 /// that failed, said out loud: installed where the folder will not take a
@@ -29,9 +30,9 @@ export const store = $state({ settings: null, error: '', changed: 0 });
 let base = null;
 let timer = null;
 let started = false;
+let writes = Promise.resolve();
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /// Load once, and follow every change from then on. Safe to call from every
 /// tab that mounts; only the first call does anything.
@@ -40,14 +41,16 @@ export function startSettings() {
   started = true;
   invoke('get_settings')
     .then((s) => {
+      if (store.settings) return;
       store.settings = s;
       base = copy(s);
     })
-    .catch(() => {});
+    .catch((e) => { store.error = String(e); });
   listen('settings-changed', (e) => {
     store.changed += 1;
-    // Nothing waiting to be written: take it whole.
-    if (!timer || !store.settings || !base) {
+    // A pending edit can be debounced, in flight, or retained after a failed
+    // write. Its lifetime is not the timer's lifetime.
+    if (!store.settings || !base) {
       store.settings = e.payload;
       base = copy(e.payload);
       return;
@@ -57,10 +60,25 @@ export function startSettings() {
     // That needs nothing from the controls themselves, which is the point:
     // there are well over a hundred of them, and any one that forgot to say
     // it had been touched would be the bug back again.
-    for (const [key, value] of Object.entries(e.payload)) {
-      if (same(store.settings[key], base[key])) store.settings[key] = value;
+    store.settings = mergeSettings(base, $state.snapshot(store.settings), e.payload);
+    base = copy(e.payload);
+  });
+}
+
+function enqueue() {
+  const settings = $state.snapshot(store.settings);
+  const previous = copy(base);
+  const write = writes.catch(() => {}).then(async () => {
+    store.error = '';
+    try {
+      await invoke('patch_settings', { base: previous, settings });
+    } catch (e) {
+      store.error = String(e);
+      throw e;
     }
   });
+  writes = write;
+  return write;
 }
 
 /// Write the settings, a moment after the last edit.
@@ -74,12 +92,7 @@ export function save() {
   timer = setTimeout(() => {
     timer = null;
     if (!store.settings) return;
-    const snapshot = $state.snapshot(store.settings);
-    base = copy(snapshot);
-    store.error = '';
-    invoke('save_settings', { settings: snapshot }).catch((e) => {
-      store.error = String(e);
-    });
+    enqueue().catch(() => {});
   }, 150);
 }
 
@@ -87,12 +100,11 @@ export function save() {
 /// end this process — a restart of the backend — where an edit still on the
 /// timer would die with it.
 export async function flush() {
-  if (!timer || !store.settings) return;
-  clearTimeout(timer);
-  timer = null;
-  const snapshot = $state.snapshot(store.settings);
-  base = copy(snapshot);
-  await invoke('save_settings', { settings: snapshot }).catch((e) => {
-    store.error = String(e);
-  });
+  if (timer && store.settings) {
+    clearTimeout(timer);
+    timer = null;
+    await enqueue();
+  } else {
+    await writes;
+  }
 }

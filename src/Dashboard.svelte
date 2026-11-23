@@ -14,6 +14,7 @@
   import Codex from './Codex.svelte';
   import Collection from './Collection.svelte';
   import { startSettings, store } from './settings.svelte.js';
+  import { captureBackendNotice, capturePermissionCommand } from './capture-status.js';
 
   // Steam in a sandbox is a Linux problem and naming it on Windows sends a
   // player looking for something that cannot be there.
@@ -54,7 +55,7 @@
     { id: 'codex', group: 'Game', label: 'Items', component: Codex },
     { id: 'collection', group: 'Game', label: 'Collection', component: Collection },
     { id: 'shop', group: 'Game', label: 'Shopping List', component: Shop },
-    { id: 'streaming', group: 'App', label: 'Streaming', component: Settings, view: 'streaming', needsOverlay: true },
+    { id: 'streaming', group: 'App', label: 'Streaming', component: Settings, view: 'streaming' },
     { id: 'settings', group: 'App', label: 'Settings', component: Settings, view: 'general' },
     { id: 'about', group: 'App', label: 'About', component: About },
   ];
@@ -189,7 +190,10 @@
 
   let trouble = $derived.by(() => {
     if (!snap) return null;
-    const status = snap.status ?? '';
+    const rawStatus = snap.status ?? '';
+    const status = onLinux && appimage && rawStatus === 'no-access' ? 'no-capture' : rawStatus;
+    const backendNotice = captureBackendNotice(status, t, { onLinux, binary });
+    if (backendNotice) return backendNotice;
     if (status === 'npcap-missing')
       return {
         bad: true,
@@ -209,7 +213,7 @@
         bad: true,
         title: t('An AppImage cannot be given the capture right'),
         detail:
-          t('There is nothing to grant it to. Linux drops capabilities at every exec, so a right given to the .AppImage file is gone before the app starts; given to the binary inside instead, the loader stops trusting the library path the bundle needs and the app will not start at all. Install the .deb or the .rpm — either grants the right during installation. Running this AppImage with sudo also works, but then settings and runs are written to root’s home rather than yours.'),
+          t('The AppImage launcher cannot retain the capture capability. Install a native package built for your distribution: .deb for Debian/Ubuntu, .rpm for RPM distributions, or a package built on Arch/Manjaro. The package grants the capture right to the native binary. Start HS Tracker as your normal user.'),
       };
     if (status === 'no-capture')
       return {
@@ -217,7 +221,7 @@
         title: t('Not allowed to read network traffic'),
         detail:
           t('The binary needs the capture right. A packaged install is meant to grant it — if this is a packaged install, the grant did not take. It can be given by hand:'),
-        fix: `sudo setcap cap_net_raw=ep ${binary || '<the hs-tracker binary>'}`,
+        fix: capturePermissionCommand(binary),
       };
     if (status === 'no-interface')
       return { bad: true, title: t('No network interface to listen on'), detail: t('No adapter could be opened for capture.') };

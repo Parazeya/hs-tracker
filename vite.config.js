@@ -6,7 +6,12 @@ export default defineConfig({
   // it starts — taking the cargo errors that caused the restart with it.
   clearScreen: false,
   plugins: [svelte()],
-  server: { port: 5176, strictPort: true },
+  server: {
+    port: 5176, strictPort: true,
+    // Cargo replaces executables while compiling; Windows can lock them and
+    // an unrelated frontend watcher then exits with EBUSY.
+    watch: { ignored: ['**/src-tauri/target/**'] },
+  },
   build: {
     outDir: 'dist',
     // The datamined tables are not code: they are a quarter of a megabyte of
@@ -15,6 +20,9 @@ export default defineConfig({
     // rollup prints. Kept apart, each chunk stands for what it is — and the
     // webview reads both off the disk beside the executable, so the split
     // costs one more file open and nothing else.
-    rollupOptions: { output: { manualChunks: (id) => (id.endsWith('src/items.js') ? 'items' : undefined) } },
+    rollupOptions: {
+      input: { main: 'index.html', stream: 'stream.html' },
+      output: { manualChunks: (id) => (id.endsWith('src/items.js') ? 'items' : undefined) },
+    },
   },
 });

@@ -6,7 +6,17 @@ mod parser;
 mod presence;
 mod say;
 mod sniffer;
+#[cfg(windows)]
+mod pktmon;
 mod stats;
+mod settings_patch;
+mod project_url;
+mod map_window;
+mod stream;
+mod import_sounds;
+mod game_process;
+#[cfg(any(test, target_os = "linux"))]
+mod linux_runtime;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -470,6 +480,9 @@ pub struct Settings {
     pub auto_show: bool,
     pub autostart: bool,
     pub ticker: bool,
+    /// Independent, read-only OBS Browser Sources on the loopback interface.
+    pub stream_enabled: bool,
+    pub stream_port: u16,
     pub debug_log: bool,
     /// Read every connection on the machine, not only the game's own.
     ///
@@ -626,6 +639,8 @@ impl Default for Settings {
             auto_show: true,
             autostart: false,
             ticker: true,
+            stream_enabled: false,
+            stream_port: stream::DEFAULT_PORT,
             debug_log: false,
             wide_capture: false,
             sound_on_ground: true,
@@ -732,6 +747,7 @@ pub struct SessionInfo {
     tray: bool,
     /// the folder the settings are written to will take a write
     writable: bool,
+    map_hotkey: bool,
 }
 
 #[tauri::command]
@@ -745,6 +761,7 @@ fn session_info() -> SessionInfo {
             can_switch: false,
             tray: TRAY_OK.load(Ordering::Relaxed),
             writable: data_dir_writable(),
+            map_hotkey: map_window::hotkey_registered(),
         }
     }
     #[cfg(not(windows))]
@@ -757,6 +774,7 @@ fn session_info() -> SessionInfo {
             can_switch: wayland && x11_reachable(),
             tray: TRAY_OK.load(Ordering::Relaxed),
             writable: data_dir_writable(),
+            map_hotkey: map_window::hotkey_registered(),
         }
     }
 }
@@ -814,9 +832,7 @@ fn restart_backend(app: AppHandle, x11: bool) -> Result<(), String> {
             log::error(format!("could not restart into the other backend: {e}"));
             return Err(format!("{e} — restart HS Tracker by hand"));
         }
-        let mut settings = read_settings();
-        settings.x11_backend = x11;
-        save_settings(app.clone(), settings)?;
+        edit_settings(app.clone(), |settings| settings.x11_backend = x11)?;
         app.exit(0);
         Ok(())
     }
@@ -1666,7 +1682,7 @@ fn spawn_stats_pusher(app: AppHandle) {
                 (snap_rev, extra_rev) = (u64::MAX, u64::MAX);
             }
             (had_main, had_dash) = (main, dashboard);
-            if !main && !dashboard {
+            if !main && !dashboard && !stream::has_clients() {
                 continue;
             }
             let shared = app.state::<Shared>();
@@ -1678,6 +1694,7 @@ fn spawn_stats_pusher(app: AppHandle) {
             if due(snap_rev, snap_at, SNAP_MIN_GAP, SNAP_HEARTBEAT) {
                 let status = shared.status().text();
                 let snapshot = shared.stats().snapshot(status);
+                stream::publish_snapshot(&snapshot);
                 for (label, on_screen) in [("main", main), ("dashboard", dashboard)] {
                     if on_screen {
                         let _ = app.emit_to(label, "stats", &snapshot);
@@ -2028,6 +2045,7 @@ fn overlay_size(height: f64, scale: f64) -> LogicalSize<f64> {
 
 /// Everything a settings change touches outside the webviews.
 fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
+    stream::configure(app, settings);
     let scale = settings.scale.clamp(0.6, 1.5) as f64;
     LOCKED.store(settings.locked, Ordering::Relaxed);
     TICKER.store(settings.ticker, Ordering::Relaxed);
@@ -2202,6 +2220,8 @@ fn spawn_strip_poller(app: AppHandle) {
 
 #[cfg(windows)]
 fn apply_autostart(enabled: bool) {
+    // Isolated native QA must not replace/remove the installed copy's Run key.
+    if std::env::var("HS_TRACKER_TEST_PROFILE").as_deref() == Ok("1") { return; }
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
     let Ok(run) = RegKey::predef(HKEY_CURRENT_USER)
@@ -2259,12 +2279,7 @@ fn apply_autostart(enabled: bool) {
 /// whole settings file to flip one flag.
 #[tauri::command(async)]
 fn set_wide_capture(app: AppHandle, on: bool) -> Result<(), String> {
-    let mut settings = read_settings();
-    if settings.wide_capture == on {
-        return Ok(());
-    }
-    settings.wide_capture = on;
-    save_settings(app, settings)
+    edit_settings(app, |settings|settings.wide_capture=on)
 }
 
 #[tauri::command(async)]
@@ -2285,7 +2300,42 @@ fn get_settings() -> Settings {
 /// Commands that borrow `State` are left as they are: that borrow cannot cross
 /// the hop, and none of them do I/O.
 #[tauri::command(async)]
-fn save_settings(app: AppHandle, mut settings: Settings) -> Result<(), String> {
+fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    let _writer=settings_patch::WRITER.lock().unwrap_or_else(|e|e.into_inner());
+    save_settings_locked(app,settings)
+}
+
+fn edit_settings(app:AppHandle,edit:impl FnOnce(&mut Settings))->Result<(),String>{
+    let _writer=settings_patch::WRITER.lock().unwrap_or_else(|e|e.into_inner());
+    let mut settings=read_settings();
+    edit(&mut settings);
+    save_settings_locked(app,settings)
+}
+
+#[tauri::command(async)]
+fn patch_settings(app:AppHandle,base:serde_json::Value,settings:serde_json::Value)->Result<(),String>{
+    let _writer=settings_patch::WRITER.lock().unwrap_or_else(|e|e.into_inner());
+    let current=serde_json::to_value(read_settings()).map_err(|e|e.to_string())?;
+    let merged=settings_patch::merge(&base,&settings,&current)?;
+    let merged:Settings=serde_json::from_value(merged).map_err(|e|e.to_string())?;
+    save_settings_locked(app,merged)
+}
+
+fn save_settings_locked(app: AppHandle, mut settings: Settings) -> Result<(), String> {
+    normalize_settings(&mut settings);
+    // Keep ordinary saves' recovery behavior: apply before persisting.
+    apply_stats_settings(&app, &settings);
+    apply_settings_effects(&app, &settings);
+    let json = serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?;
+    write_atomic(&settings_path(), &json).map_err(|e| {
+        log::error(format!("cannot save settings: {e}"));
+        e.to_string()
+    })?;
+    let _ = app.emit("settings-changed", &settings);
+    Ok(())
+}
+
+fn normalize_settings(settings: &mut Settings) {
     for cfg in [
         &mut settings.satanic,
         &mut settings.set,
@@ -2300,19 +2350,14 @@ fn save_settings(app: AppHandle, mut settings: Settings) -> Result<(), String> {
     settings.opacity = settings.opacity.clamp(0.3, 1.0);
     settings.scale = settings.scale.clamp(0.6, 1.5);
     settings.min_tier = settings.min_tier.clamp(0, 20);
-    // Applied before it is written. The other way round, a setting that kills
-    // the process on the way in is already on disk when it does — and every
-    // later start reads it back and dies again, with no way to the panel that
-    // would turn it off.
-    apply_stats_settings(&app, &settings);
-    apply_settings_effects(&app, &settings);
-    let json = serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?;
-    write_atomic(&settings_path(), &json).map_err(|e| {
-        log::error(format!("cannot save settings: {e}"));
-        e.to_string()
-    })?;
-    let _ = app.emit("settings-changed", &settings);
-    Ok(())
+}
+
+// Multi-file profile imports call this only after their disk and memory
+// transaction has committed and CollectionStore is unlocked.
+fn settings_committed(app: &AppHandle, settings: &Settings) {
+    apply_stats_settings(app, settings);
+    apply_settings_effects(app, settings);
+    let _ = app.emit("settings-changed", settings);
 }
 
 #[tauri::command]
@@ -2329,6 +2374,7 @@ fn get_extra(state: State<Shared>) -> stats::Extra {
 /// Runs are kept next to the settings, newest first, and the file is bounded:
 /// this is a record of what happened, not a database.
 const RUNS_KEPT: usize = 200;
+static RUNS_WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn runs_path() -> PathBuf {
     data_dir().join("runs.json")
@@ -2342,6 +2388,11 @@ pub(crate) fn read_runs() -> Vec<stats::Run> {
 /// here — the button, the hotkey, the tray, the game closing and the app
 /// quitting — so a run is never lost and never counted twice.
 pub(crate) fn end_run(app: &AppHandle) {
+    end_run_with_state(app, false);
+}
+
+fn end_run_with_state(app: &AppHandle, stop: bool) {
+    let _writer = RUNS_WRITER.lock().unwrap_or_else(|e| e.into_inner());
     // One guard across both, not one each.
     //
     // `stats()` hands back a MutexGuard that dies at the end of its statement,
@@ -2356,6 +2407,7 @@ pub(crate) fn end_run(app: &AppHandle) {
         let mut stats = shared.stats();
         let finished = stats.finish();
         stats.reset();
+        if stop { stats.set_finished(true); }
         finished
     };
     let Some(run) = finished else { return };
@@ -2377,6 +2429,7 @@ fn get_runs() -> Vec<stats::Run> {
 
 #[tauri::command(async)]
 fn clear_runs() -> Result<(), String> {
+    let _writer = RUNS_WRITER.lock().unwrap_or_else(|e| e.into_inner());
     // through the same staging as every other writer: a truncate in place is
     // what leaves a history that reads as nothing
     write_atomic(&runs_path(), b"[]").map_err(|e| e.to_string())
@@ -2396,8 +2449,7 @@ fn reset_stats(app: AppHandle) {
 /// the run and stops there; nothing counts until `start_run`.
 #[tauri::command(async)]
 fn finish_run(app: AppHandle) {
-    close_session(&app);
-    app.state::<Shared>().stats().set_finished(true);
+    end_run_with_state(&app, true);
 }
 
 #[tauri::command(async)]
@@ -2539,7 +2591,6 @@ pub(crate) fn maybe_flourish(app: &AppHandle, drop: &stats::DropEntry) {
 }
 
 fn maybe_collection_flourish(app: &AppHandle, sighting: &stats::CollectionSighting, milestone: bool) {
-    let Some(w) = app.get_webview_window("flourish") else { return };
     let payload = serde_json::json!({
         "kind": if milestone { "collection_milestone" } else { "collection_find" },
         "collection_new": true,
@@ -2550,6 +2601,8 @@ fn maybe_collection_flourish(app: &AppHandle, sighting: &stats::CollectionSighti
         "weapon_type": sighting.weapon_type,
         "tier": sighting.tier,
     });
+    stream::publish_notification(payload.clone());
+    let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", payload);
     show_flourish(app, &w);
 }
@@ -2561,10 +2614,9 @@ fn maybe_collection_flourish(app: &AppHandle, sighting: &stats::CollectionSighti
 /// in two languages is how the two come to disagree. `stats` has already ruled
 /// on the buffs; what is left is whether this player wants a pillar for it.
 fn maybe_zone_flourish(app: &AppHandle, zone: &stats::SatanicZone) {
-    if !FLOURISH.load(Ordering::Relaxed) || !FLOURISH_ZONE.load(Ordering::Relaxed) {
+    if !FLOURISH_ZONE.load(Ordering::Relaxed) {
         return;
     }
-    let Some(w) = app.get_webview_window("flourish") else { return };
     // The raw zone code, not a name. Turning `Satanic_5_5` into "Act 5 : Temple
     // of Zamjo" needs a table of forty room names that the window already has
     // and this side has no other use for.
@@ -2574,6 +2626,9 @@ fn maybe_zone_flourish(app: &AppHandle, zone: &stats::SatanicZone) {
         "buffs": zone.buffs,
         "debuffs": zone.debuffs,
     });
+    stream::publish_notification(payload.clone());
+    if !FLOURISH.load(Ordering::Relaxed) { return; }
+    let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", &payload);
     show_flourish(app, &w);
 }
@@ -2840,14 +2895,12 @@ fn about() -> About {
 /// and handing an arbitrary string to a shell is how a link becomes a command.
 #[tauri::command(async)]
 fn open_url(url: String) -> Result<(), String> {
-    if !url.starts_with(REPO) {
-        return Err(say::say("that is not one of this project's pages"));
-    }
-    #[cfg(windows)]
-    let spawned = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-    #[cfg(not(windows))]
-    let spawned = std::process::Command::new("xdg-open").arg(&url).spawn();
-    reap(spawned).map_err(|e| e.to_string())
+    project_url::open(&url)
+}
+
+#[tauri::command(async)]
+fn capture_backend_info() -> serde_json::Value {
+    sniffer::capture_backend_info()
 }
 
 #[tauri::command]
@@ -2879,6 +2932,9 @@ fn fit_overlay(app: AppHandle, height: f64, width: Option<f64>, inner: Option<f6
 #[tauri::command]
 fn hide_window(app: AppHandle) {
     hide_aux(&app, "main");
+    if !TRAY_OK.load(Ordering::Relaxed) {
+        show_aux(&app, "dashboard");
+    }
 }
 
 /// Where each window stood when it was last hidden. Hiding a window unmaps it,
@@ -3023,7 +3079,7 @@ fn hide_dashboard(app: AppHandle) {
     // is and the hotkeys that would bring it back were never registered. The
     // button says "Close to tray"; where there is no tray, closing is what it
     // has to mean.
-    if !TRAY_OK.load(Ordering::Relaxed) && !overlay_supported() {
+    if !TRAY_OK.load(Ordering::Relaxed) {
         app.exit(0);
         return;
     }
@@ -3045,10 +3101,8 @@ fn set_face(app: &AppHandle, compact: bool) {
     // What the user asked for is what is remembered. A session that cannot host
     // the overlay must not rewrite the preference of one that can — the same
     // settings file travels with a portable install and outlives a login.
-    let mut settings = read_settings();
-    if (possible || !compact) && settings.compact != compact {
-        settings.compact = compact;
-        let _ = save_settings(app.clone(), settings);
+    if (possible || !compact) && read_settings().compact != compact {
+        let _ = edit_settings(app.clone(), |settings| settings.compact = compact);
     }
 }
 
@@ -3140,31 +3194,11 @@ fn sound_by_key(key: &str) -> Option<ExportedSound> {
 
 /// Put one back. The key is checked the same way it is on the way out: a
 /// settings file is a plain file on disk and could name any path it liked.
+#[cfg(test)]
 fn write_sound(dir: &std::path::Path, key: &str, snd: &ExportedSound) -> Result<(), String> {
-    use base64::Engine;
-    if !sound_key(key) || !SOUND_EXTS.iter().any(|(e, _)| *e == snd.ext) {
-        return Err("not a sound this app files".into());
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&snd.data)
-        .map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    // One key, one file — the rule `pick_sound` and `clear_sound` both keep.
-    // Every reader takes the first extension of SOUND_EXTS that exists, so
-    // importing a satanic.wav onto a machine that already had a satanic.mp3
-    // left both on disk with the old mp3 still playing: an import that says it
-    // replaces every setting, and the one it could not replace was the sound.
-    // Written first and cleared after, as there: a write that fails must not
-    // leave the key silent.
-    let staged = dir.join(format!("{key}.{}.new", snd.ext));
-    std::fs::write(&staged, bytes).map_err(|e| e.to_string())?;
-    for (e, _) in SOUND_EXTS {
-        let _ = std::fs::remove_file(dir.join(format!("{key}.{e}")));
-    }
-    std::fs::rename(&staged, dir.join(format!("{key}.{}", snd.ext))).map_err(|e| {
-        let _ = std::fs::remove_file(&staged);
-        e.to_string()
-    })
+    let sound = import_sounds::SoundFile::decode(key, &snd.ext, &snd.data)?;
+    import_sounds::SoundTransaction::begin(dir, &[sound])?.commit();
+    Ok(())
 }
 
 /// Give a new list the sound an old one has, for duplicating a filter.
@@ -3178,16 +3212,31 @@ fn copy_sound(app: AppHandle, from: String, to: String) -> Result<(), String> {
     if !sound_key(&from) || !sound_key(&to) || from == to {
         return Err("bad list".into());
     }
+    let writer = import_sounds::WRITER.lock().unwrap_or_else(|e| e.into_inner());
+    let mut copied = None;
     for (ext, _) in SOUND_EXTS {
         let source = sounds_dir().join(format!("{from}.{ext}"));
         if source.exists() {
-            std::fs::create_dir_all(sounds_dir()).map_err(|e| e.to_string())?;
-            std::fs::copy(&source, sounds_dir().join(format!("{to}.{ext}"))).map_err(|e| e.to_string())?;
-            let _ = app.emit("sounds-changed", &to);
+            let bytes = read_sound_bytes(&source)?;
+            copied = Some(import_sounds::SoundFile::from_bytes(&to, ext, bytes)?);
             break;
         }
     }
+    drop(writer);
+    if let Some(sound) = copied {
+        import_sounds::SoundTransaction::begin(&sounds_dir(), &[sound])?.commit();
+        let _ = app.emit("sounds-changed", &to);
+    }
     Ok(())
+}
+
+fn read_sound_bytes(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take((import_sounds::MAX_SOUND_BYTES + 1) as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() > import_sounds::MAX_SOUND_BYTES { return Err("file larger than 10 MiB".into()); }
+    Ok(bytes)
 }
 
 // `async` here is not about concurrency: a plain command runs on the main
@@ -3210,6 +3259,7 @@ fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, 
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
         return Ok(None);
     };
+    let sound_reader = import_sounds::WRITER.lock().unwrap_or_else(|e| e.into_inner());
     let exported = ExportedFilter {
         app: "hs-tracker".into(),
         version: 1,
@@ -3228,6 +3278,7 @@ fn export_filter(app: AppHandle, filter: SoundFilter) -> Result<Option<String>, 
             .collect(),
     };
     let json = serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?;
+    drop(sound_reader);
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(Some(path.file_name().unwrap_or_default().to_string_lossy().into_owned()))
 }
@@ -3274,7 +3325,6 @@ fn all_sounds(settings: &Settings) -> std::collections::HashMap<String, Exported
 #[tauri::command(async)]
 fn export_settings(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let settings = read_settings();
     let picked = app
         .dialog()
         .file()
@@ -3284,6 +3334,9 @@ fn export_settings(app: AppHandle) -> Result<Option<String>, String> {
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
         return Ok(None);
     };
+    let settings_reader = settings_patch::WRITER.lock().unwrap_or_else(|e| e.into_inner());
+    let sound_reader = import_sounds::WRITER.lock().unwrap_or_else(|e| e.into_inner());
+    let settings = read_settings();
     let exported = ExportedSettings {
         app: "hs-tracker".into(),
         version: 1,
@@ -3297,6 +3350,8 @@ fn export_settings(app: AppHandle) -> Result<Option<String>, String> {
         }),
     };
     let json = serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?;
+    drop(sound_reader);
+    drop(settings_reader);
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(Some(path.file_name().unwrap_or_default().to_string_lossy().into_owned()))
 }
@@ -3316,14 +3371,14 @@ fn import_settings(app: AppHandle) -> Result<Option<String>, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let exported: ExportedSettings =
         serde_json::from_str(&text).map_err(|_| say::say("not an HS Tracker settings file"))?;
-    if exported.app != "hs-tracker" || exported.kind != "settings" {
+    if exported.app != "hs-tracker" || exported.kind != "settings" || exported.version != 1 {
         return Err(say::say("not an HS Tracker settings file"));
     }
-    // the sounds first: settings that name a file which is not there yet would
-    // be saved, applied, and play nothing
-    for (key, snd) in &exported.sounds {
-        let _ = write_sound(&sounds_dir(), key, snd);
-    }
+    // Decode the complete batch before touching any current file. A bad sound
+    // late in a backup must not leave the earlier sounds partly imported.
+    let sounds = exported.sounds.iter().map(|(key, sound)|
+        import_sounds::SoundFile::decode(key, &sound.ext, &sound.data))
+        .collect::<Result<Vec<_>, _>>()?;
     let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     // The one path that puts content into settings.json without passing
     // `read_settings`, so it is the one path where the migrations have to be
@@ -3332,16 +3387,48 @@ fn import_settings(app: AppHandle) -> Result<Option<String>, String> {
     let mut imported = exported.settings;
     migrate_notable(&mut imported);
     migrate_lists(&mut imported);
-    save_settings(app.clone(), imported)?;
-    if let Some(collection) = exported.collection {
-        let json = serde_json::to_vec_pretty(&collection).map_err(|e| e.to_string())?;
-        write_atomic(&collection_path(), &json).map_err(|e| e.to_string())?;
-        let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
-        *store.lock().unwrap_or_else(|e| e.into_inner()) = collection;
-        let settings = read_settings();
-        ensure_flourish(&app, settings.flourish || store.lock().unwrap_or_else(|e| e.into_inner()).any_enabled(), settings.flourish_scale.clamp(0.5, 2.0) as f64);
-        let _ = app.emit("collection-changed", ());
+    normalize_settings(&mut imported);
+    // A missing custom file means "use the built-in sound". Restoring that
+    // choice must clear a custom file left by the current profile as well.
+    let mut default_sounds = SOUND_KEYS.iter().map(|key| key.to_string()).collect::<Vec<_>>();
+    for filter in &imported.filters {
+        for list in &filter.lists {
+            let key = format!("list-{}", list.id);
+            if !sound_key(&key) { return Err(format!("Invalid imported sound key: {key}")); }
+            default_sounds.push(key);
+        }
     }
+    default_sounds.sort();
+    default_sounds.dedup();
+    default_sounds.retain(|key| !exported.sounds.contains_key(key));
+    let settings_json = serde_json::to_vec_pretty(&imported).map_err(|e| e.to_string())?;
+    let collection_json = exported.collection.as_ref().map(serde_json::to_vec_pretty)
+        .transpose().map_err(|e| e.to_string())?;
+
+    // Match the ordinary settings writer's lock order. Keep collection updates
+    // out until BOTH its file and in-memory copy have committed. Effects take
+    // this collection lock themselves, so apply them only after releasing it.
+    let _settings_writer = settings_patch::WRITER.lock().unwrap_or_else(|e| e.into_inner());
+    let mut transaction = import_sounds::SoundTransaction::begin(&sounds_dir(), &sounds)?;
+    let store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
+    let mut collection_guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let committed = default_sounds.iter().try_for_each(|key| transaction.remove_sound(key))
+        .and_then(|_| transaction.replace_file(&settings_path(), &settings_json))
+        .and_then(|_| match &collection_json {
+            Some(json) => transaction.replace_file(&collection_path(), json),
+            None => Ok(()),
+        });
+    if let Err(error) = committed {
+        return Err(transaction.abort(error));
+    }
+    let collection_changed = exported.collection.is_some();
+    if let Some(collection) = exported.collection { *collection_guard = collection; }
+    drop(collection_guard);
+    transaction.commit();
+    settings_committed(&app, &imported);
+    if collection_changed { let _ = app.emit("collection-changed", ()); }
+    for key in exported.sounds.keys() { let _ = app.emit("sounds-changed", key); }
+    for key in default_sounds { let _ = app.emit("sounds-changed", key); }
     Ok(Some(name))
 }
 
@@ -3359,24 +3446,17 @@ fn import_filter(app: AppHandle) -> Result<Option<SoundFilter>, String> {
     };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let exported: ExportedFilter = serde_json::from_str(&text).map_err(|_| say::say("not an HS Tracker filter"))?;
-    if exported.app != "hs-tracker" {
+    if exported.app != "hs-tracker" || exported.version != 1 {
         return Err(say::say("not an HS Tracker filter"));
     }
-    std::fs::create_dir_all(sounds_dir()).map_err(|e| e.to_string())?;
     let mut lists = Vec::new();
+    let mut sounds = Vec::new();
     for list in exported.lists {
         // ids are minted here, so an imported filter never fights with one
         // that is already installed
         let id = format!("{:x}", now_id());
         if let Some(sound) = list.sound {
-            if let (true, Ok(bytes)) = (
-                SOUND_EXTS.iter().any(|(e, _)| *e == sound.ext),
-                base64::engine::general_purpose::STANDARD.decode(sound.data),
-            ) {
-                if bytes.len() <= 10 << 20 {
-                    let _ = std::fs::write(sounds_dir().join(format!("list-{id}.{}", sound.ext)), bytes);
-                }
-            }
+            sounds.push(import_sounds::SoundFile::decode(&format!("list-{id}"), &sound.ext, &sound.data)?);
         }
         lists.push(SoundList {
             id,
@@ -3387,7 +3467,9 @@ fn import_filter(app: AppHandle) -> Result<Option<SoundFilter>, String> {
             rules: list.rules,
         });
     }
-    Ok(Some(SoundFilter { id: format!("{:x}", now_id()), name: exported.name, lists }))
+    let filter = SoundFilter { id: format!("{:x}", now_id()), name: exported.name, lists };
+    import_sounds::SoundTransaction::begin(&sounds_dir(), &sounds)?.commit();
+    Ok(Some(filter))
 }
 
 /// Short unique ids without pulling in a crate for it.
@@ -3757,23 +3839,10 @@ fn pick_sound(app: AppHandle, rarity: String) -> Result<Option<String>, String> 
     if meta.len() > 10 << 20 {
         return Err("file larger than 10 MB".into());
     }
-    let dir = sounds_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    // The new one is put down before the old one is taken away. The other way
-    // round — clear, then copy — a copy that fails for any reason at all
-    // leaves the key with nothing, and the player has lost a sound by trying
-    // to change it. Copied under a temporary name so a half-written file is
-    // never the one left behind.
+    let bytes = read_sound_bytes(&path)?;
+    let sound = import_sounds::SoundFile::from_bytes(&rarity, &ext, bytes)?;
     let name = format!("{rarity}.{ext}");
-    let staged = dir.join(format!("{rarity}.{ext}.new"));
-    std::fs::copy(&path, &staged).map_err(|e| e.to_string())?;
-    for (e, _) in SOUND_EXTS {
-        let _ = std::fs::remove_file(dir.join(format!("{rarity}.{e}")));
-    }
-    std::fs::rename(&staged, dir.join(&name)).map_err(|e| {
-        let _ = std::fs::remove_file(&staged);
-        e.to_string()
-    })?;
+    import_sounds::SoundTransaction::begin(&sounds_dir(), &[sound])?.commit();
     let _ = app.emit("sounds-changed", &rarity);
     Ok(Some(name))
 }
@@ -3783,9 +3852,9 @@ fn clear_sound(app: AppHandle, rarity: String) -> Result<(), String> {
     if !sound_key(&rarity) {
         return Err("bad rarity".into());
     }
-    for (e, _) in SOUND_EXTS {
-        let _ = std::fs::remove_file(sounds_dir().join(format!("{rarity}.{e}")));
-    }
+    let mut transaction = import_sounds::SoundTransaction::begin(&sounds_dir(), &[])?;
+    if let Err(error) = transaction.remove_sound(&rarity) { return Err(transaction.abort(error)); }
+    transaction.commit();
     let _ = app.emit("sounds-changed", &rarity);
     Ok(())
 }
@@ -3808,9 +3877,7 @@ fn toggle_window(app: &AppHandle) {
 }
 
 fn toggle_lock(app: &AppHandle) {
-    let mut settings = read_settings();
-    settings.locked = !settings.locked;
-    let _ = save_settings(app.clone(), settings);
+    let _ = edit_settings(app.clone(), |settings|settings.locked=!settings.locked);
 }
 
 /// The menu itself, apart from the icon: the words in it are the page's, and
@@ -3841,6 +3908,8 @@ fn set_words(app: AppHandle, words: std::collections::HashMap<String, String>) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    #[cfg(target_os = "linux")]
+    linux_runtime::check_indicator().map_err(std::io::Error::other)?;
     let menu = tray_menu(app)?;
     TrayIconBuilder::with_id("main")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
@@ -3975,6 +4044,30 @@ fn ease_webkit() {
 #[cfg(windows)]
 fn ease_webkit() {}
 
+#[tauri::command(async)]
+fn show_map(app: AppHandle) -> Result<(), String> {
+    map_window::request(&app, map_window::Request::Show)
+}
+
+#[tauri::command(async)]
+fn hide_map(app: AppHandle) -> Result<(), String> {
+    map_window::request(&app, map_window::Request::Hide)
+}
+
+#[tauri::command]
+fn streaming_status() -> stream::Status { stream::status() }
+
+#[tauri::command(async)]
+fn get_map_source(app: AppHandle) -> Result<stream::Status, String> { stream::map_source(&app) }
+
+#[tauri::command]
+fn stream_map_state(state: serde_json::Value) -> Result<(), String> { stream::publish_map(state) }
+
+#[tauri::command]
+fn test_stream() {
+    stream::publish_notification(serde_json::json!({"kind":"test","name":"Preview notification","rarity":"Heroic","tier":6}));
+}
+
 pub fn run() {
     log::init(env!("CARGO_PKG_VERSION"));
     ease_webkit();
@@ -3984,6 +4077,7 @@ pub fn run() {
     let hk_lock: Shortcut = HK_LOCK.parse().unwrap();
     let hk_reset: Shortcut = HK_RESET.parse().unwrap();
     let hk_pause: Shortcut = HK_PAUSE.parse().unwrap();
+    let hk_map: Shortcut = map_window::HOTKEY.parse().unwrap();
     let app = tauri::Builder::default()
         // First, before anything else can be built: a second copy has its own
         // sniffer and its own writes to settings.json and runs.json, so both
@@ -4000,6 +4094,10 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
+                    if *shortcut == hk_map {
+                        map_window::shortcut(app, event.state() == ShortcutState::Pressed);
+                        return;
+                    }
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
@@ -4033,6 +4131,7 @@ pub fn run() {
             start_run,
             set_paused,
             about,
+            capture_backend_info,
             report,
             log_path,
             show_log,
@@ -4063,13 +4162,20 @@ pub fn run() {
             quit,
             get_settings,
             save_settings,
+            patch_settings,
             load_sound,
             sound_path,
             sound_status,
             set_wide_capture,
             pick_sound,
             copy_sound,
-            clear_sound
+            clear_sound,
+            show_map,
+            hide_map,
+            streaming_status,
+            get_map_source,
+            stream_map_state,
+            test_stream
         ])
         .setup(|app| {
             let overlay = overlay_supported();
@@ -4086,6 +4192,10 @@ pub fn run() {
             // need is X11's; registering them under Wayland reports success and
             // then nothing ever fires
             if overlay {
+                match app.global_shortcut().register(map_window::HOTKEY) {
+                    Ok(()) => map_window::HOTKEY_REGISTERED.store(true, Ordering::Relaxed),
+                    Err(error) => log::warn(format!("map hotkey not registered: {error}")),
+                }
                 for hk in [HK_TOGGLE, HK_LOCK, HK_RESET, HK_PAUSE] {
                     if let Err(e) = app.global_shortcut().register(hk) {
                         log::warn(format!("hotkey {hk} not registered: {e}"));
@@ -4108,7 +4218,7 @@ pub fn run() {
             apply_stats_settings(app.handle(), &settings);
             apply_settings_effects(app.handle(), &settings);
             restore_window_positions(app.handle());
-            if settings.compact && overlay {
+            if settings.compact && overlay && TRAY_OK.load(Ordering::Relaxed) {
                 hide_aux(app.handle(), "dashboard");
                 show_aux(app.handle(), "main");
             }
@@ -4171,6 +4281,11 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle().clone();
                 let label = window.label().to_string();
+                if label == map_window::LABEL {
+                    api.prevent_close();
+                    let _ = map_window::request(&app, map_window::Request::Hide);
+                    return;
+                }
                 // Closing the placement box has to end the placement, or
                 // `PLACING` stays true for the full watchdog and the next real
                 // drop re-shows a mouse-grabbing dashed frame over the game.
@@ -4195,6 +4310,11 @@ pub fn run() {
                     // the window positions, which destroying the window skips.
                     api.prevent_close();
                     app.exit(0);
+                    return;
+                }
+                if label == "main" && !TRAY_OK.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    hide_window(app);
                     return;
                 }
                 api.prevent_close();

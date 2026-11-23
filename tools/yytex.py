@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image
 
-GAME = Path(r"F:\Games\Steam\steamapps\common\HeroSiege\bin")
+GAME = Path(os.environ.get("HERO_SIEGE_BIN") or os.environ.get("HERO_SIEGE") or r"C:\Program Files (x86)\Steam\steamapps\common\HeroSiege\bin")
 
 SE2 = [v if v < 2 else v - 4 for v in range(4)]
 SE4 = [v if v < 8 else v - 16 for v in range(16)]
@@ -88,17 +88,23 @@ def decode_qoi(data: bytes, w: int, h: int):
 
 
 def decode_file(path: Path) -> Image.Image:
-    raw = path.read_bytes()
-    assert raw[:4] == b"2zoq", raw[:4]
+    return decode_bytes(Path(path).read_bytes(), Path(path).name)
+
+
+def decode_bytes(raw: bytes, label="texture") -> Image.Image:
+    if len(raw) < 12 or raw[:4] != b"2zoq":
+        raise ValueError(f"{label}: not a GameMaker texture")
     w, h, _ = struct.unpack_from("<HHI", raw, 4)
     inner = bz2.decompress(raw[12:])
-    assert inner[:4] == b"fioq", inner[:4]
+    if len(inner) < 12 or inner[:4] != b"fioq":
+        raise ValueError(f"{label}: invalid QOI payload")
     iw, ih, _ = struct.unpack_from("<HHI", inner, 4)
-    assert (iw, ih) == (w, h)
+    if not w or not h or (iw, ih) != (w, h):
+        raise ValueError(f"{label}: inconsistent texture dimensions")
     pixels, consumed, decoded = decode_qoi(inner[12:], w, h)
     tail = len(inner) - 12 - consumed
-    status = "OK" if decoded == w * h and tail <= 4 else "FAIL"
-    print(f"{path.name}: {w}x{h} decoded={decoded}/{w*h} tail={tail} {status}")
+    if decoded != w * h or not 0 <= tail <= 4:
+        raise ValueError(f"{label}: incomplete texture decoded={decoded}/{w*h} tail={tail}")
     return Image.frombytes("RGBA", (w, h), bytes(pixels))
 
 

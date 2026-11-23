@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hero Siege — the Bounty Board</title>
+<meta name="description" content="Every quest the Bounty Board in Tarethiel hands out, what each one asks for, and a walkthrough for it.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" href="./favicon.png">
+  <script type="module" crossorigin src="/hs-map/assets/bounty-Gg4Zd_wT.js"></script>
+  <link rel="modulepreload" crossorigin href="/hs-map/assets/say-Cxey2X-U.js">
+  <link rel="stylesheet" crossorigin href="/hs-map/assets/say-DG9SLEzG.css">
+  <link rel="stylesheet" crossorigin href="/hs-map/assets/bounty-DQ98UDjG.css">
+</head>
+<body>
+<style>
+/* Shown before a line of JavaScript has run, and removed by the app once the
+   data is in. Without it the map page is blank for three seconds on a mid
+   phone over mobile data — 3012ms to the first paint, 2446ms for the data and
+   8396ms for the picture, measured at 4x CPU on a 1.6Mbit line.
+
+   It fades in only after four tenths of a second, so a fast load never shows it:
+   this machine the same page paints at 308ms and nobody sees this at all. */
+#boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 14px;
+  justify-items: center;
+  background: #100a13;
+  color: #9b8f9e;
+  font: 500 13px/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  animation: boot-in .3s .4s both;
+}
+#boot i {
+  display: block;
+  width: 34px;
+  height: 34px;
+  border: 2px solid #4a3550;
+  border-top-color: #d8b4ff;
+  border-radius: 50%;
+  animation: boot-spin .9s linear infinite;
+}
+@keyframes boot-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes boot-spin { to { transform: rotate(1turn) } }
+@media (prefers-reduced-motion: reduce) {
+  #boot i { animation: none; border-top-color: #4a3550; }
+}
+</style>
+<div id="boot"><i></i>Reading the board</div>
+<div id="app"></div>
+</body>
+</html>
