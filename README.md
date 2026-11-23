@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="screenshots/readme-logo.gif" width="720" alt="">
+</p>
+
 # HS Tracker
 
 Track gold, XP, kills and drops while you play Hero Siege. Use the compact in-game overlay for live numbers and the dashboard for runs, item alerts, collection and the [world map](https://parazeya.github.io/hs-map/).
