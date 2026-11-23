@@ -2,6 +2,8 @@
 
 ## 1.1.16 — 2026-11-23
 
+Install this release manually if you are upgrading from 1.1.15 or earlier. The updater uses a new signing key, and future updates can be installed from the app again after this upgrade.
+
 ### Added
 
 - Open the interactive map, item codex, skills, and bounties inside Tracker. The map can be included in the OBS output.
