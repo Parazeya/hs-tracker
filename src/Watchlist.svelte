@@ -1006,7 +1006,7 @@
             {status[soundKey]
               ? t('♪ Custom sound')
               : borrowed
-                ? say('♪ {name}', { name: t(borrowed) })
+                ? `♪ ${t(borrowed)}`
                 : voiceless > 0
                   ? say('No sound of its own, and {n} of these have no rarity chime to borrow — they pass in silence until this list is given a sound', { n: voiceless })
                   : t('No sound of its own — a drop here is announced by the item’s rarity')}

@@ -261,7 +261,7 @@
 <div class="panel">
   <div class="top">
     <div class="heading">{t('Collection')}</div>
-    <div class="subtitle">{t('One collection shared by the characters you turn on.')} {t('Unique gear and charms only.')}</div>
+    <div class="subtitle">{t('One collection shared by the characters you turn on.')} {t('Tracks unique gear, charms and flasks.')}</div>
   </div>
 
   <div class="rarity-summary" aria-label={t('Unique items by rarity')}>

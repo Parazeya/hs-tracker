@@ -6,11 +6,7 @@
   import { LANGUAGES, t } from './say.svelte.js';
 
   import { flush, save, startSettings, store } from './settings.svelte.js';
-  import StreamingSettings from './StreamingSettings.svelte';
-
-  /// Which part of the page this tab is — 'overlay', 'streaming' or 'general'.
-  /// Three tabs out of one component, so the controls and their styles stay in
-  /// one copy. See SECTIONS in Dashboard.svelte.
+  /// General and overlay settings share the same controls and styles.
   let { view = 'general' } = $props();
 
   // The shared copy — see src/settings.svelte.js, which also does the loading,
@@ -47,6 +43,14 @@
   });
   async function openMap() {
     try { await invoke('show_map'); } catch (error) { notice = String(error); }
+  }
+  async function openCaptureWindows() {
+    try {
+      await flush();
+      await invoke('show_capture_windows');
+    } catch (error) {
+      notice = String(error);
+    }
   }
   async function restart(x11) {
     // a pending edit would die with this process
@@ -197,8 +201,9 @@
     {#if view === 'general'}
     <div class="section" style:border-image-source="url({art('chip_dark')})">
       <div class="line" data-tauri-drag-region>
-        <span class="name">{t("Language")}</span>
+        <label class="name" for="tracker-language">{t("Language")}</label>
         <select
+          id="tracker-language"
           class="picker"
           value={settings.language ?? 'en'}
           onchange={(e) => { settings.language = e.target.value; save(); }}
@@ -210,8 +215,9 @@
         </select>
       </div>
       <div class="line" data-tauri-drag-region>
-        <span class="name">{t("Theme")}</span>
+        <label class="name" for="tracker-theme">{t("Theme")}</label>
         <select
+          id="tracker-theme"
           class="picker"
           value={settings.theme ?? 'default'}
           onchange={(e) => {
@@ -300,6 +306,27 @@
         <div class="hint">{t('Global map hotkey is unavailable in this session; use Open full-screen map.')}</div>
       {/if}
 
+      {#if overlay}
+        <div class="line">
+          <button
+            class="check"
+            id="obs-capture-windows"
+            aria-label={t('Keep windows open for OBS')}
+            aria-pressed={!!settings.obs_capture_windows}
+            onclick={() => { settings.obs_capture_windows = !settings.obs_capture_windows; save(); }}
+          >
+            <img src={settings.obs_capture_windows ? art('check_on') : art('check_off')} alt="" />
+          </button>
+          <label class="opt" for="obs-capture-windows">{t('Keep windows open for OBS')}</label>
+        </div>
+        {#if settings.obs_capture_windows}
+          <div class="hint">{t('In OBS, use a separate Window Capture source for the overlay, announcement and dashboard.')}</div>
+          <div class="line">
+            <button class="btn wide" style:--btn="url({art('button')})" style:--btn-hover="url({art('button_hover')})" style:--btn-down="url({art('button_down')})" onclick={openCaptureWindows}>{t('Show capture windows')}</button>
+          </div>
+        {/if}
+      {/if}
+
       <button class="more" onclick={() => (advanced = !advanced)}>
         {advanced ? '▾' : '▸'} {t('More settings')}
       </button>
@@ -357,10 +384,6 @@
 
     </div>
 
-    {/if}
-
-    {#if view === 'streaming'}
-      <StreamingSettings />
     {/if}
 
     <!-- On the Overlay tab, under the overlay's own switches: arranging the

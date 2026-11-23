@@ -697,10 +697,6 @@
           </div>
 
           {#if overlay}
-            <!-- Keeping the window up for OBS moved to the Streaming tab,
-                 beside the same switch for the drop list: the two do one job
-                 for two windows, and on two pages a player found one of them
-                 and never the other. -->
             <div class="line">
               <button
                 class="btn wide"

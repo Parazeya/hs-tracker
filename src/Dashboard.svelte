@@ -55,7 +55,6 @@
     { id: 'codex', group: 'Game', label: 'Items', component: Codex },
     { id: 'collection', group: 'Game', label: 'Collection', component: Collection },
     { id: 'shop', group: 'Game', label: 'Shopping List', component: Shop },
-    { id: 'streaming', group: 'App', label: 'Streaming', component: Settings, view: 'streaming' },
     { id: 'settings', group: 'App', label: 'Settings', component: Settings, view: 'general' },
     { id: 'about', group: 'App', label: 'About', component: About },
   ];
@@ -63,7 +62,7 @@
   /// Where a tab went when it was renamed or split, so a player who left the
   /// app on it comes back to the page that now holds what they were looking at
   /// rather than to the first tab.
-  const MOVED = { filter: 'alerts' };
+  const MOVED = { filter: 'alerts', streaming: 'settings' };
 
   // A restored tab can sit below the fold in a short window. Keep it visible
   // without moving the fixed Compact mode control or the page beside it.
@@ -213,7 +212,7 @@
         bad: true,
         title: t('An AppImage cannot be given the capture right'),
         detail:
-          t('The AppImage launcher cannot retain the capture capability. Install a native package built for your distribution: .deb for Debian/Ubuntu, .rpm for RPM distributions, or a package built on Arch/Manjaro. The package grants the capture right to the native binary. Start HS Tracker as your normal user.'),
+          t('Install a native Linux package for live tracking.'),
       };
     if (status === 'no-capture')
       return {
@@ -226,9 +225,12 @@
     if (status === 'no-interface')
       return { bad: true, title: t('No network interface to listen on'), detail: t('No adapter could be opened for capture.') };
     if (status === 'waiting-for-game')
-      return { bad: false, title: t('Waiting for Hero Siege'), detail: t('Counting starts a moment after the game is running.') };
+      return { compact: true, title: t('Waiting for Hero Siege') };
     if (status.startsWith('capturing')) {
       const [, iface, hosts, , packets, deaf, local] = status.split('|');
+
+      if (deaf === '3')
+        return { compact: true, title: t('Waiting for the game to join a server') };
 
       // The game is up, the adapters are open, and the game holds no connection
       // to anywhere but this machine.
@@ -256,31 +258,13 @@
               ? t(
                   'The game is connected to this machine and to nowhere else. That is what Local Mode looks like from here — a game without a server tells one nothing, so there is nothing to count. It is also what a game accelerator or a local proxy looks like: the game is pointed at this machine and something else carries its traffic on. If one is running, close it, or turn on “Read every connection” in Settings.',
                 )
-              : say(
-                  'Capturing on {iface}. The game is running and holds no connection at all — Local Mode looks exactly like this, and there is nothing on the wire to read. If you are playing online, a VPN or a second network adapter can carry its traffic somewhere we are not listening.',
-                  { iface },
-                ) +
-                (onLinux
-                  ? ' ' + t('A Flatpak or Snap install of Steam hides the game from us as well.')
-                  : ''),
+              : t('Join an online game to start tracking.'),
+          diagnostics: Number(local) > 0,
         };
       // Ninety seconds with the game up and not one message decoded. The
       // backend decides when that is true, because it is the only side that
       // knows when each capture started; `deaf` is 1 while only the game's own
       // connections are being read and 2 when everything already is.
-      // Everything that arrived was encrypted. Not a fault, and no setting
-      // would change it: the game talks to the account service over TLS until
-      // it joins a server.
-      if (deaf === '3')
-        return {
-          bad: false,
-          title: t('Waiting for the game to join a server'),
-          detail:
-            say(
-              'Its traffic is being read on {iface}, and all of it so far is encrypted — which is what a character screen or a menu looks like from here. Counting starts when the game connects to a game server.',
-              { iface },
-            ),
-        };
       if (deaf === '1')
         return {
           bad: true,
@@ -291,6 +275,7 @@
               { iface, n: Number(packets).toLocaleString(locale()) },
             ),
           act: { label: t('Read every connection'), on: true },
+          diagnostics: true,
         };
       if (deaf === '2')
         return {
@@ -301,6 +286,7 @@
               "Every connection on this machine is already being read — {n} packets on {iface} — and none of it decoded as Hero Siege. Whatever carries the game's traffic here is not something this app can read from outside. The packet log in Settings and hs-tracker.log are what to send.",
               { n: Number(packets).toLocaleString(locale()), iface },
             ),
+          diagnostics: true,
         };
       // The game's connections are known and not one frame of them is
       // arriving. This is the state that gets reported as "nothing works and
@@ -315,6 +301,7 @@
               'Capturing on {iface}, and not one packet has come past the filter. The game’s traffic is taking a route this adapter cannot see — a VPN or split tunnel is the usual reason, and a second network adapter the next. Turning the VPN off for a minute is the quickest way to tell.',
               { iface },
             ),
+          diagnostics: true,
         };
       // hosts found, frames arriving, but the game has never once reported the
       // character
@@ -332,6 +319,7 @@
                     : '',
               },
             ),
+          diagnostics: true,
         };
     }
     return null;
@@ -412,10 +400,19 @@
           <div class="td">{collectionNotice}</div>
         </div>
       {/if}
-      {#if trouble}
+      {#if trouble?.compact}
+        <div class="trouble compact" role="status">{trouble.title}</div>
+      {:else if trouble}
         <div class="trouble" class:bad={trouble.bad}>
           <div class="tt">{trouble.title}</div>
-          <div class="td">{trouble.detail}</div>
+          {#if trouble.diagnostics}
+            <details class="td">
+              <summary>{t('Show details')}</summary>
+              <div>{trouble.detail}</div>
+            </details>
+          {:else if trouble.detail}
+            <div class="td">{trouble.detail}</div>
+          {/if}
           {#if trouble.fix}<code class="tf">{trouble.fix}</code>{/if}
           {#if trouble.act}
             <button
@@ -826,9 +823,12 @@
     background: linear-gradient(90deg, rgba(140, 15, 20, 0.22), rgba(140, 15, 20, 0.05));
   }
   .trouble .tt { font-size: 13px; color: var(--gold-2); }
+  .trouble.compact { padding: 5px 8px; font-size: 11px; line-height: 1.25; color: var(--gold-2); }
   .trouble.bad .tt { color: #ff7a7a; }
   .trouble.milestone .tt { color: var(--rar-satanic, #ff6a6a); }
   .trouble .td { font-size: 11px; color: var(--bone-7); line-height: 1.45; margin-top: 2px; }
+  .trouble details > summary { cursor: pointer; width: fit-content; }
+  .trouble details > div { max-height: 7em; overflow-y: auto; margin: 4px 0 0; overflow-wrap: anywhere; }
   /* The banner is where the reader already is when the app is not working;
      making them find the same switch in Settings is one step too many. */
   .trouble .tact {

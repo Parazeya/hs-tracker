@@ -22,12 +22,12 @@ The pieces of the Rust side, in the order data moves through them:
 | `items.rs` | Generated tables — item identity, rarity, grade, drop rates. |
 | `lib.rs` | Windows, tray, hotkeys, settings, commands. |
 | `map_window.rs` | Queued full-screen map lifecycle, current monitor and Ctrl+Shift+M. |
-| `stream.rs` | Read-only loopback Browser Sources, bounded latest-state SSE and validated map view state. |
+| `map_assets.rs` | Packaged map assets on a dedicated loopback origin. |
 | `presence.rs` | The Discord status. |
 | `log.rs` | Panics, warnings and whatever the front end throws, appended to `hs-tracker.log`. A released build has no console, so nothing else survives. |
 
-Native windows use `src/bridge.js`. OBS has an independent `stream.html` entry
-and `StreamView.svelte`; that entry imports no Tauri commands, controls or audio.
+Native windows use `src/bridge.js`. The OBS setting keeps the original overlay,
+announcement and dashboard open as separate sources for Window Capture.
 
 The `world-map` window mounts `MapView.svelte`. Its header and close control
 are local; the packaged current hs-map runs in a sandboxed loopback iframe.
@@ -35,20 +35,10 @@ are local; the packaged current hs-map runs in a sandboxed loopback iframe.
 origins. A native worker lock serializes show/hide requests and reuses the
 window. To preview the compiled map shell in a browser, open `/?view=map`.
 
-Browser Sources use a GET-only loopback service on a stable configurable port.
-`configure` projects public appearance fields; the stats pusher also runs for
-stream clients when desktop windows are hidden. Deduplicated drops enter the
-stream after engine filtering, and notifications have a bounded six-entry
-schedule. SSE retains only the latest state for each topic; slow readers skip
-obsolete map positions. An epoch identifies Tracker restarts.
-
 The map package is prepared by hs-map's `package:tracker` script into
 `public/hs-map`, copied by Vite to `dist/hs-map` and embedded by Tauri. The
-postMessage protocol is versioned, origin/source checked and data-only. Map
-state includes normalized camera, source document dimensions, room and visible
-presentation. OBS renders at those dimensions then scales/letterboxes; it does
-not pretend a different aspect ratio reveals the identical view naturally.
-`npm run test:stream` checks reconnect, expiry, validation and aspect semantics.
+map window retains the latest view when it is hidden or the iframe is reloaded.
+The versioned message protocol checks the origin, the iframe and the map view data.
 
 Two things worth knowing before changing anything:
 
@@ -65,7 +55,7 @@ npm install
 npm start                    # dev run: vite + tauri
 npm test                     # the Rust tests
 npm run test:settings        # pending edits, native changes and failed writes
-npm run test:stream          # map/SSE protocol, reconnection and corrected counters
+npm run test:locales         # shipped translations and interpolation placeholders
 ```
 
 The native commands work on every platform: on Windows they load the Visual

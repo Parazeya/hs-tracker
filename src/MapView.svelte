@@ -2,16 +2,14 @@
   import { onMount } from 'svelte';
   import { invoke, listen, native } from './bridge.js';
   import { t } from './say.svelte.js';
-  import { mapEnvelope, sourceUrl, validMapState } from './stream-protocol.js';
+  import { MAP_CHANNEL, MAP_VERSION, mapEnvelope, validMapState } from './map-frame.js';
 
   let mapUrl = $state('');
   let mapOrigin = '';
   let frame = $state(null);
   let sourceRevision = -1;
   let restoreState;
-  let restoreRevision = 0;
   let latestState;
-  let publishing = false;
   let generation = $state(0);
   let loading = $state(true);
   let slow = $state(false);
@@ -29,30 +27,40 @@
   }
   async function reload() {
     error = '';
-    generation += 1;
+    const request = ++generation;
     mapUrl = '';
     sourceRevision = -1;
     wait();
     try {
-      const info = native ? await invoke('get_map_source') : { base_url: location.origin };
-      mapOrigin = new URL(info.base_url).origin;
-      restoreState = validMapState(info.map?.state) ? info.map.state : null;
-      restoreRevision = info.map?.revision ?? 0;
-      mapUrl = sourceUrl(info.base_url, 'source', location.origin);
-    } catch (reason) { loading = false; clearTimeout(timer); error = String(reason); }
+      const base = native ? await invoke('get_map_source') : location.origin;
+      if (request !== generation) return;
+      const url = new URL('/hs-map/index.html', base);
+      url.searchParams.set('mode', 'source');
+      url.searchParams.set('parentOrigin', location.origin);
+      mapOrigin = url.origin;
+      restoreState = latestState;
+      mapUrl = url.href;
+    } catch (reason) {
+      if (request === generation) {
+        loaded();
+        error = String(reason);
+      }
+    }
   }
   async function close() {
     try { await invoke('hide_map'); } catch (reason) { error = String(reason); }
   }
   onMount(() => {
     reload();
-    const changed = async (event) => {
+    const changed = (event) => {
       if (event.source !== frame?.contentWindow || event.origin !== mapOrigin) return;
       if (mapEnvelope(event.data, 'ready')) {
         loaded();
         if (restoreState) {
-          sourceRevision = restoreRevision;
-          frame.contentWindow.postMessage({ channel: 'hs-map', version: 1, type: 'apply', revision: restoreRevision, state: restoreState }, mapOrigin);
+          sourceRevision = event.data.revision;
+          frame.contentWindow.postMessage({
+            channel: MAP_CHANNEL, version: MAP_VERSION, type: 'apply', revision: sourceRevision, state: restoreState,
+          }, mapOrigin);
           restoreState = null;
         }
         return;
@@ -61,23 +69,10 @@
         || event.data.revision <= sourceRevision) return;
       sourceRevision = event.data.revision;
       latestState = event.data.state;
-      if (publishing || !native) return;
-      publishing = true;
-      try {
-        while (latestState) {
-          const state = latestState;
-          latestState = null;
-          await invoke('stream_map_state', { state });
-        }
-      } catch (reason) { error = String(reason); }
-      finally { publishing = false; }
     };
     window.addEventListener('message', changed);
     const unlisten = listen('map-window-error', (event) => { error = String(event.payload); });
-    const streamChanged = listen('stream-status-changed', event => {
-      if (event.payload?.running && mapOrigin && new URL(event.payload.base_url).origin !== mapOrigin) reload();
-    });
-    return () => { clearTimeout(timer); window.removeEventListener('message', changed); unlisten.then((stop) => stop()); streamChanged.then(stop => stop()); };
+    return () => { clearTimeout(timer); window.removeEventListener('message', changed); unlisten.then((stop) => stop()); };
   });
 </script>
 

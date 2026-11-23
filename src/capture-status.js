@@ -8,8 +8,8 @@ export function capturePermissionCommand(binary) {
 export function captureBackendNotice(status, t = value => value, { onLinux = false, binary = '' } = {}) {
   if (status === 'waiting-for-game-connection') return {
     bad: false,
+    compact: true,
     title: t('Waiting for a game connection'),
-    detail: t('Hero Siege is running. Capture will start when its TCP endpoints are known.'),
   };
   if (status?.startsWith('capture-error|')) {
     const [, backend, ...reason] = status.split('|');

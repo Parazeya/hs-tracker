@@ -21,7 +21,6 @@ export default defineConfig({
     // webview reads both off the disk beside the executable, so the split
     // costs one more file open and nothing else.
     rollupOptions: {
-      input: { main: 'index.html', stream: 'stream.html' },
       output: { manualChunks: (id) => (id.endsWith('src/items.js') ? 'items' : undefined) },
     },
   },

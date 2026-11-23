@@ -16,9 +16,9 @@
     "publish": "node scripts/publish.mjs",
     "test": "node scripts/test.mjs",
     "test:items": "node scripts/test-items.mjs",
-    "test:stream": "node --test scripts/stream-output.test.mjs",
     "test:settings": "node --test scripts/settings.test.mjs",
     "test:capture": "node --test scripts/capture-status.test.mjs",
+    "test:locales": "node scripts/check-locales.mjs",
     "deb": "node scripts/build-linux.mjs",
     "all": "node scripts/build-all.mjs"
   },

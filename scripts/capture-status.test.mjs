@@ -11,6 +11,7 @@ test('Packet Monitor permission failure does not recommend installing Npcap', ()
 test('a running game without endpoints is a waiting state, not active capture', () => {
   const result = captureBackendNotice('waiting-for-game-connection');
   assert.equal(result.bad, false);
+  assert.equal(result.compact, true);
   assert.match(result.title, /Waiting/);
 });
 test('Linux capture denial offers a capability command rather than Windows instructions', () => {

@@ -1,16 +1,5 @@
-// One way in for everything the windows ask of the backend.
-//
-// One implementation, not two. There were two sides to it: the app's own
-// windows, where Tauri is present and every command works, and a page served to
-// OBS as a Browser Source,
-// where none of it exists. The served page is gone — it went with the little
-// HTTP server that fed it — so what is left is the one door, and the guards
-// which is why this no longer chooses between two.
-//
-// The guards stay. `native` is what tells a Tauri window from anything else,
-// and the panels are drawn by a webview either way: a component that calls a
-// command while it is being rendered somewhere without one should get nothing
-// back, not an exception in a transparent window nobody can see fail.
+// The panels also render in a regular browser during development. Guard native
+// commands and events so the browser preview works without Tauri.
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';

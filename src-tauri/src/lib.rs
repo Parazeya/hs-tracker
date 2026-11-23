@@ -12,7 +12,7 @@ mod stats;
 mod settings_patch;
 mod project_url;
 mod map_window;
-mod stream;
+mod map_assets;
 mod import_sounds;
 mod game_process;
 #[cfg(any(test, target_os = "linux"))]
@@ -240,6 +240,7 @@ static TICKER_BUSY: AtomicBool = AtomicBool::new(false);
 static FLOURISH: AtomicBool = AtomicBool::new(false);
 /// leave the announcement window up so a capture has something to hold on to
 static FLOURISH_ALWAYS: AtomicBool = AtomicBool::new(false);
+static OBS_CAPTURE_WINDOWS: AtomicBool = AtomicBool::new(false);
 /// keep the drop list's window up between drops, for the same reason
 static TICKER_ALWAYS: AtomicBool = AtomicBool::new(false);
 /// Whether a rotation gets the pillar. Read on the pusher's thread, which has
@@ -480,9 +481,8 @@ pub struct Settings {
     pub auto_show: bool,
     pub autostart: bool,
     pub ticker: bool,
-    /// Independent, read-only OBS Browser Sources on the loopback interface.
-    pub stream_enabled: bool,
-    pub stream_port: u16,
+    /// Keep the native Tracker windows available to OBS Window Capture.
+    pub obs_capture_windows: bool,
     pub debug_log: bool,
     /// Read every connection on the machine, not only the game's own.
     ///
@@ -639,8 +639,7 @@ impl Default for Settings {
             auto_show: true,
             autostart: false,
             ticker: true,
-            stream_enabled: false,
-            stream_port: stream::DEFAULT_PORT,
+            obs_capture_windows: false,
             debug_log: false,
             wide_capture: false,
             sound_on_ground: true,
@@ -1682,7 +1681,7 @@ fn spawn_stats_pusher(app: AppHandle) {
                 (snap_rev, extra_rev) = (u64::MAX, u64::MAX);
             }
             (had_main, had_dash) = (main, dashboard);
-            if !main && !dashboard && !stream::has_clients() {
+            if !main && !dashboard {
                 continue;
             }
             let shared = app.state::<Shared>();
@@ -1694,7 +1693,6 @@ fn spawn_stats_pusher(app: AppHandle) {
             if due(snap_rev, snap_at, SNAP_MIN_GAP, SNAP_HEARTBEAT) {
                 let status = shared.status().text();
                 let snapshot = shared.stats().snapshot(status);
-                stream::publish_snapshot(&snapshot);
                 for (label, on_screen) in [("main", main), ("dashboard", dashboard)] {
                     if on_screen {
                         let _ = app.emit_to(label, "stats", &snapshot);
@@ -2045,7 +2043,8 @@ fn overlay_size(height: f64, scale: f64) -> LogicalSize<f64> {
 
 /// Everything a settings change touches outside the webviews.
 fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
-    stream::configure(app, settings);
+    let capture = settings.obs_capture_windows && overlay_supported();
+    let capture_changed = OBS_CAPTURE_WINDOWS.swap(capture, Ordering::Relaxed) != capture;
     let scale = settings.scale.clamp(0.6, 1.5) as f64;
     LOCKED.store(settings.locked, Ordering::Relaxed);
     TICKER.store(settings.ticker, Ordering::Relaxed);
@@ -2060,6 +2059,20 @@ fn apply_settings_effects(app: &AppHandle, settings: &Settings) {
     let collection_store = app.state::<std::sync::Mutex<collection::CollectionStore>>();
     let collecting = collection_store.lock().unwrap_or_else(|e| e.into_inner()).any_enabled();
     ensure_flourish(app, settings.flourish || collecting, settings.flourish_scale.clamp(0.5, 2.0) as f64);
+    if capture_changed {
+        for label in ["main", "flourish"] {
+            if let Some(w) = app.get_webview_window(label) {
+                let _ = w.set_skip_taskbar(!capture);
+            }
+        }
+        if capture {
+            reveal_capture_windows(app);
+        } else {
+            let (show, hide) = face_windows(settings.compact);
+            hide_aux(app, hide);
+            reveal(app, show, false);
+        }
+    }
     if let Some(w) = app.get_webview_window("main") {
         // Click-through is deliberately NOT set here: the poller is its only
         // writer.
@@ -2488,9 +2501,13 @@ const FLOURISH_H: f64 = 220.0;
 /// — on Linux a third GL context, which is exactly where the driver trouble we
 /// have already been bitten by lives. A player who leaves the feature off never
 /// pays for it.
+fn keep_flourish_visible() -> bool {
+    FLOURISH_ALWAYS.load(Ordering::Relaxed) || OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed)
+}
+
 fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
     let existing = app.get_webview_window("flourish");
-    if !wanted || !overlay_supported() {
+    if !(wanted || OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed)) || !overlay_supported() {
         // Hidden, never destroyed. Tearing a webview down and building another
         // under the same label moments later is what froze the app: switching
         // the announcement off and straight back on did exactly that, and the
@@ -2506,7 +2523,7 @@ fn ensure_flourish(app: &AppHandle, wanted: bool, scale: f64) {
     if let Some(w) = existing {
         let _ = w.set_size(size);
         // the setting can be turned on with the window already built
-        if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
+        if keep_flourish_visible() {
             show_flourish(app, &w);
         } else if !PLACING.load(Ordering::Relaxed) {
             hide_aux(app, "flourish");
@@ -2554,13 +2571,14 @@ fn build_flourish(app: &AppHandle, size: LogicalSize<f64>) {
         .decorations(false)
         .transparent(true)
         .shadow(false)
-        .skip_taskbar(true)
+        .skip_taskbar(!OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed))
         .build();
     match built {
         Ok(w) => {
             clear_to_nothing(&w);
+            let _ = w.set_skip_taskbar(!OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed));
             // click-through is applied when it is shown; see `set_click_through`
-            if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
+            if keep_flourish_visible() {
                 show_flourish(app, &w);
             }
         }
@@ -2601,7 +2619,6 @@ fn maybe_collection_flourish(app: &AppHandle, sighting: &stats::CollectionSighti
         "weapon_type": sighting.weapon_type,
         "tier": sighting.tier,
     });
-    stream::publish_notification(payload.clone());
     let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", payload);
     show_flourish(app, &w);
@@ -2626,7 +2643,6 @@ fn maybe_zone_flourish(app: &AppHandle, zone: &stats::SatanicZone) {
         "buffs": zone.buffs,
         "debuffs": zone.debuffs,
     });
-    stream::publish_notification(payload.clone());
     if !FLOURISH.load(Ordering::Relaxed) { return; }
     let Some(w) = app.get_webview_window("flourish") else { return };
     let _ = app.emit_to("flourish", "flourish-play", &payload);
@@ -2637,7 +2653,7 @@ fn maybe_zone_flourish(app: &AppHandle, zone: &stats::SatanicZone) {
 /// left it. It hides itself again when the animation is over — the window tells
 /// us, because it is the one that knows how long that is.
 fn show_flourish(app: &AppHandle, w: &tauri::WebviewWindow) {
-    if w.is_visible().unwrap_or(false) {
+    if on_screen(w) {
         return;
     }
     // Placed before it is first shown, or the window manager puts it wherever
@@ -2653,7 +2669,7 @@ fn show_flourish(app: &AppHandle, w: &tauri::WebviewWindow) {
 /// it and it may go away again.
 #[tauri::command]
 fn flourish_done(app: AppHandle) {
-    if PLACING.load(Ordering::Relaxed) || FLOURISH_ALWAYS.load(Ordering::Relaxed) {
+    if PLACING.load(Ordering::Relaxed) || keep_flourish_visible() {
         return;
     }
     hide_aux(&app, "flourish");
@@ -2771,7 +2787,7 @@ fn place_flourish(app: AppHandle, placing: bool) {
         let _ = app.emit_to("flourish", "flourish-placing", false);
         set_click_through(&w, true);
         let _ = w.set_focusable(false);
-        if FLOURISH_ALWAYS.load(Ordering::Relaxed) {
+        if keep_flourish_visible() {
             show_flourish(&app, &w);
         } else {
             hide_aux(&app, "flourish");
@@ -2969,13 +2985,14 @@ fn reveal(app: &AppHandle, label: &str, focus: bool) {
     // An iconified toplevel is still "visible" to GTK, so `show` on a minimised
     // window is a no-op — tray -> Dashboard after clicking minimise did nothing
     // at all, and on Wayland the tray is the only control there is.
-    let _ = w.unminimize();
-    let _ = w.show();
-    // after the show: a position set on an unmapped window is advice the window
-    // manager may ignore. Only somewhere a screen still reaches.
-    if let Some(pos) = parked(label) {
-        if on_a_monitor(app, pos) {
-            let _ = w.set_position(pos);
+    if !on_screen(&w) {
+        let _ = w.unminimize();
+        let _ = w.show();
+        // After the show: a window manager may ignore moves before mapping.
+        if let Some(pos) = parked(label) {
+            if on_a_monitor(app, pos) {
+                let _ = w.set_position(pos);
+            }
         }
     }
     // Hiding a window unmaps it, and the state a window manager keeps for an
@@ -3070,7 +3087,9 @@ pub(crate) fn show_overlay(app: &AppHandle) {
 }
 
 pub(crate) fn hide_overlay(app: &AppHandle) {
-    hide_aux(app, "main");
+    if !OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed) {
+        hide_aux(app, "main");
+    }
 }
 
 #[tauri::command]
@@ -3092,16 +3111,20 @@ fn hide_dashboard(app: AppHandle) {
 ///
 /// Where the overlay cannot work there is only one face, and asking for the
 /// other one brings the dashboard back instead of hiding everything.
+fn face_windows(compact: bool) -> (&'static str, &'static str) {
+    if compact && overlay_supported() { ("main", "dashboard") } else { ("dashboard", "main") }
+}
+
 fn set_face(app: &AppHandle, compact: bool) {
-    let possible = overlay_supported();
-    let shown = compact && possible;
-    let (show, hide) = if shown { ("main", "dashboard") } else { ("dashboard", "main") };
-    hide_aux(app, hide);
+    let (show, hide) = face_windows(compact);
+    if !OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed) {
+        hide_aux(app, hide);
+    }
     show_aux(app, show);
     // What the user asked for is what is remembered. A session that cannot host
     // the overlay must not rewrite the preference of one that can — the same
     // settings file travels with a portable install and outlives a login.
-    if (possible || !compact) && read_settings().compact != compact {
+    if (overlay_supported() || !compact) && read_settings().compact != compact {
         let _ = edit_settings(app.clone(), |settings| settings.compact = compact);
     }
 }
@@ -3862,6 +3885,10 @@ fn clear_sound(app: AppHandle, rarity: String) -> Result<(), String> {
 /// Left-clicking the tray hides whatever is on screen, and brings back the
 /// face that was up last — usually the overlay while playing.
 fn toggle_window(app: &AppHandle) {
+    if OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed) {
+        reveal_capture_windows(app);
+        return;
+    }
     // `is_visible` alone stays true for a minimised window on both toolkits,
     // so clicking the tray icon to bring back a dashboard the player had just
     // minimised hid it instead — and the second click had to undo that first.
@@ -4054,18 +4081,22 @@ fn hide_map(app: AppHandle) -> Result<(), String> {
     map_window::request(&app, map_window::Request::Hide)
 }
 
-#[tauri::command]
-fn streaming_status() -> stream::Status { stream::status() }
+#[tauri::command(async)]
+fn get_map_source(app: AppHandle) -> Result<String, String> { map_assets::source(&app) }
+
+fn reveal_capture_windows(app: &AppHandle) {
+    reveal(app, "dashboard", false);
+    reveal(app, "main", false);
+    if let Some(w) = app.get_webview_window("flourish") {
+        show_flourish(app, &w);
+    }
+}
 
 #[tauri::command(async)]
-fn get_map_source(app: AppHandle) -> Result<stream::Status, String> { stream::map_source(&app) }
-
-#[tauri::command]
-fn stream_map_state(state: serde_json::Value) -> Result<(), String> { stream::publish_map(state) }
-
-#[tauri::command]
-fn test_stream() {
-    stream::publish_notification(serde_json::json!({"kind":"test","name":"Preview notification","rarity":"Heroic","tier":6}));
+fn show_capture_windows(app: AppHandle) {
+    if OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed) {
+        reveal_capture_windows(&app);
+    }
 }
 
 pub fn run() {
@@ -4085,7 +4116,10 @@ pub fn run() {
         // its arguments over and leaves, and the copy already running comes to
         // the front instead.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            let face = if read_settings().compact && overlay_supported() { "main" } else { "dashboard" };
+            if OBS_CAPTURE_WINDOWS.load(Ordering::Relaxed) {
+                reveal_capture_windows(app);
+            }
+            let (face, _) = face_windows(read_settings().compact);
             reveal(app, face, true);
         }))
         .plugin(tauri_plugin_dialog::init())
@@ -4172,10 +4206,8 @@ pub fn run() {
             clear_sound,
             show_map,
             hide_map,
-            streaming_status,
             get_map_source,
-            stream_map_state,
-            test_stream
+            show_capture_windows
         ])
         .setup(|app| {
             let overlay = overlay_supported();
@@ -4218,7 +4250,7 @@ pub fn run() {
             apply_stats_settings(app.handle(), &settings);
             apply_settings_effects(app.handle(), &settings);
             restore_window_positions(app.handle());
-            if settings.compact && overlay && TRAY_OK.load(Ordering::Relaxed) {
+            if settings.compact && overlay && !settings.obs_capture_windows && TRAY_OK.load(Ordering::Relaxed) {
                 hide_aux(app.handle(), "dashboard");
                 show_aux(app.handle(), "main");
             }

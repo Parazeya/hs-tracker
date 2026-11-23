@@ -55,30 +55,27 @@ export const LANGUAGES = [
 
 let lang = $state('en');
 let said = $state(null);
+let languageRequest = 0;
 
 /// Wear a language. Returns once its names are in, so a caller that wants to
 /// paint after the switch can wait; nothing has to.
 export async function speak(code) {
+  const request = ++languageRequest;
   const want = LANGUAGES.some(([c]) => c === code) ? code : 'en';
-  lang = want;
-  if (want === 'en') {
-    said = null;
-    tell();
-    return;
-  }
   const load = FILES[`./lang/${want}.json`];
-  if (!load) {
-    said = null;
-    tell();
-    return;
-  }
+  let dictionary = null;
   try {
-    const file = await load();
-    // the import may resolve after a second switch; the last one asked wins
-    if (lang === want) said = file.default ?? file;
+    if (load) {
+      const file = await load();
+      dictionary = file.default ?? file;
+    }
   } catch {
-    said = null;
+    // Keep the English fallback when a language file could not be read.
   }
+  if (request !== languageRequest) return;
+  lang = dictionary ? want : 'en';
+  said = dictionary;
+  document.documentElement.lang = locale();
   tell();
 }
 

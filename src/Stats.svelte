@@ -622,7 +622,7 @@
         {#if zoneStale}
           <span class="stale" title={t("the rotation has come round since the game last asked the server, and the game asks only when it saves")}> {t("unconfirmed")} </span>
         {/if}
-        <span class="right">{t('resets in')} {zoneReset.in} · {t('at')} {zoneReset.at}</span>
+        <span class="right">{say('Resets in {time} · {clock}', { time: zoneReset.in, clock: zoneReset.at })}</span>
       </div>
       {#if snap?.satanic_zone}
         <div class="szname" class:unsure={zoneStale}>

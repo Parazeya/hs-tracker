@@ -1269,7 +1269,6 @@ fn handle_flush(
         .collect();
     for drop in fresh {
         let milestone = newly_collected.get(&drop.name.to_lowercase()) == Some(&666);
-        crate::stream::publish_drop(&drop,newly_collected.contains_key(&drop.name.to_lowercase()));
         if let Some(key) = drop.sound.as_ref().filter(|_| !milestone) {
             // the rarity travels along as a fallback: a list with no sound of
             // its own still gets announced
