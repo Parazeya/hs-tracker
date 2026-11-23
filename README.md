@@ -7,7 +7,8 @@
   <br>in the game's own skin.
 </p>
 
-<h3 align="center">Approved by the developer of Hero Siege</h3>
+> [!IMPORTANT]
+> **Verify the repository owner before downloading HS Tracker.** The original repository belongs to **Parazeya**. According to the maintainer, PAS QA team member **Fumacinhahs** reviewed and approved the original project. Third-party forks, repositories, and releases are the responsibility of their publishers. [Original HS Tracker repository](https://github.com/Parazeya/hs-tracker)
 
 <p align="center">
   <a href="../../releases"><b>➡️ Download for Windows &amp; Linux ⬅️</b></a>

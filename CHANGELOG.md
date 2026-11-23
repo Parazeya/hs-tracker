@@ -4,6 +4,8 @@
 
 Install this release manually if you are upgrading from 1.1.15 or earlier. The updater uses a new signing key, and future updates can be installed from the app again after this upgrade.
 
+> **Verify the repository owner before downloading HS Tracker.** The original repository belongs to **Parazeya**. According to the maintainer, PAS QA team member **Fumacinhahs** reviewed and approved the original project. Third-party forks, repositories, and releases are the responsibility of their publishers. [Original HS Tracker repository](https://github.com/Parazeya/hs-tracker)
+
 ### Added
 
 - Open the interactive map, item codex, skills, and bounties inside Tracker. The map can be included in the OBS output.
