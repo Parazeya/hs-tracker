@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.17 — 2026-11-24
+
+Final stable release of HS Tracker for this Hero Siege season.
+
+> **Verify the repository owner before downloading HS Tracker.** The original repository belongs to **Parazeya**. According to the maintainer, PAS QA team member **Fumacinhahs** reviewed and approved the original project. Third-party forks, repositories, and releases are the responsibility of their publishers. [Original HS Tracker repository](https://github.com/Parazeya/hs-tracker)
+
+### Changed
+
+- Enable **Keep windows open for OBS** in Settings to capture the original overlay, announcement and dashboard separately using **Window Capture**. This replaces the Streaming tab and its browser sources.
+- Waiting for the game now takes one line. Longer capture diagnostics can be expanded as needed.
+
+### Fixed
+
+- Keep the Zone Buffs and Relics sections together on the Alerts page in tall windows.
+- Fill in missing translations for the collection, map and diagnostics, and keep the interface in the selected language when switching languages quickly.
+
 ## 1.1.16 — 2026-11-23
 
 Install this release manually if you are upgrading from 1.1.15 or earlier. The updater uses a new signing key, and future updates can be installed from the app again after this upgrade.

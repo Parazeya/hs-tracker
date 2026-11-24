@@ -15,19 +15,19 @@ Track gold, XP, kills and drops while you play Hero Siege. Use the compact in-ga
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.16/HS.Tracker_1.1.16_x64-setup.exe">HS.Tracker_1.1.16_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.17/HS.Tracker_1.1.17_x64-setup.exe">HS.Tracker_1.1.17_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.16/HS.Tracker_1.1.16_amd64.AppImage">HS.Tracker_1.1.16_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.17/HS.Tracker_1.1.17_amd64.AppImage">HS.Tracker_1.1.17_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.16/HS.Tracker_1.1.16_amd64.deb">HS.Tracker_1.1.16_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.17/HS.Tracker_1.1.17_amd64.deb">HS.Tracker_1.1.17_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.16/HS.Tracker-1.1.16-1.x86_64.rpm">HS.Tracker-1.1.16-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.17/HS.Tracker-1.1.17-1.x86_64.rpm">HS.Tracker-1.1.17-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->
@@ -52,7 +52,7 @@ Track gold, XP, kills and drops while you play Hero Siege. Use the compact in-ga
 
 ![HS Tracker overlay in Hero Siege](screenshots/overlay.png)
 
-For OBS, add **Window Capture** and select the Tracker window you want on stream. Keep that window open during capture. [OBS Window Capture guide](https://obsproject.com/kb/window-capture-sources)
+For OBS, turn on **Settings → Keep windows open for OBS**. Add a separate **Window Capture** source for each window you want on stream: the overlay, announcement or dashboard. [OBS Window Capture guide](https://obsproject.com/kb/window-capture-sources)
 
 ## Troubleshooting
 
