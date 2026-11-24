@@ -11,8 +11,8 @@ Track gold, XP, kills and drops while you play Hero Siege. Use the compact in-ga
 
 ## Download
 
-[![Latest stable release](https://img.shields.io/github/v/release/Parazeya/hs-tracker?label=latest%20release&color=287d3c)](https://github.com/Parazeya/hs-tracker/releases/latest)
-[![Total downloads](https://img.shields.io/github/downloads/Parazeya/hs-tracker/total?label=total%20downloads&color=6f42c1)](https://github.com/Parazeya/hs-tracker/releases)
+[![Latest stable release](screenshots/readme-release.svg)](https://github.com/Parazeya/hs-tracker/releases/latest)
+[![Total downloads](screenshots/readme-downloads.svg)](https://github.com/Parazeya/hs-tracker/releases)
 
 <!-- downloads -->
 <table align="center">
