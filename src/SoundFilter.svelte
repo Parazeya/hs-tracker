@@ -728,16 +728,12 @@
 </div>
 
 <style>
-  /* Two columns: what makes a sound at all on the left, the two narrower alerts
-     and the pillar on the right. In one column the page is a single strip of
-     rows over a thousand pixels wide, with a rarity row's controls half a screen
-     from its name.
-     A narrow window falls back to one column, where side by side would leave
-     neither half readable. */
+  /* Keep the stacked rows together when the window is taller than the alerts. */
   .panel.two {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
+    align-content: start;
     align-items: start;
   }
   /* The query is on the viewport, but the columns live in the dashboard pane —
