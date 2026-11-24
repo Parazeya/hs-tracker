@@ -11,6 +11,9 @@ Track gold, XP, kills and drops while you play Hero Siege. Use the compact in-ga
 
 ## Download
 
+[![Latest stable release](https://img.shields.io/github/v/release/Parazeya/hs-tracker?label=latest%20release&color=287d3c)](https://github.com/Parazeya/hs-tracker/releases/latest)
+[![Total downloads](https://img.shields.io/github/downloads/Parazeya/hs-tracker/total?label=total%20downloads&color=6f42c1)](https://github.com/Parazeya/hs-tracker/releases)
+
 <!-- downloads -->
 <table align="center">
   <tr>
@@ -62,4 +65,4 @@ For OBS, turn on **Settings → Keep windows open for OBS**. Add a separate **Wi
 
 [Development guide](DEVELOPING.md) · [MIT license](LICENSE)
 
-Hero Siege art © Panic Art Studios. HS Tracker is a community project. It builds on [hero-siege-stats](https://github.com/GuilhermeFaga/hero-siege-stats) and [Hero-Siege-Companion](https://github.com/DemonSkye/Hero-Siege-Companion).
+Hero Siege art © Panic Art Studios. HS Tracker is a community project.
