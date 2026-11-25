@@ -42,23 +42,35 @@ export const BUILT_IN = RARITIES;
 // asset protocol; only if that is unavailable do we fall back to hauling the
 // whole file over IPC as a data URL. `borrowed` is the built-in a key was told
 // to use where it has no file of its own — see `chimes` in Settings.
-export async function soundUrl(rarity, borrowed) {
+export async function resolveSound(rarity, borrowed) {
   // there are no files beside the executable when there is no executable
   if (!native) return null;
   try {
     const path = await invoke('sound_path', { rarity });
     if (path) {
       const url = convertFileSrc(path);
-      if (await loadable(url)) return url;
+      const file = path.split(/[\\/]/).at(-1);
+      if (await loadable(url)) return { url, file };
       // The inlined copy was handed back unchecked, which made the built-in
       // chime below unreachable: a truncated or mislabelled file — the picker
       // accepts anything with the right extension — then meant permanent
       // silence, while the panel still listed the sound as installed.
       const inlined = await invoke('load_sound', { rarity });
-      if (inlined && (await loadable(inlined))) return inlined;
+      if (inlined && (await loadable(inlined))) return { url: inlined, file };
     }
   } catch {}
-  return DEFAULTS[borrowed] ?? DEFAULTS[rarity];
+  const builtIn = DEFAULTS[borrowed] ? borrowed : rarity;
+  return DEFAULTS[builtIn] ? { url: DEFAULTS[builtIn], builtIn } : null;
+}
+
+export async function soundUrl(rarity, borrowed) {
+  return (await resolveSound(rarity, borrowed))?.url;
+}
+
+export function soundChannel(settings, key) {
+  if (!key.startsWith('list-')) return settings?.[key];
+  const active = (settings?.filters ?? []).find((filter) => filter.id === settings?.filter);
+  return (active?.lists ?? []).find((list) => `list-${list.id}` === key);
 }
 
 function loadable(url) {

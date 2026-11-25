@@ -18,19 +18,19 @@ Track gold, XP, kills and drops while you play Hero Siege. Use the compact in-ga
 <table align="center">
   <tr>
     <td><b>Windows</b></td>
-    <td><a href="../../releases/download/v1.1.17/HS.Tracker_1.1.17_x64-setup.exe">HS.Tracker_1.1.17_x64-setup.exe</a></td>
+    <td><a href="../../releases/download/v1.1.18/HS.Tracker_1.1.18_x64-setup.exe">HS.Tracker_1.1.18_x64-setup.exe</a></td>
   </tr>
   <tr>
     <td><b>Linux · AppImage</b></td>
-    <td><a href="../../releases/download/v1.1.17/HS.Tracker_1.1.17_amd64.AppImage">HS.Tracker_1.1.17_amd64.AppImage</a></td>
+    <td><a href="../../releases/download/v1.1.18/HS.Tracker_1.1.18_amd64.AppImage">HS.Tracker_1.1.18_amd64.AppImage</a></td>
   </tr>
   <tr>
     <td><b>Linux · deb</b></td>
-    <td><a href="../../releases/download/v1.1.17/HS.Tracker_1.1.17_amd64.deb">HS.Tracker_1.1.17_amd64.deb</a></td>
+    <td><a href="../../releases/download/v1.1.18/HS.Tracker_1.1.18_amd64.deb">HS.Tracker_1.1.18_amd64.deb</a></td>
   </tr>
   <tr>
     <td><b>Linux · rpm</b></td>
-    <td><a href="../../releases/download/v1.1.17/HS.Tracker-1.1.17-1.x86_64.rpm">HS.Tracker-1.1.17-1.x86_64.rpm</a></td>
+    <td><a href="../../releases/download/v1.1.18/HS.Tracker-1.1.18-1.x86_64.rpm">HS.Tracker-1.1.18-1.x86_64.rpm</a></td>
   </tr>
 </table>
 <!-- /downloads -->

@@ -2384,6 +2384,16 @@ fn get_extra(state: State<Shared>) -> stats::Extra {
     state.stats().extra()
 }
 
+#[tauri::command]
+fn get_alert_preview(
+    state: State<Shared>,
+    item_type: i64,
+    item_id: i64,
+    weapon_type: i64,
+) -> Option<(stats::AlertDecision, String)> {
+    state.stats().preview_item_alert((item_type, item_id, weapon_type))
+}
+
 /// Runs are kept next to the settings, newest first, and the file is bounded:
 /// this is a record of what happened, not a database.
 const RUNS_KEPT: usize = 200;
@@ -2910,8 +2920,13 @@ fn about() -> About {
 /// Only ever this project's own pages: the address arrives from the web side,
 /// and handing an arbitrary string to a shell is how a link becomes a command.
 #[tauri::command(async)]
-fn open_url(url: String) -> Result<(), String> {
-    project_url::open(&url)
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    let requested = project_url::validate(&url)?;
+    if requested.host_str() == Some("parazeya.github.io") {
+        let origin = map_assets::source(&app)?;
+        return project_url::open(&project_url::packaged_map_url(&origin, &requested)?);
+    }
+    project_url::open(&requested)
 }
 
 #[tauri::command(async)]
@@ -4153,6 +4168,7 @@ pub fn run() {
             set_words,
             snapshot,
             get_extra,
+            get_alert_preview,
             get_collection,
             preview_checklist_url,
             preview_checklist_file,

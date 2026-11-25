@@ -152,8 +152,23 @@
   },
   "map_markers": {
     "native_exported": 64,
-    "native_shown": 64,
+    "native_shown": 63,
+    "native_excluded": [
+      {
+        "room": "Cabin_01_rm",
+        "reason": "tutorial_cabin_without_drops"
+      }
+    ],
     "reference_markers": 26,
-    "rendered_markers": 90
+    "rendered_markers": 89
+  },
+  "reference_zone_drops": {
+    "url": "https://parazeya.github.io/hs-map/",
+    "data_url": "https://parazeya.github.io/hs-map/data/map.json",
+    "captured_date": "2026-11-20",
+    "snapshot_commit": "6a39f9b634d77906d26fdf2c18d067fe7c964f90",
+    "snapshot_sha256": "ce57efed86153c4aecc1ae8b5c24aff75da99e3a7541f151de026b371857dc3f",
+    "verified_for_game_build": false,
+    "catalogue_sha256": "9d35723cce91e0bd885bdc8a7a00f8c8e2f97868020b8ff1fd7449d5b654cfc7"
   }
 }

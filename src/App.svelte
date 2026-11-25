@@ -5,7 +5,7 @@
   import { rowsOf } from './panel.js';
   import { listen, native } from './bridge.js';
   import { buffInfo, defaultBuffIcon, zoneAct, zoneName, icon } from './buffs.js';
-  import { RARITIES, soundUrl, play } from './audio.js';
+  import { RARITIES, soundChannel, soundUrl, play } from './audio.js';
   import collection666Wav from './assets/sounds/collection_666.wav';
   import { fmt } from './format.js';
   import { captureBackendNotice } from './capture-status.js';
@@ -27,27 +27,22 @@
 
   async function initSounds() {
     cfg = await invoke('get_settings').catch(() => null);
-    for (const rarity of RARITIES) urls[rarity] = await soundUrl(rarity);
+    for (const rarity of RARITIES) urls[rarity] = await soundUrl(rarity, cfg?.chimes?.[rarity]);
   }
 
   // a list brings its own sound and its own volume; everything else is one of
   // the built-in alerts. Lists live inside the active filter — the loose
   // `lists` field is pre-0.9.4 and is emptied by the migration on load.
-  function channel(key) {
-    if (!key.startsWith('list-')) return cfg?.[key];
-    const active = (cfg?.filters ?? []).find((f) => f.id === cfg?.filter);
-    return (active?.lists ?? []).find((l) => `list-${l.id}` === key);
-  }
-
   async function playSound(key, rarity) {
-    const c = channel(key);
+    const c = soundChannel(cfg, key);
     if (c && c.enabled === false) return;
     const now = Date.now();
     if (now - (lastPlayed[key] ?? 0) < 200) return;
     lastPlayed[key] = now;
     urls[key] ??= await soundUrl(key, cfg?.chimes?.[key]);
     // a list without a sound of its own borrows the one for its rarity
-    const url = urls[key] ?? urls[String(rarity ?? '').toLowerCase()];
+    const fallback = String(rarity ?? '').toLowerCase();
+    const url = urls[key] ?? (fallback && (urls[fallback] ??= await soundUrl(fallback, cfg?.chimes?.[fallback])));
     play(url, c?.volume ?? 0.7);
   }
 

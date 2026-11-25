@@ -21,6 +21,13 @@
   ];
 
   let snap = $state(null);
+  let resourceGroups = $derived(RESOURCES.map(([kind, label]) => ({
+    label,
+    count: snap?.resources?.[kind] ?? 0,
+    names: (snap?.resource_items ?? []).filter((resource) => resource.kind === kind),
+  })));
+  let populatedGroups = $derived(resourceGroups.filter(({ count, names }) => count || names.length));
+  let emptyGroups = $derived(resourceGroups.filter(({ count, names }) => !count && !names.length));
   let extra = $state(null);
   // See App.svelte: a `bind:this` an effect reads has to be state, or it
   // works only for as long as nothing is ever conditional.
@@ -134,12 +141,18 @@
   /// are hunted from Alerts by identity rather than by name — see the drop rows
   /// below, and `hunted_relic` in the engine.
   const RELIC = 16;
+  let showAllEffects = $state(false);
+  let rotation = $derived(snap?.satanic_at);
+  $effect(() => {
+    // Close the longer list when the server confirms the next rotation.
+    rotation;
+    showAllEffects = false;
+  });
   let allBuffs = $derived(snap?.satanic_zone?.buffs ?? []);
   let allDebuffs = $derived(snap?.satanic_zone?.debuffs ?? []);
-  let buffs = $derived(allBuffs.slice(0, SHOWN).map(buffInfo));
-  let debuffs = $derived(allDebuffs.slice(0, SHOWN).map(debuffInfo));
-  let moreBuffs = $derived(Math.max(0, allBuffs.length - SHOWN));
-  let moreDebuffs = $derived(Math.max(0, allDebuffs.length - SHOWN));
+  let buffs = $derived((showAllEffects ? allBuffs : allBuffs.slice(0, SHOWN)).map(buffInfo));
+  let debuffs = $derived((showAllEffects ? allDebuffs : allDebuffs.slice(0, SHOWN)).map(debuffInfo));
+  let moreEffects = $derived(Math.max(0, allBuffs.length - SHOWN) + Math.max(0, allDebuffs.length - SHOWN));
 
   // the window is resizable, so the graph is redrawn at whatever size the box
   // ends up being rather than stretched from the size it was first drawn at
@@ -508,24 +521,18 @@
               </div>
             {/each}
           </div>
-          <div class="subhead">{t("Notable")}</div>
-          <div class="tally">
-            {#each snap?.notable ?? [] as n}
-              <div class="tallyrow"><span class="dim">{t(nameOf(n.label))}</span><b class="c-gold">{fmt(n.total)}</b></div>
-            {/each}
-          </div>
-
-          <div class="subhead">{t("Resources")}</div>
-          <!-- One block per counter, and the names inside it.
-               Header and names used to share a single grid, which fills left to
-               right: "Keys" landed in the first cell of a row and the twelve
-               keys under it carried on across the other three columns and into
-               whatever came next, so a rune sat under the word Materials. Each
-               counter now owns its own grid and nothing reads across. -->
-          {#each RESOURCES as [kind, label]}
-            {@const names = (snap?.resource_items ?? []).filter((r) => r.kind === kind)}
+          {#if snap?.notable?.length}
+            <div class="subhead">{t("Notable")}</div>
+            <div class="tally">
+              {#each snap.notable as n}
+                <div class="tallyrow"><span class="dim">{t(nameOf(n.label))}</span><b class="c-gold">{fmt(n.total)}</b></div>
+              {/each}
+            </div>
+          {/if}
+          {#if populatedGroups.length}<div class="subhead">{t("Resources")}</div>{/if}
+          {#each populatedGroups as { label, count, names } (label)}
             <div class="group">
-              <div class="grouphead"><span>{t(label)}</span><b>{fmt(snap?.resources?.[kind])}</b></div>
+              <div class="grouphead"><span>{t(label)}</span><b>{fmt(count)}</b></div>
               {#if names.length}
                 <div class="tally">
                   {#each names as r (r.name)}
@@ -535,6 +542,14 @@
               {/if}
             </div>
           {/each}
+          {#if emptyGroups.length}
+            <details class="empty-resources">
+              <summary>{populatedGroups.length ? t('Empty resource groups') : `${t('Resources')} · 0`}</summary>
+              {#each emptyGroups as { label } (label)}
+                <div class="grouphead"><span>{t(label)}</span><b>0</b></div>
+              {/each}
+            </details>
+          {/if}
         </div>
 
         {#if bosses.length || chests.length || cleared.length}
@@ -628,8 +643,9 @@
         <div class="szname" class:unsure={zoneStale}>
           {satanicZoneName(snap.satanic_zone.zone, zoneName(snap.satanic_zone.zone))}
           {#if zoneStale}<span class="seen">{t('last confirmed')} {zoneSeen}</span>{/if}
+          {#if szHere}<span class="szhere">{t("you are here")}</span>{/if}
         </div>
-        <div class="effects">
+        <div class="effects" class:expanded={showAllEffects}>
           <div class="effcol">
             <div class="effhead pros">{t("Pros")}</div>
             {#each buffs as b}
@@ -643,10 +659,6 @@
             {:else}
               <div class="buffdesc">—</div>
             {/each}
-            <!-- said rather than left off: four fit and a rotation can carry
-                 five, and a list that stops without saying so reads as the
-                 whole of it -->
-            {#if moreBuffs}<div class="buffdesc more">+{moreBuffs} {t('more')}</div>{/if}
           </div>
           <div class="effcol">
             <div class="effhead cons">{t("Cons")}</div>
@@ -660,28 +672,16 @@
             {:else}
               <div class="buffdesc">—</div>
             {/each}
-            {#if moreDebuffs}<div class="buffdesc more">+{moreDebuffs} {t('more')}</div>{/if}
           </div>
         </div>
+        {#if moreEffects}
+          <button class="more-effects" aria-expanded={showAllEffects} onclick={() => (showAllEffects = !showAllEffects)}>
+            {showAllEffects ? t('Show fewer effects') : `+${moreEffects} ${t('more')}`}
+          </button>
+        {/if}
       {:else}
         <div class="sub center">{t("no satanic zone data yet")}</div>
       {/if}
-    </div>
-
-    <div class="box" style:border-image-source="url({art('chip_dark')})">
-      <div class="box-head">
-        <span class="accent">{t("Drops in the Satanic Zone")}</span>
-        {#if zoneStale}
-          <span class="stale" title="{t('this list is for the zone last confirmed at')} {zoneSeen}; {t('the rotation has come round since')}"> {t("unconfirmed")} </span>
-        {/if}
-        {#if szHere}
-          <span class="szhere" title={t("the game reports you as standing in it")}>{t("you are here")}</span>
-        {/if}
-        <span class="right" title={t("the zone the server is running satanic this hour")}>
-          {#if snap?.satanic_zone}{satanicZoneName(snap.satanic_zone.zone, zoneName(snap.satanic_zone.zone))}
-          {:else}{t('waiting for the game')}{/if}
-        </span>
-      </div>
       <div class="vitals">
         <span class="dim">{t("Level")}</span>
         <b>{snap?.character?.level || '—'}</b>
@@ -690,6 +690,9 @@
         <span class="dim" title={t("the act the character save last stated — the game no longer names the zone often enough to show one")}>{t("Act")}</span>
         <b>{snap?.act || '—'}</b>
       </div>
+      {#if snap?.satanic_zone}
+        <div class="subhead">{t("Drops in the Satanic Zone")}</div>
+      {/if}
       {#if here.length}
         <div class="tied">
           {#each here as it}
@@ -700,11 +703,9 @@
             </div>
           {/each}
         </div>
-      {:else}
+      {:else if szCode}
         <div class="dim empty">
-          {szCode
-            ? t('nothing rolls better there than it does anywhere else')
-            : t('the zone appears once the game announces it')}
+          {t('nothing rolls better there than it does anywhere else')}
         </div>
       {/if}
     </div>
@@ -1155,5 +1156,16 @@
 
   .c-gold { color: var(--gold-2); }
   .c-xp { color: #a06ae0; }
-  .buffdesc.more { opacity: 0.75; font-style: italic; }
+  .empty-resources { margin-top: 6px; font-size: 11px; }
+  .empty-resources summary { cursor: pointer; color: var(--bone-7); }
+  .effects.expanded .buffdesc { white-space: normal; }
+  .more-effects {
+    background: transparent;
+    color: var(--gold-2);
+    border: 1px solid var(--dim-2);
+    padding: 3px 8px;
+    margin: 4px 0;
+    cursor: pointer;
+    font: inherit;
+  }
 </style>

@@ -1,14 +1,18 @@
 <script>
-  import { nameOf, say, t, locale } from './say.svelte.js';
-  import { invoke } from './bridge.js';
+  import { nameOf, say, t, locale, zoneLabel } from './say.svelte.js';
+  import { invoke, listen } from './bridge.js';
   import { fmt, RARITIES, RARITY_CLASS, difficulty } from './format.js';
   import { art } from './skin.svelte.js';
-  import { listen } from './bridge.js';
   import { tierLabel } from './items.js';
   import { cardPng, drawRunCard } from './runcard.js';
+  import {
+    COMPARISON_MINUTES, MIN_COMPARISONS, dominantZone, medianRate, perHour, runComparison, runDifficulty,
+  } from './run-comparison.js';
 
   let runs = $state([]);
-  let picked = $state(0);
+  let picked = $state(null);
+  let zoneFilter = $state(null);
+  let difficultyFilter = $state(null);
 
   // A run is filed when the session ends — the reset button, the hotkey, the
   // tray, the game closing, the app quitting. So the list only grows while this
@@ -21,36 +25,47 @@
     const load = () =>
       invoke('get_runs')
         .then((list) => {
-          const was = runs[picked]?.started_ms;
           runs = list ?? [];
-          const now = was == null ? -1 : runs.findIndex((r) => r.started_ms === was);
-          picked = now >= 0 ? now : 0;
+          if (picked === null) picked = runs[0]?.started_ms ?? null;
         })
         .catch(() => {});
     load();
     const unsubs = [listen('runs-changed', load)];
     return () => unsubs.forEach((u) => u.then((f) => f()));
   });
-
-
-
   function dur(secs) {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
-    return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+    return h > 0 ? `${h}${t('h')} ${String(m).padStart(2, '0')}${t('m')}` : `${m}${t('m')}`;
   }
 
   const day = (ms) =>
     new Date(ms).toLocaleString(locale(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
-  const perHour = (value, secs) => (secs > 0 ? Math.round((value * 3600) / secs) : 0);
-
-  let run = $derived(runs[picked] ?? null);
+  const zoneName = (room) => room ? zoneLabel(room) : t('Unknown zone');
+  const difficultyName = (entry) => {
+    if (!entry.key) return t('Unknown difficulty');
+    return entry.key === '2:0' ? t('Hell (grade unknown)') : difficulty(entry.difficulty, entry.hellSub);
+  };
+  const rateText = (rate) => rate === null ? '—' : `${fmt(rate)}${t('/h')}`;
+  let groups = $derived(runs.map((r) => ({ run: r, zone: dominantZone(r), difficulty: runDifficulty(r) })));
+  let zones = $derived([...new Set(groups.map((entry) => entry.zone))]
+    .sort((a, b) => zoneName(a).localeCompare(zoneName(b), locale())));
+  let difficulties = $derived([...new Map(groups.map((entry) => [entry.difficulty.key, entry.difficulty])).values()]
+    .sort((a, b) => (a.difficulty ?? Infinity) - (b.difficulty ?? Infinity) || (a.hellSub ?? 0) - (b.hellSub ?? 0)));
+  let visible = $derived(groups.filter((entry) =>
+    (zoneFilter === null || entry.zone === zoneFilter) &&
+    (difficultyFilter === null || entry.difficulty.key === difficultyFilter),
+  ));
+  let selected = $derived(visible.find((entry) => entry.run.started_ms === picked) ?? visible[0]);
+  let run = $derived(selected?.run ?? null);
+  let comparison = $derived(run ? runComparison(run, runs) : null);
+  let baselines = $derived(comparison?.longEnough ? RATES.map(([, , of]) => medianRate(comparison.peers, of)) : []);
 
   // what a run is worth in one line, for the list
   const headline = (r) => `${fmt(r.gold)} ${t('gold')} · ${fmt(r.kills)} ${t('kills')}`;
 
-  const drops = (r) => RARITIES.reduce((sum, name) => sum + (r.items?.[name] ?? 0), 0);
+  const drops = (r) => r.items ? RARITIES.reduce((sum, name) => sum + (r.items[name] ?? 0), 0) : null;
 
   // The four numbers a run is read by, in the order the panel shows them.
   const RATES = [
@@ -60,48 +75,7 @@
     ['Drops', '', drops],
   ];
 
-  /**
-   * A run is only worth reading against runs it can be compared with.
-   *
-   * Difficulty and the grade of Hell, because an hour in Hell 5 and an hour in
-   * Normal are not the same hour and nothing else here would say so. Not the
-   * character: a player who farms the same zone on two heroes is comparing the
-   * zone, which is what they came for.
-   *
-   * Short runs are left out. Under five minutes a single lucky pack doubles
-   * the rate, and a handful of those drag the middle far enough to make an
-   * ordinary hour look poor.
-   */
-  const ENOUGH = 3;
-  const LONG_ENOUGH = 300;
-
-  /** The middle value, which is not the average: one three-hour Colosseum run
-   *  moves a mean and says nothing about a normal hour. */
-  function middle(list, of) {
-    const got = list.map(of).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
-    if (!got.length) return null;
-    const at = Math.floor(got.length / 2);
-    return got.length % 2 ? got[at] : Math.round((got[at - 1] + got[at]) / 2);
-  }
-
-  const usual = $derived.by(() => {
-    if (!run) return null;
-    const like = runs.filter(
-      (r) =>
-        r.started_ms !== run.started_ms &&
-        r.secs >= LONG_ENOUGH &&
-        r.difficulty === run.difficulty &&
-        (r.hell_sub ?? 0) === (run.hell_sub ?? 0),
-    );
-    if (like.length < ENOUGH) return null;
-    return {
-      n: like.length,
-      of: RATES.map(([, , of]) => middle(like, (r) => perHour(of(r), r.secs))),
-    };
-  });
-
-  /** How far this run stands from the middle of those, in per cent. */
-  const against = (now, was) => (was ? Math.round(((now - was) / was) * 100) : null);
+  const against = (now, was) => now !== null && was > 0 ? Math.round(((now - was) / was) * 100) : null;
 
   // The bosses and chests a run put down. They are filed with every run and
   // drawn on the card you can copy from here, and were the one thing on that
@@ -122,6 +96,7 @@
   let carded = $state({ which: '', text: '' });
   let cardTimer = null;
   async function copyCard(mode) {
+    const snapshot = $state.snapshot(run);
     clearTimeout(cardTimer);
     try {
       // the card is drawn with the app's own font; canvas will fall back to a
@@ -130,7 +105,7 @@
       const coin = new Image();
       coin.src = art('coin_strip');
       await coin.decode().catch(() => {});
-      const canvas = drawRunCard($state.snapshot(run), { coin }, { mode });
+      const canvas = drawRunCard(snapshot, { coin }, { mode });
       await invoke('copy_image', await cardPng(canvas));
       carded = { which: mode, text: 'copied' };
     } catch (e) {
@@ -159,8 +134,17 @@
     }
     armed = false;
     invoke('clear_runs')
-      .then(() => (runs = []))
+      .then(() => {
+        runs = [];
+        picked = null;
+        clearFilters();
+      })
       .catch(() => {});
+  }
+
+  function clearFilters() {
+    zoneFilter = null;
+    difficultyFilter = null;
   }
 </script>
 
@@ -170,13 +154,29 @@
       <div class="list" style:border-image-source="url({art('chip_dark')})">
         <div class="head">
           <span class="accent">{t("Runs")}</span>
-          <span class="right">{runs.length}</span>
+          <span class="right">
+            {visible.length === runs.length ? runs.length : say('{n} of {all}', { n: visible.length, all: runs.length })}
+          </span>
+        </div>
+        <div class="filters">
+          <select aria-label={t('Dominant zone')} bind:value={zoneFilter}>
+            <option value={null}>{t('All zones')}</option>
+            {#each zones as room}<option value={room}>{zoneName(room)}</option>{/each}
+          </select>
+          <select aria-label={t('Difficulty')} bind:value={difficultyFilter}>
+            <option value={null}>{t('All difficulties')}</option>
+            {#each difficulties as entry}<option value={entry.key}>{difficultyName(entry)}</option>{/each}
+          </select>
         </div>
         <div class="scroll">
-          {#each runs as r, i}
-            <button class="row" class:on={i === picked} onclick={() => (picked = i)}>
+          {#each visible as entry (entry.run.started_ms)}
+            {@const r = entry.run}
+            <button class="row" class:on={entry === selected} aria-pressed={entry === selected} onclick={() => (picked = r.started_ms)}>
               <span class="when">{day(r.started_ms)}</span>
               <span class="len">{dur(r.secs)}</span>
+              <span class="place" title={`${zoneName(entry.zone)} · ${difficultyName(entry.difficulty)}`}>
+                {zoneName(entry.zone)} · {difficultyName(entry.difficulty)}
+              </span>
               <span class="sum">{headline(r)}</span>
             </button>
           {/each}
@@ -193,7 +193,7 @@
         </button>
       </div>
 
-      {#if run}
+      {#if run && comparison}
         <div class="detail">
           <div class="box" style:border-image-source="url({art('chip_dark')})">
             <div class="head">
@@ -220,31 +220,39 @@
               {run.character ?? t('unknown character')}
               {#if run.level}· {t('Lv')} {run.level}{/if}
               {#if run.herolevel}· {t('HLv')} {run.herolevel}{/if}
-              {#if run.difficulty != null}· {difficulty(run.difficulty, run.hell_sub)}{/if}
+              · {difficultyName(selected.difficulty)}
             </div>
             <div class="rates">
               {#each RATES as [label, cls, of], i}
-                {@const rate = perHour(of(run), run.secs)}
-                {@const apart = usual ? against(rate, usual.of[i]) : null}
+                {@const total = of(run)}
+                {@const rate = perHour(total, run.secs)}
+                {@const baseline = baselines[i] ?? null}
+                {@const apart = against(rate, baseline)}
                 <div class="rate">
                   <div class="label">{t(label)}</div>
-                  <div class="value {cls}">{fmt(of(run))}</div>
-                  <div class="sub">{fmt(rate)}{t('/h')}</div>
+                  <div class="value {cls}">{Number.isFinite(total) ? fmt(total) : '—'}</div>
+                  <div class="sub">{rateText(rate)}</div>
                   {#if apart != null}
-                    <div
-                      class="vs"
-                      class:up={apart > 0}
-                      class:down={apart < 0}
-                      title={say('the middle of your other {n} runs on this difficulty is {rate}/h', {
-                        n: usual.n,
-                        rate: fmt(usual.of[i]),
-                      })}
-                    >
-                      {apart > 0 ? '+' : ''}{apart}% {t('vs usual')}
-                    </div>
+                    <div class="vs" class:up={apart > 0} class:down={apart < 0}>{apart > 0 ? '+' : ''}{apart}% {t('vs usual')}</div>
+                  {/if}
+                  {#if baseline !== null}
+                    <div class="sub">{say('Median: {rate}/h', { rate: fmt(baseline) })}</div>
                   {/if}
                 </div>
               {/each}
+            </div>
+            <div class="comparison">
+              <span>{t('Dominant zone')} · {zoneName(selected.zone)}</span>
+              {#if !comparison.eligible}
+                <span>{t('Comparison requires a known zone and difficulty')}</span>
+              {:else}
+                <span>{say('{n} comparable runs', { n: comparison.peers.length })}</span>
+                {#if !comparison.longEnough}
+                  <span>{say('Comparison starts at {n} minutes', { n: COMPARISON_MINUTES })}</span>
+                {:else if comparison.peers.length < MIN_COMPARISONS}
+                  <span>{say('At least {n} comparable runs are needed', { n: MIN_COMPARISONS })}</span>
+                {/if}
+              {/if}
             </div>
           </div>
 
@@ -307,6 +315,12 @@
             </div>
           {/if}
         </div>
+      {/if}
+      {#if !visible.length}
+        <div class="detail"><div class="empty">
+          <div>{t('No runs match these filters')}</div>
+          <button class="card-btn" onclick={clearFilters}>{t('Clear filters')}</button>
+        </div></div>
       {/if}
     </div>
   {:else}
@@ -405,6 +419,18 @@
   .accent { color: var(--edge-2b); }
   .right { margin-left: auto; color: var(--dim-2); }
 
+  .filters { display: grid; gap: 3px; }
+  .filters select {
+    min-width: 0;
+    width: 100%;
+    padding: 3px 4px;
+    color: var(--bone-9);
+    border: 1px solid var(--ground-10);
+    background: var(--ground-6);
+    font: inherit;
+    font-size: 11px;
+  }
+
   .scroll {
     flex: 1 1 auto;
     min-height: 0;
@@ -419,7 +445,7 @@
   .row {
     display: grid;
     grid-template-columns: 1fr auto;
-    grid-template-areas: 'when len' 'sum sum';
+    grid-template-areas: 'when len' 'place place' 'sum sum';
     gap: 0 6px;
     font: inherit;
     font-size: 11px;
@@ -435,6 +461,7 @@
   .row.on { border-left-color: var(--edge-2b); background: rgba(var(--pick-rgb), 0.25); }
   .when { grid-area: when; }
   .len { grid-area: len; color: var(--dim-2); }
+  .place { grid-area: place; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sum { grid-area: sum; font-size: 10px; color: var(--edge-8); }
 
   /* Four across only while four fit. `flex: 1` with `min-width: 0` let each
@@ -448,8 +475,6 @@
     padding-top: 2px;
   }
   .rate { min-width: 0; overflow: hidden; }
-  .rate .value,
-  /* how this run stands against the ones before it */
   .vs { margin-top: 1px; font-size: 10px; color: var(--bone-4); }
   .vs.up { color: var(--gold-2); }
   .vs.down { color: #b06a6a; }
@@ -463,6 +488,16 @@
   }
   .value { font-size: 16px; line-height: 20px; }
   .sub { font-size: 10px; color: var(--edge-8); }
+  .comparison {
+    margin-top: 3px;
+    padding-top: 4px;
+    border-top: 1px solid var(--ground-10);
+    color: var(--bone-6);
+    font-size: 10px;
+    display: flex;
+    gap: 3px 10px;
+    flex-wrap: wrap;
+  }
 
   /* the same small caption Stats uses over its own tallies */
   .subhead {

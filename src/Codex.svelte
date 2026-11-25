@@ -1,52 +1,58 @@
 <script>
-  // Every named item the datamined tables know, with what it takes to get one.
-  //
-  // Two numbers matter and they are not the same number: the general chance,
-  // which applies wherever you are, and the chance in the places the item is
-  // tied to — the one the game prints in green. An item with both is worth
-  // farming somewhere in particular; an item with only the first is not.
-  import { DROP_CHASE, DROP_PLACES, DROP_RATE, DROP_ZONES, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, TYPE_NAMES, tierLabel } from './items.js';
-  import { itemName, locale, placeLabel, placeList, say, t, typeLabel } from './say.svelte.js';
+  import { onMount } from 'svelte';
+  import { BY_ID, DROP_CHASE, DROP_PLACES, DROP_RATE, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, TYPE_NAMES, tierLabel } from './items.js';
+  import { itemName, language, locale, placeLabel, say, t, typeLabel } from './say.svelte.js';
   import { art } from './skin.svelte.js';
-  import { invoke, recall, remember } from './bridge.js';
+  import { invoke, native, recall, remember } from './bridge.js';
 
-  /// What this row is called where the reader can see it. The record keeps the
-  /// English name because that is what the tables are keyed by and what the
-  /// search box matches; only the printing moves.
+  const searchKey = (name) => name.normalize('NFKC').toLowerCase().replace(/[‘’]/g, "'");
   const shown = (it) => itemName(it.type, it.id, it.weapon);
-  /// The same deferral for the kind: `typeLabel` inside the catalogue would
-  /// have been read once, before the language file arrived.
   const kindOf = (it) => typeLabel(it.type, it.weapon);
 
-  /// Built once: the tables are keyed by lowercase name, and one item can wear
-  /// several ids, so the first sighting of a name wins.
   const CATALOGUE = (() => {
-    const seen = new Map();
-    for (const [key, name] of Object.entries(ITEMS)) {
-      if (seen.has(name)) continue;
-      const [type, id, weapon] = key.split(':').map(Number);
-      const k = name.toLowerCase();
-      seen.set(name, {
+    const counts = new Map();
+    for (const name of Object.values(ITEMS)) {
+      const key = name.toLowerCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return Object.entries(ITEMS).map(([identity, name]) => {
+      const [type, id, weapon] = identity.split(':').map(Number);
+      const key = name.toLowerCase();
+      const sharedName = counts.get(key) > 1;
+      const exact = BY_ID[identity];
+      return {
+        identity,
         name,
-        key: k,
+        search: searchKey(name),
         type,
         id,
         weapon,
         group: TYPE_NAMES[type] ?? `Type ${type}`,
-        rarity: RARITY_BY_NAME[k] ?? '',
-        tier: TIER_BY_NAME[k] ?? 0,
-        rate: DROP_RATE[k] ?? 0,
-        chase: DROP_CHASE[k] ?? 0,
-        places: DROP_PLACES[k] ?? [],
-        zones: DROP_ZONES[k] ?? [],
-      });
-    }
-    return [...seen.values()];
+        rarity: exact?.[1] ?? (!sharedName ? RARITY_BY_NAME[key] : '') ?? '',
+        tier: exact?.[2] ?? (!sharedName ? TIER_BY_NAME[key] : 0) ?? 0,
+        rate: exact?.[3] ?? (!sharedName ? DROP_RATE[key] : 0) ?? 0,
+        chase: (!sharedName && DROP_CHASE[key]) || 0,
+        locations: (sharedName ? [] : DROP_PLACES[key] ?? []).map((name) => [name, '', false]),
+      };
+    });
   })();
 
-  // taken from the data, like the kinds below it: the tables carry five
-  // rarities, and offering ones they do not would only ever find nothing
-  const RARITIES = [...new Set(CATALOGUE.map((i) => i.rarity).filter(Boolean))].sort();
+  let sources = $state.raw({});
+  let roomLabels = $state.raw({});
+  let loaded = $state(false);
+  onMount(() => {
+    import('virtual:tracker-item-sources')
+      .then(({ default: index, locations }) => { sources = index; roomLabels = locations; })
+      .catch(() => {})
+      .finally(() => (loaded = true));
+    return () => clearTimeout(saidTimer);
+  });
+
+  let catalogue = $derived(CATALOGUE.map((item) => {
+    const source = sources[item.identity];
+    return source ? { ...item, ...source, locations: source.locations ?? item.locations } : item;
+  }));
+  let rarities = $derived([...new Set(catalogue.map((i) => i.rarity).filter((name) => RARITY_CLASS[name]))].sort());
   // Paired with the numeric type, because the word for a kind is the game's
   // and the English name is only the key the filter matches on.
   const GROUPS = [...new Map(CATALOGUE.map((i) => [i.group, i.type])).entries()];
@@ -58,13 +64,13 @@
   const RARITY_CLASS = {
     Satanic: 'c-sat', Set: 'c-set', Heroic: 'c-her', Angelic: 'c-ang', Unholy: 'c-unh',
   };
-  /// how many rows are drawn at once; the rest wait behind a narrower search
-  const SHOWN = 150;
+  const PAGE_SIZE = 150;
 
   let query = $state('');
   let rarity = $state('');
   let group = $state('');
   let sort = $state('rarest');
+  let limit = $state(PAGE_SIZE);
   // Cards first: the question this page is opened with is where to farm an
   // item, and in the table that answer is the fifth column of a row. The choice
   // outlives the window the way the dashboard's section does.
@@ -83,20 +89,23 @@
           : `1/${rate}`;
 
   let found = $derived.by(() => {
-    const q = query.trim().toLowerCase();
-    let list = CATALOGUE.filter(
+    const q = searchKey(query.trim());
+    const list = catalogue.filter(
       (i) =>
-        (!q || i.key.includes(q)) &&
+        (!q || i.search.includes(q) || searchKey(shown(i)).includes(q)) &&
         (!rarity || i.rarity === rarity) &&
         (!group || i.group === group),
     );
-    if (sort === 'name') {
-      list = list.toSorted((a, b) => a.name.localeCompare(b.name));
-    } else {
-      // rarest first, and anything the tables cannot price goes last
-      list = list.toSorted((a, b) => (b.rate || -1) - (a.rate || -1));
-    }
-    return list;
+    const collator = new Intl.Collator(locale(), { sensitivity: 'base' });
+    const byName = (a, b) => collator.compare(shown(a), shown(b));
+    return list.sort(sort === 'name' ? byName : (a, b) => b.rate - a.rate || byName(a, b));
+  });
+  $effect(() => {
+    query;
+    rarity;
+    group;
+    sort;
+    limit = PAGE_SIZE;
   });
 
   // ── the shopping list, from here ──────────────────────────────────────────
@@ -108,31 +117,67 @@
   // note the player reads back and types into the game's own search, and the
   // game is in the language they picked too.
   let menu = $state(null);
+  let menuButton;
   let said = $state('');
   let saidTimer;
 
   const MENU_W = 210;
-  const MENU_H = 62;
+  const MENU_H = 103;
+  const MAP_ROOT = 'https://parazeya.github.io/hs-map/';
+  const mapUrl = (page, params) => `${MAP_ROOT}${page}?${new URLSearchParams(params)}`;
+  const codexUrl = (it) => mapUrl('codex.html', { item: it.key, ...(it.record && { record: it.record }) });
 
-  function openMenu(e, it) {
-    e.preventDefault();
-    // clamped, so a right-click by the window's edge does not put the menu
-    // half off it
-    menu = {
-      name: shown(it),
-      x: Math.min(e.clientX, window.innerWidth - MENU_W - 8),
-      y: Math.min(e.clientY, window.innerHeight - MENU_H - 8),
-    };
+  function report(message) {
+    said = message;
+    clearTimeout(saidTimer);
+    saidTimer = setTimeout(() => (said = ''), 2500);
   }
 
-  const closeMenu = () => (menu = null);
+  async function openLink(url) {
+    try {
+      if (native) await invoke('open_url', { url });
+      else window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      report(String(e));
+    }
+  }
+
+  function openMenu(e, it, anchored = false) {
+    e.preventDefault();
+    const anchor = anchored ? e.currentTarget.getBoundingClientRect() : null;
+    menuButton = anchored ? e.currentTarget : null;
+    menu = {
+      item: it,
+      x: Math.max(0, Math.min(anchor?.left ?? e.clientX, window.innerWidth - MENU_W - 8)),
+      y: Math.max(0, Math.min(anchor?.bottom ?? e.clientY, window.innerHeight - MENU_H - 8)),
+    };
+    if (anchored) requestAnimationFrame(() => document.getElementById('codex-item-actions')?.querySelector('button')?.focus());
+  }
+
+  function closeMenu() {
+    menu = null;
+    menuButton?.focus();
+    menuButton = null;
+  }
+
+  async function copyItemLink() {
+    const url = codexUrl(menu.item);
+    closeMenu();
+    try {
+      if (native) await invoke('copy_text', { text: url });
+      else await navigator.clipboard.writeText(url);
+      report(t('copied'));
+    } catch (e) {
+      report(String(e));
+    }
+  }
 
   /// Add what the menu is holding, and say which of the two things happened.
   ///
   /// The list is read back rather than kept here: the Shopping List tab writes
   /// it too, and whichever of them last wrote is the one that counts.
   async function addToShopping() {
-    const name = menu?.name;
+    const name = shown(menu.item);
     closeMenu();
     if (!name) return;
     try {
@@ -141,25 +186,57 @@
       if (!already) {
         await invoke('set_shopping', { items: [...list, name] });
       }
-      said = already ? say('{name} is already on the shopping list', { name })
-                     : say('{name} added to the shopping list', { name });
+      report(already ? say('{name} is already on the shopping list', { name })
+                     : say('{name} added to the shopping list', { name }));
     } catch (e) {
-      said = String(e);
+      report(String(e));
     }
-    clearTimeout(saidTimer);
-    saidTimer = setTimeout(() => (said = ''), 2500);
   }
 </script>
+
+{#snippet itemLocations(it)}
+  {#each it.locations as [name, source, reference, kind = 'source'] (`${kind}:${source}:${name}`)}
+    {@const place = (kind === 'room' && roomLabels[source]?.[language()]) || placeLabel(name)}
+    {@const label = reference ? `${place} · ${t('Reference source')}` : place}
+    {#if source}
+      <button class="place jump" onclick={() => openLink(mapUrl('', { [kind]: source }))} title={t('Show on map')}>
+        {label}
+      </button>
+    {:else}
+      <span class="place">{label}</span>
+    {/if}
+  {:else}
+    {#if loaded}<span class="dim">{t('Drop location unknown')}</span>{/if}
+  {/each}
+{/snippet}
+
+{#snippet itemActions(it, compact = false)}
+  <div class="actions" class:compact>
+    {#if it.key}
+      <button class="item-action" onclick={() => openLink(codexUrl(it))} title={t('Open in HS Map')} aria-label={t('Open in HS Map')}>
+        {compact ? '↗' : t('Open in HS Map')}
+      </button>
+    {/if}
+    {#if it.find}
+      <button class="item-action" onclick={() => openLink(mapUrl('', { item: it.key, find: it.name }))} title={t('Show on map')} aria-label={t('Show on map')}>
+        {compact ? '◎' : t('Show on map')}
+      </button>
+    {/if}
+    <button class="item-action" onclick={(e) => openMenu(e, it, true)} title={t('Item actions')} aria-label={t('Item actions')} aria-expanded={menu?.item.identity === it.identity}>
+      ⋯
+    </button>
+  </div>
+{/snippet}
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && closeMenu()} onblur={closeMenu} />
 
 <div class="panel">
   <div class="body">
     <div class="tools" data-tauri-drag-region>
-      <input class="find" placeholder={t("Search by name")} bind:value={query} />
+      <input class="find" aria-label={t('Search by name')} placeholder={t('Search by name')} bind:value={query} />
       <select class="picker" bind:value={rarity}>
         <option value="">{t("Any rarity")}</option>
-        {#each RARITIES as r}<option value={r}>{t(r)}</option>{/each}
+        {#each rarities as r}<option value={r}>{t(r)}</option>{/each}
       </select>
       <select class="picker" bind:value={group}>
         <option value="">{t("Any kind")}</option>
@@ -183,10 +260,11 @@
           <span class="hgrade">{t("Tier")}</span>
           <span class="hrate">{t("Chance")}</span>
           <span class="hchase">{t("Drop location")}</span>
+          <span></span>
         </div>
 
         <div class="rows" role="list">
-          {#each found.slice(0, SHOWN) as it (it.name)}
+          {#each found.slice(0, limit) as it (it.identity)}
             <div
               class="row"
               role="listitem"
@@ -197,16 +275,10 @@
               <span class="grade dim">{tierLabel(it.tier) || '—'}</span>
               <span class="rate">{odds(it.rate)}</span>
               <span class="chase">
-                {#if it.chase}
-                  <b>{odds(it.chase)}</b>
-                  {@const where = placeList(it.places) || placeList(it.zones, ', ')}
-                  <span class="where" title={where}>{where}</span>
-                {:else if it.places.length}
-                  <span class="where" title={placeList(it.places)}>{placeList(it.places)}</span>
-                {:else}
-                  <span class="dim">{t("anywhere")}</span>
-                {/if}
+                {#if it.chase}<b>{odds(it.chase)}</b>{/if}
+                {@render itemLocations(it)}
               </span>
+              {@render itemActions(it, true)}
             </div>
           {:else}
             <div class="empty dim">{t("nothing matches that")}</div>
@@ -214,7 +286,7 @@
         </div>
       {:else}
         <div class="grid" role="list">
-          {#each found.slice(0, SHOWN) as it (it.name)}
+          {#each found.slice(0, limit) as it (it.identity)}
             <div
               class="card {RARITY_CLASS[it.rarity] ?? ''}"
               role="listitem"
@@ -223,7 +295,7 @@
               <div class="cname" title={it.rarity ? t(it.rarity) : t('unlisted')}>{shown(it)}</div>
               <div class="cline dim">{kindOf(it)}{it.tier ? ` · ${tierLabel(it.tier)}` : ''}</div>
               <div class="odds">
-                <span class="dim">{t("anywhere")}</span>
+                <span class="dim">{t('Chance')}</span>
                 <span class="rate">{odds(it.rate)}</span>
                 {#if it.chase}
                   <span class="dim">{t("tied")}</span>
@@ -231,12 +303,9 @@
                 {/if}
               </div>
               <div class="places">
-                {#each it.places.length ? it.places : it.zones as w}
-                  <span class="place">{placeLabel(w)}</span>
-                {:else}
-                  <span class="dim">{t("drops anywhere")}</span>
-                {/each}
+                {@render itemLocations(it)}
               </div>
+              {@render itemActions(it)}
             </div>
           {:else}
             <div class="empty dim">{t("nothing matches that")}</div>
@@ -245,14 +314,13 @@
       {/if}
 
       {#if said}
-        <div class="said">{said}</div>
+        <div class="said" role="status">{said}</div>
       {/if}
 
       <div class="foot dim">
-        {#if found.length > SHOWN}
-          {say('showing {n} of {total} — narrow the search to see the rest', { n: SHOWN, total: found.length })}
-        {:else}
-          {say('{n} of {total} items', { n: found.length, total: CATALOGUE.length })}
+        {say('{n} of {total} items', { n: Math.min(found.length, limit), total: found.length })}
+        {#if found.length > limit}
+          <button class="item-action" onclick={() => (limit += PAGE_SIZE)}>{t('more')}</button>
         {/if}
       </div>
     </div>
@@ -271,8 +339,9 @@
       closeMenu();
     }}
   ></div>
-  <div class="menu" style:left="{menu.x}px" style:top="{menu.y}px" style:border-image-source="url({art('chip_dark')})">
-    <div class="mname">{menu.name}</div>
+  <div id="codex-item-actions" class="menu" style:left="{menu.x}px" style:top="{menu.y}px" style:border-image-source="url({art('chip_dark')})">
+    <div class="mname">{shown(menu.item)}</div>
+    {#if menu.item.key}<button class="mitem" onclick={copyItemLink}>{t('Copy item link')}</button>{/if}
     <button class="mitem" onclick={addToShopping}>{t('Add to the shopping list')}</button>
   </div>
 {/if}
@@ -378,7 +447,7 @@
 
   .head, .row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 74px 44px 62px minmax(0, 1.2fr);
+    grid-template-columns: minmax(0, 1fr) minmax(36px, 74px) 25px 48px minmax(0, 1.4fr) 63px;
     gap: 6px;
     align-items: baseline;
   }
@@ -398,12 +467,11 @@
 
   .row { padding: 2px 0; }
   .row:hover { background: rgba(255, 255, 255, 0.04); }
-  .name, .kind, .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name, .kind { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .grade, .rate { text-align: right; }
   .rate { color: var(--bone-9); }
-  .chase { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+  .chase { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; min-width: 0; font-size: 10px; }
   .chase b { color: var(--gold-2); font-weight: normal; }
-  .where { color: var(--bone-3); font-size: 11px; }
 
   /* Cards reflow into whatever width the window is dragged to; the minimum is
      narrow enough that two still fit side by side at the smallest window the
@@ -455,7 +523,25 @@
     background: rgba(0, 0, 0, 0.3);
     border: 1px solid var(--ground-10);
     padding: 0 3px;
+    font: inherit;
     font-size: 10px;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .jump { cursor: pointer; }
+  .jump::after { content: ' ↗'; }
+  .jump:hover, .item-action:hover { border-color: var(--edge-4); color: var(--bone-13); }
+  .actions { display: flex; flex-wrap: wrap; gap: 3px; margin-top: auto; padding-top: 3px; }
+  .actions.compact { justify-content: flex-end; flex-wrap: nowrap; padding: 0; }
+  .item-action {
+    min-height: 18px;
+    padding: 1px 4px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--ground-10);
+    color: var(--bone-9);
+    font: inherit;
+    font-size: 10px;
+    cursor: pointer;
   }
 
   .empty { padding: 12px 0; text-align: center; }
@@ -514,7 +600,7 @@
     padding: 4px 2px 0;
   }
 
-  .foot { padding-top: 4px; font-size: 11px; }
+  .foot { display: flex; gap: 8px; align-items: center; padding-top: 4px; font-size: 11px; }
   .dim { color: var(--bone-3); }
 
   .c-sat { color: var(--rar-satanic); }

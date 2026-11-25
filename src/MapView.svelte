@@ -56,8 +56,9 @@
       if (event.source !== frame?.contentWindow || event.origin !== mapOrigin) return;
       if (mapEnvelope(event.data, 'ready')) {
         loaded();
+        // A new map document starts its revision counter at the beginning.
+        sourceRevision = event.data.revision;
         if (restoreState) {
-          sourceRevision = event.data.revision;
           frame.contentWindow.postMessage({
             channel: MAP_CHANNEL, version: MAP_VERSION, type: 'apply', revision: sourceRevision, state: restoreState,
           }, mapOrigin);

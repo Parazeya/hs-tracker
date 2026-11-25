@@ -620,6 +620,25 @@ pub struct Prefs {
     pub relics: Vec<u16>,
 }
 
+struct AlertItem<'a> {
+    name: &'a str,
+    known: Option<&'a crate::items::Known>,
+    identity: (i64, i64, i64),
+    rarity: &'a str,
+    tier: i64,
+    server_announced: bool,
+    resource: bool,
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+pub struct AlertDecision {
+    pub sound: Option<String>,
+    pub rule: &'static str,
+    pub on_ground: bool,
+    pub announce: bool,
+    pub flourish: bool,
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Self {
@@ -1326,8 +1345,70 @@ impl GameStats {
     /// A minimum tier is a promise to stay quiet about anything lesser, so an
     /// item whose grade cannot be established stays quiet too. The server's own
     /// announcements bypass this — they are rare finds by definition.
-    fn passes_filter(&self, rarity: &str, tier: i64) -> bool {
-        self.prefs.alerts.iter().any(|r| r == rarity) && tier >= self.prefs.min_tier
+    fn decide_item_alert(&self, item: AlertItem<'_>) -> AlertDecision {
+        let (item_type, item_id, weapon_type) = item.identity;
+        let listed = self
+            .listed_sound(item.name, item.known, item_type, weapon_type)
+            .or_else(|| self.hunted_relic(item_type, item_id));
+        let hunted = listed.as_deref() == Some("relic");
+        let lower = item.name.to_lowercase();
+        let qualified = format!("{lower} ({})", item.rarity.to_lowercase());
+        let ignored = |names: &std::collections::HashSet<String>| {
+            names.contains(&lower) || names.contains(&qualified)
+        };
+        let rarity_enabled = self.prefs.alerts.iter().any(|r| r == item.rarity);
+        let (announce, rule) = if hunted {
+            (true, "relic")
+        } else if listed.is_some() {
+            (true, "watchlist")
+        } else if item.server_announced {
+            (true, "server")
+        } else if item.resource {
+            (false, "resource")
+        } else if ignored(&self.prefs.muted_sound) {
+            (false, "muted")
+        } else if !rarity_enabled {
+            (false, "rarity_disabled")
+        } else if item.tier < self.prefs.min_tier {
+            (false, "minimum_tier")
+        } else {
+            (true, "rarity")
+        };
+        let flourish = self.worth_a_flourish(
+            item.rarity,
+            item.tier,
+            listed.is_some(),
+            ignored(&self.prefs.muted_flourish),
+            hunted,
+            item.resource,
+            crate::parser::is_entry_codex(item_type, item_id, item.name),
+        );
+        AlertDecision {
+            on_ground: item.server_announced || listed.is_some() || self.prefs.prefer_ground,
+            sound: listed.or_else(|| (announce && rarity_enabled).then(|| item.rarity.to_lowercase())),
+            rule,
+            announce,
+            flourish,
+        }
+    }
+
+    pub fn preview_item_alert(&self, identity: (i64, i64, i64)) -> Option<(AlertDecision, String)> {
+        let (item_type, item_id, weapon_type) = identity;
+        let catalogue_name = crate::items::item_name(item_type, item_id, weapon_type)?;
+        let name = if item_type == RELIC { "" } else { catalogue_name };
+        let known = crate::parser::known_item(name, false, identity);
+        let tier = known.as_ref().map_or_else(|| crate::items::tier_by_name(name), |k| k.tier);
+        let rarity = crate::parser::resolve_rarity(&Value::Null, name, false, identity);
+        let decision = self.decide_item_alert(AlertItem {
+            name,
+            known: known.as_ref(),
+            identity,
+            rarity: &rarity,
+            tier,
+            server_announced: false,
+            resource: RESOURCES.iter().any(|(t, _)| *t == item_type) || is_container(name),
+        });
+        Some((decision, rarity))
     }
 
     /// The flourish's slider starts at D, and there is no "any" below it — so D
@@ -1909,41 +1990,17 @@ impl GameStats {
                 //
                 // The other way round still means only the bag: an item nobody
                 // picks up is not something the player asked to hear about.
-                // a list the user built outranks every switch below it
-                let listed = self
-                    .listed_sound(name, known.as_ref(), *item_type, *weapon_type)
-                    .or_else(|| self.hunted_relic(*item_type, *item_id));
-                let listed_hit = listed.is_some();
-                let wanted = *announced || listed_hit || self.prefs.prefer_ground || !*ground;
-                // The exception list gates the rarity path and nothing else:
-                // a list the player built still sounds, and so does a find the
-                // server announced to the whole shard.
-                //
-                // Two keys, the same pair `listed_sound` uses: the seven
-                // Essence Vaults share one name across every rarity, so the
-                // list stores those as "Name (Rarity)" while the drop carries
-                // the bare name and the rarity apart. Ignoring the Angelic one
-                // must not silence the Satanic one.
-                let lower = name.to_lowercase();
-                let qualified = format!("{lower} ({})", rarity_key.to_lowercase());
-                let ignored = |set: &std::collections::HashSet<String>| {
-                    set.contains(&lower) || set.contains(&qualified)
-                };
-                let announce = *announced
-                    || listed_hit
-                    || (!is_resource
-                        && !ignored(&self.prefs.muted_sound)
-                        && self.passes_filter(&rarity_key, tier));
-                let flourish = self.worth_a_flourish(
-                    &rarity_key,
+                let decision = self.decide_item_alert(AlertItem {
+                    name,
+                    known: known.as_ref(),
+                    identity: id,
+                    rarity: &rarity_key,
                     tier,
-                    listed_hit,
-                    ignored(&self.prefs.muted_flourish),
-                    listed.as_deref() == Some("relic"),
-                    is_resource,
-                    crate::parser::is_entry_codex(*item_type, *item_id, name),
-                );
-                if wanted && (announce || flourish) {
+                    server_announced: *announced,
+                    resource: is_resource,
+                });
+                let AlertDecision { sound, on_ground, announce, flourish, .. } = decision;
+                if (on_ground || !*ground) && (announce || flourish) {
                     // One item, one notification, whichever sighting got here
                     // first. The rule above says as much, but a list was
                     // exempt from it — `wanted` is true for a listed item
@@ -1981,16 +2038,9 @@ impl GameStats {
                     // not a sound: with the alerts set to SS and the flourish
                     // to D, every D item was making a noise the player had
                     // just finished switching off.
-                    let sound = if echo || !announce {
-                        None
-                    } else {
-                        listed.or_else(|| {
-                            self.prefs.alerts.contains(&rarity_key).then(|| rarity_key.to_lowercase())
-                        })
-                    };
                     let entry = DropEntry {
                         ts_ms: now_ms(),
-                        sound,
+                        sound: if echo { None } else { sound },
                         rarity: rarity_key,
                         ground: *ground,
                         mf: *mf,
@@ -3723,6 +3773,26 @@ mod tests {
             s.apply(&relic(28, "relic28", true)).is_none(),
             "the Common relic sharing that name is not a Satanic charm"
         );
+    }
+
+    #[test]
+    fn preview_reports_watchlist_priority_without_recording_a_find() {
+        let mut stats = GameStats::default();
+        let identity = (3, 15, 14);
+        assert_eq!(crate::items::item_name(3, 15, 14), Some("AK-47"));
+        stats.set_filter(Vec::new(), 6);
+        stats.prefs.muted_sound.insert("ak-47".into());
+        let (quiet, _) = stats.preview_item_alert(identity).unwrap();
+        assert_eq!((quiet.rule, quiet.sound, quiet.flourish), ("muted", None, false));
+
+        stats.set_sound_lists(vec![("list-chase".into(), vec!["AK-47".into()])]);
+        stats.prefs.fx_listed = true;
+        let (listed, _) = stats.preview_item_alert(identity).unwrap();
+        assert_eq!(listed.rule, "watchlist");
+        assert_eq!(listed.sound.as_deref(), Some("list-chase"));
+        assert!(listed.on_ground && listed.flourish && listed.announce);
+        assert!(stats.extra().drops.is_empty());
+        assert!(stats.preview_item_alert((99, 99, 99)).is_none());
     }
 
     #[test]

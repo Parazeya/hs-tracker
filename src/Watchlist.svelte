@@ -1,4 +1,5 @@
 <script>
+  import AlertPreview from './AlertPreview.svelte';
   import { invoke, listen } from './bridge.js';
   import { art } from './skin.svelte.js';
   import { BY_ID, GROUP_BY_NAME, GROUP_TYPE, ITEMS, RARITY_BY_NAME, TIER_BY_NAME, DROP_RATE, tierLabel } from './items.js';
@@ -848,6 +849,7 @@
 
 <div class="panel">
 {#if settings}
+  <AlertPreview />
   <!-- The switch first, and what it does in one sentence beside it. Every
        other control on this tab is dead while it is off, so it goes at the
        top rather than eight controls down a long column. -->

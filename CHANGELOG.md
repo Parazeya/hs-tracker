@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.18 — 2026-11-26
+
+### Added
+
+- Compare two item records in the embedded Codex, with selected modifiers and Magic Find.
+- Preview a watchlist item's sound and announcement. Filter saved runs by dominant zone and difficulty, including Hell level.
+
+### Fixed
+
+- Update the embedded map with restored zone drops and accurate links between item records, zones and chests.
+- Keep map gestures responsive and item lists usable with touch or keyboard. Keep the latest map position when reloading after a visit to Codex.
+- Recover from catalogue and translation load failures, and use the most recent language selection.
+- Correct Japanese Soulgem names, complete Finnish bounty text, and show more Codex results with pagination.
+- Open the exact catalogue record for items with shared names.
+
 ## 1.1.17 — 2026-11-24
 
 Final stable release of HS Tracker for this Hero Siege season.

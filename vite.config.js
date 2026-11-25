@@ -1,11 +1,12 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { trackerItemSources } from './scripts/tracker-item-sources.mjs';
 
 export default defineConfig({
   // `tauri dev` restarts vite on every change, and vite clears the terminal as
   // it starts — taking the cargo errors that caused the restart with it.
   clearScreen: false,
-  plugins: [svelte()],
+  plugins: [svelte(), trackerItemSources()],
   server: {
     port: 5176, strictPort: true,
     // Cargo replaces executables while compiling; Windows can lock them and
