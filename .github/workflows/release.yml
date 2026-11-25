@@ -33,6 +33,10 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Rust 1.100 can crash on Windows when linked against pcap's older windows-sys.
+          # Revisit the pin when that dependency is updated (rust-lang/rust#165915).
+          toolchain: 1.99.1
 
       - uses: swatinem/rust-cache@v2
         with:
