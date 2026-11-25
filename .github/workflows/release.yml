@@ -63,7 +63,12 @@ jobs:
       # delay-loaded, so no driver is needed on the runner
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      - run: npx tauri build --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Bundle the Windows installer
+        shell: pwsh
+        run: |
+          $tauriOverride = Join-Path $env:RUNNER_TEMP 'hs-tracker-ci.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -LiteralPath $tauriOverride -Encoding utf8NoBOM
+          npx tauri build --no-sign --config $tauriOverride
 
       - uses: actions/upload-artifact@v4
         with:
