@@ -131,6 +131,10 @@ npm run publish
 publishing under, because the artifacts in `release/` were built from HEAD and
 would otherwise be published under a tag that describes something else.
 
+After publishing, run `npm run badges` to fetch the latest stable version and
+the total release-asset downloads. Commit the two generated SVGs under
+`screenshots/` to refresh the numbers displayed in the README.
+
 A tag that was pushed but never published can still be moved — nothing points at
 it yet. Delete it on both sides first, or `ship` will refuse it:
 

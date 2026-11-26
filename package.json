@@ -14,6 +14,7 @@
     "tauri": "tauri",
     "ship": "node scripts/ship.mjs",
     "publish": "node scripts/publish.mjs",
+    "badges": "node scripts/update-readme-badges.mjs",
     "test": "node scripts/test.mjs",
     "test:items": "node scripts/test-items.mjs",
     "test:settings": "node --test scripts/settings.test.mjs",
